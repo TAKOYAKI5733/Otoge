@@ -1,0 +1,18 @@
+{
+  "bgm": "pupa.mp3",
+  "bpm": 202.3,
+  "composer": "もりもりあつし",
+  "level": "15",
+  "chartCreator": "TKYK.env",
+  "notes": [
+    { "type": 1, "time": 530, "lane": 1, "speed": 2.0 },
+    { "type": 1, "time": 826, "lane": 1, "speed": 0.5 },
+    { "type": 3, "time": 1122, "lane": 1, "speed": 2.0 },
+    { "type": 3, "time": 1418, "lane": 1, "speed": 0.5 },
+    { "type": 4, "time": 1714, "lane": 1, "speed": 2.0 },
+    { "type": 4, "time": 2010, "lane": 1, "speed": 0.5 }
+  ],
+  "SpeedEvents": [
+    {"time":826, "easing":2, "target":1.5}
+  ]
+}

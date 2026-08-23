@@ -16,11 +16,13 @@ inline void renderGamePlayScreen(GameContext& ctx, Tex& tex, Sq& sq, double curr
 
         if(note.isHit && !note.isHolding && ctx.musicTime >= note.targetTime) continue;
 
-        int noteY = ctx.judgeY - static_cast<int>((static_cast<double>(note.targetTime) - ctx.musicTime) * currentNoteSpeed);
+        double effectiveSpeed = note.hasCustomSpeed ? note.customSpeed : currentNoteSpeed;
+
+        int noteY = ctx.judgeY - static_cast<int>((static_cast<double>(note.targetTime) - ctx.musicTime) * effectiveSpeed);
         if(noteY < -50) continue;
 
         if(note.type == NoteType::Long){
-            int tailY = ctx.judgeY - static_cast<int>((static_cast<double>(note.targetTime + note.durationMs) - ctx.musicTime) * currentNoteSpeed);
+            int tailY = ctx.judgeY - static_cast<int>((static_cast<double>(note.targetTime + note.durationMs) - ctx.musicTime) * effectiveSpeed);
 
             int drawNoteY = noteY;
             if(note.isHolding){

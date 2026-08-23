@@ -30,6 +30,9 @@ struct Note{
     bool isHolding = false;
 
     bool movesLane = false;
+
+    bool hasCustomSpeed = false;
+    double customSpeed = 1.0;
 };
 
 struct JudgeEffect{

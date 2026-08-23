@@ -1,4 +1,5 @@
 #include "GameCommon.h"
+#include <nlohmann/json.hpp>
 
 #define SCREEN_W 1920
 #define SCREEN_H 1080
@@ -226,34 +227,25 @@ SongInfo parseScoreFile(const std::filesystem::path& filePath){
     song.title = filePath.stem().string();
 
     std::ifstream file(filePath);
-    if(file.is_open()){
-        std::string line;
-        while(std::getline(file, line)){
-            if(line.empty() || line.rfind("//", 0) == 0) continue;
-
-            if(line.rfind("BGM:", 0) == 0){
-                song.audioExtName = line.substr(4);
-            }
-            else if(line.rfind("BPM:", 0) == 0){
-                std::string input = line.substr(4);
-                if(input.empty()){
-                    continue;
-                }
-                song.bpm = std::stod(input);
-            }
-            else if(line.rfind("COMP:", 0) == 0){
-                song.composer = line.substr(5);
-            }
-            else if(line.rfind("LV:", 0) == 0){
-                song.level = line.substr(3);
-            }
-            else if(line.rfind("CC:", 0) == 0){
-                song.ChartCreator = line.substr(3);
-            }
-
-            if(line == "#START") break;
-        }
+    if(!file.is_open()){
+        return song;
     }
+
+    nlohmann::json j;
+    try{
+        file >> j;
+    }
+    catch(const nlohmann::json::parse_error& e){
+        printf("譜面データ読み込み失敗 : %s\n", e.what());
+        return song;
+    }
+
+    song.audioExtName = j.value("bgm", std::string(""));
+    song.bpm = j.value("bpm", 120.0);
+    song.composer = j.value("composer", std::string("Unknown"));
+    song.level = j.value("level", std::string("0"));
+    song.ChartCreator = j.value("chartCreator", std::string("Unknown"));
+
     return song;
 }
 
@@ -272,7 +264,7 @@ std::vector<GenreInfo> scanScoreFolder(const std::string& baseDir){
             genre.genreName = entry.path().filename().string();
 
             for(const auto& subEntry : fs::directory_iterator(entry.path())){
-                if(subEntry.is_regular_file() && subEntry.path().extension() == ".txt"){
+                if(subEntry.is_regular_file() && subEntry.path().extension() == ".json"){
                     SongInfo song = parseScoreFile(subEntry.path());
                     genre.songList.push_back(song);
                 }
