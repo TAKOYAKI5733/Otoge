@@ -1,0 +1,10 @@
+BGM:
+BPM:
+ACC:
+NOTE:
+COMP:Aaron Cherof
+LV:8
+CC:TKYK.env
+
+#START
+#END

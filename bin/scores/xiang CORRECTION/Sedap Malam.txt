@@ -1,0 +1,10 @@
+BGM:
+BPM:
+ACC:
+NOTE:
+COMP:xi
+LV:11
+CC:TKYK.env
+
+#START
+#END

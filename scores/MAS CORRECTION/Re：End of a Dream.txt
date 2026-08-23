@@ -1,0 +1,10 @@
+BGM:
+BPM:
+ACC:
+NOTE:
+COMP:もりもりあつし
+LV:16
+CC:TKYK.env
+
+#START
+#END
