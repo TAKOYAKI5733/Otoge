@@ -99,6 +99,11 @@ int main(){
                 break;
             }
 
+            case GameScene::ChartCreate:{
+                currentScene = chartCreateScene(window, renderer, selectedScore, nullptr);
+                break;
+            }
+
             default:{
                 currentScene = GameScene::Shutdown;
                 break;

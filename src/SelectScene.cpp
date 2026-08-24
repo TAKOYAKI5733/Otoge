@@ -185,6 +185,18 @@ GameScene selectSongScene(SDL_Window* window, SDL_Renderer* renderer, std::strin
                         }
                         break;
                     }
+
+                    case SDLK_F1:{
+                        if(currentMode == SelectMode::SelectSong){
+                            outSelectedScorePath = categories[genreCursor].songList[songCursor].scorePath;
+                        }
+                        else{
+                            outSelectedScorePath = "";
+                        }
+                        nextScene = GameScene::ChartCreate;
+                        running = false;
+                        break;
+                    }
                 }
                 
                 if(cursorMoved && currentMode == SelectMode::SelectSong){

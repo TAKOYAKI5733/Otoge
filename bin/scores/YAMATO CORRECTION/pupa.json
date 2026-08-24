@@ -1,18 +1,164 @@
 {
   "bgm": "pupa.mp3",
   "bpm": 202.3,
+  "chartCreator": "TKYK.env",
   "composer": "もりもりあつし",
   "level": "15",
-  "chartCreator": "TKYK.env",
   "notes": [
-    { "type": 1, "time": 530, "lane": 1, "speed": 2.0 },
-    { "type": 1, "time": 826, "lane": 1, "speed": 0.5 },
-    { "type": 3, "time": 1122, "lane": 1, "speed": 2.0 },
-    { "type": 3, "time": 1418, "lane": 1, "speed": 0.5 },
-    { "type": 4, "time": 1714, "lane": 1, "speed": 2.0 },
-    { "type": 4, "time": 2010, "lane": 1, "speed": 0.5 }
+    {
+      "duration": 296,
+      "lane": 4,
+      "time": 593,
+      "type": 0
+    },
+    {
+      "duration": 296,
+      "lane": 1,
+      "time": 593,
+      "type": 0
+    },
+    {
+      "lane": 1,
+      "time": 667,
+      "type": 3
+    },
+    {
+      "lane": 1,
+      "time": 815,
+      "type": 3
+    },
+    {
+      "lane": 4,
+      "time": 630,
+      "type": 3
+    },
+    {
+      "lane": 4,
+      "time": 704,
+      "type": 3
+    },
+    {
+      "lane": 4,
+      "time": 778,
+      "type": 3
+    },
+    {
+      "lane": 4,
+      "time": 852,
+      "type": 3
+    },
+    {
+      "lane": 2,
+      "time": 889,
+      "type": 0
+    },
+    {
+      "lane": 3,
+      "time": 889,
+      "type": 0
+    },
+    {
+      "lane": 4,
+      "time": 667,
+      "type": 3
+    },
+    {
+      "lane": 1,
+      "time": 630,
+      "type": 3
+    },
+    {
+      "lane": 1,
+      "time": 704,
+      "type": 3
+    },
+    {
+      "lane": 4,
+      "time": 741,
+      "type": 3
+    },
+    {
+      "lane": 1,
+      "time": 778,
+      "type": 3
+    },
+    {
+      "lane": 1,
+      "time": 852,
+      "type": 3
+    },
+    {
+      "lane": 4,
+      "time": 815,
+      "type": 3
+    },
+    {
+      "lane": 4,
+      "time": 1334,
+      "type": 4
+    },
+    {
+      "lane": 1,
+      "time": 1334,
+      "type": 4
+    },
+    {
+      "lane": 3,
+      "time": 1779,
+      "type": 4
+    },
+    {
+      "lane": 1,
+      "time": 741,
+      "type": 3
+    },
+    {
+      "lane": 1,
+      "time": 1038,
+      "type": 0
+    },
+    {
+      "lane": 2,
+      "time": 1112,
+      "type": 0
+    },
+    {
+      "lane": 3,
+      "time": 1186,
+      "type": 0
+    },
+    {
+      "lane": 4,
+      "time": 1186,
+      "type": 0
+    },
+    {
+      "lane": 3,
+      "time": 1482,
+      "type": 0
+    },
+    {
+      "lane": 2,
+      "time": 1557,
+      "type": 0
+    },
+    {
+      "lane": 3,
+      "time": 1631,
+      "type": 0
+    },
+    {
+      "lane": 2,
+      "time": 1779,
+      "type": 4
+    }
   ],
-  "SpeedEvents": [
-    {"time":826, "easing":2, "target":1.5}
+  "speedEvents": [
+    {
+      "duration": 500,
+      "easing": 2,
+      "target": 1.0,
+      "time": 594
+    }
   ]
 }

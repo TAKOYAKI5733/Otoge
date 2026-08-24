@@ -80,13 +80,13 @@ inline bool loadScore(const std::string& filename, std::string& bgmName, std::ve
     });
 
     //speedEventの読込
-    if(j.contains("SpeedEvents")){
-        if(!j.at("SpeedEvents").is_array()){
-            printf("JSON / SpeedEvent / error\n");
+    if(j.contains("speedEvents")){
+        if(!j.at("speedEvents").is_array()){
+            printf("JSON / speedEvent / error\n");
             return false;
         }
 
-        for(const auto& item : j.at("SpeedEvents")){
+        for(const auto& item : j.at("speedEvents")){
             try{
                 SpeedEvent ev;
                 ev.triggerTime = item.at("time").get<int32_t>();
@@ -97,7 +97,7 @@ inline bool loadScore(const std::string& filename, std::string& bgmName, std::ve
                 speedEvents.push_back(ev);
             }
             catch(const json::exception& e){
-                printf("JSON / SpeedEvents / error : %s\n", e.what());
+                printf("JSON / speedEvents / error : %s\n", e.what());
                 return false;
             }
         }
