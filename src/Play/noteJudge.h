@@ -47,7 +47,7 @@ inline void NoteJudge(GameContext& ctx, Tex& tex, Sq& sq){
                         newEffect.lane = note.lane;
                         newEffect.spawnTime = ctx.musicTime;
 
-                        if(timeDiff <= 70){
+                        if(timeDiff <= 60){
                             ctx.laneJudge[i] = {tex.perfect, sq.perfect, ctx.musicTime};
                             note.isHit = true;
                             newEffect.lane = note.lane;
@@ -67,10 +67,10 @@ inline void NoteJudge(GameContext& ctx, Tex& tex, Sq& sq){
                                 note.lastTickTime = ctx.musicTime;
                             }
 
-                            //if(note.type == NoteType::Lane) toggleLaneActive(ctx, note);
+                            if(note.type == NoteType::Lane) toggleLaneActive(ctx, note);
                         }
 
-                        else if(timeDiff <= 100){
+                        else if(timeDiff <= 80){
                             ctx.laneJudge[i] = {tex.good, sq.good, ctx.musicTime};
                             note.isHit = true;
                             newEffect.judgeType = 2;
@@ -92,10 +92,10 @@ inline void NoteJudge(GameContext& ctx, Tex& tex, Sq& sq){
                                 note.lastTickTime = ctx.musicTime;
                             }
 
-                            //if(note.type == NoteType::Lane) toggleLaneActive(ctx, note);
+                            if(note.type == NoteType::Lane) toggleLaneActive(ctx, note);
                         }
                         
-                        else if(timeDiff <= 250){
+                        else if(timeDiff <= 100){
                             ctx.laneJudge[i] = {tex.bad, sq.bad, ctx.musicTime};
                             note.isHit = true;
                             newEffect.judgeType = 3;
@@ -105,10 +105,8 @@ inline void NoteJudge(GameContext& ctx, Tex& tex, Sq& sq){
                             ctx.isAP = ctx.isFC = false;
                             ctx.effects.push_back(newEffect);
                             ctx.scoreTracker.registerJudge("BAD");
+                            if(note.type == NoteType::Lane) toggleLaneActive(ctx, note);
                         }
-
-                        if(note.type == NoteType::Lane) toggleLaneActive(ctx, note);
-
                         isNoteHit = true;
                         break;
                     }

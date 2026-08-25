@@ -17,7 +17,7 @@ GameScene playGame(SDL_Window* window, SDL_Renderer* renderer, const std::string
 
     double noteSpeed = 1.8;
     bool prevPressed[6] = {false, false, false, false, false, false};
-    int audioLatencyOffset = 0;
+    double offsetMs = 0;
     int laneWidth = SCREEN_W / 16;
     int startX = SCREEN_W / 2 - (laneWidth * 3);
     int endX = startX + (laneWidth * 4);
@@ -56,7 +56,7 @@ GameScene playGame(SDL_Window* window, SDL_Renderer* renderer, const std::string
     ComboPopEffect comboPop;
 
     //反例処理 + 定義
-    if(!loadScore(selectedScorePath, bgmName, notes, speedEvents, bpm)){
+    if(!loadScore(selectedScorePath, bgmName, notes, speedEvents, bpm, offsetMs)){
         return GameScene::Select;
     }
 
@@ -165,7 +165,7 @@ GameScene playGame(SDL_Window* window, SDL_Renderer* renderer, const std::string
     while(running){
 
         uint32_t globalTime = SDL_GetTicks();
-        int32_t musicTime = static_cast<int32_t>(globalTime - musicStartTime) - audioLatencyOffset;
+        int32_t musicTime = static_cast<int32_t>(globalTime - musicStartTime) - offsetMs;
 
         if(!bgmStarted && globalTime >= musicStartTime){
             Mix_PlayMusic(bgm, 1);

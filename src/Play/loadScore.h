@@ -6,7 +6,7 @@
 
 using json = nlohmann::json;
 
-inline bool loadScore(const std::string& filename, std::string& bgmName, std::vector<Note>& notes, std::vector<SpeedEvent>& speedEvents, double bpm){
+inline bool loadScore(const std::string& filename, std::string& bgmName, std::vector<Note>& notes, std::vector<SpeedEvent>& speedEvents, double bpm, double& offsetMs){
     std::ifstream file(filename);
     if(!file.is_open()){
         printf("譜面ファイル開かん!!\n");
@@ -35,6 +35,8 @@ inline bool loadScore(const std::string& filename, std::string& bgmName, std::ve
     }
 
     (void)j.value("bpm", bpm);
+
+    offsetMs = j.value("offset", 0.0);
 
     //ノーツの読込
     if(!j.contains("notes") || !j.at("notes").is_array()){

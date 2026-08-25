@@ -1,5 +1,6 @@
 #include "GameCommon.h"
 #include <nlohmann/json.hpp>
+#include <limits>
 #include "imgui.h"
 #include "imgui_impl_sdl2.h"
 #include "imgui_impl_sdlrenderer2.h"
@@ -34,6 +35,7 @@ struct ChartMeta{
     std::string composer = "Unknown";
     std::string level = "1";
     std::string chartCreator = "Unknown";
+    double offsetMs = 0.0;
 };
 
 struct FlashEffect{
@@ -41,15 +43,21 @@ struct FlashEffect{
     uint32_t spawnTime;
 };
 
+struct EditorBpmEvent{
+    int32_t time = 0;
+    double bpm = 120.0;
+};
+
 //JSON保存・読込
 
-inline void saveChart(const std::string& path, const ChartMeta& meta, const std::vector<EditorNote>& notes, const std::vector<EditorSpeedEvent>& speedEvents){
+inline void saveChart(const std::string& path, const ChartMeta& meta, const std::vector<EditorNote>& notes, const std::vector<EditorSpeedEvent>& speedEvents, const std::vector<EditorBpmEvent>& bpmEvents){
     json j;
     j["bgm"] = meta.bgm;
     j["bpm"] = meta.bpm;
     j["composer"] = meta.composer;
     j["level"] = meta.level;
     j["chartCreator"] = meta.chartCreator;
+    j["offset"] = meta.offsetMs;
 
     json notesArr = json::array();
     for(const auto& n : notes){
@@ -75,6 +83,15 @@ inline void saveChart(const std::string& path, const ChartMeta& meta, const std:
     }
     j["speedEvents"] = speedArr;
 
+    json bpmArr = json::array();
+    for(const auto& b : bpmEvents){
+        json item;
+        item["time"] = b.time;
+        item["bpm"] = b.bpm;
+        bpmArr.push_back(item);
+    }
+    j["bpmEvents"] = bpmArr;
+
     std::ofstream out(path);
     if(out.is_open()){
         out << j.dump(2);
@@ -85,7 +102,7 @@ inline void saveChart(const std::string& path, const ChartMeta& meta, const std:
     }
 }
 
-inline bool loadChartForEdit(const std::string & path, ChartMeta& meta, std::vector<EditorNote>& notes, std::vector<EditorSpeedEvent>& speedEvents){
+inline bool loadChartForEdit(const std::string & path, ChartMeta& meta, std::vector<EditorNote>& notes, std::vector<EditorSpeedEvent>& speedEvents, std::vector<EditorBpmEvent>& bpmEvents){
     std::ifstream file(path);
     if(!file.is_open()) return false;
 
@@ -102,6 +119,7 @@ inline bool loadChartForEdit(const std::string & path, ChartMeta& meta, std::vec
     meta.composer = j.value("composer", std::string("Unknown"));
     meta.level = j.value("level", std::string("Unknown"));
     meta.chartCreator = j.value("chartCreator", std::string("Unknown"));
+    meta.offsetMs = j.value("offset", 0.0);
 
     notes.clear();
     if(j.contains("notes")){
@@ -131,6 +149,17 @@ inline bool loadChartForEdit(const std::string & path, ChartMeta& meta, std::vec
             speedEvents.push_back(s);
         }
     }
+
+    bpmEvents.clear();
+    if(j.contains("bpmEvents")){
+        for(const auto& item : j.at("bpmEvents")){
+            EditorBpmEvent b;
+            b.time = item.value("time", 0);
+            b.bpm = item.value("bpm", 120.0);
+            bpmEvents.push_back(b);
+        }
+    }
+
     return true;
 }
 
@@ -154,10 +183,11 @@ GameScene chartCreateScene(SDL_Window* window, SDL_Renderer* renderer, std::stri
     ChartMeta meta;
     std::vector<EditorNote> notes;
     std::vector<EditorSpeedEvent> speedEvents;
+    std::vector<EditorBpmEvent> bpmEvents;
     std::vector<FlashEffect> flashEffects;
 
     if(!scorePath.empty()){
-        loadChartForEdit(scorePath, meta, notes, speedEvents);
+        loadChartForEdit(scorePath, meta, notes, speedEvents, bpmEvents);
     }
 
     char savePathBuf[256];
@@ -176,6 +206,34 @@ GameScene chartCreateScene(SDL_Window* window, SDL_Renderer* renderer, std::stri
     int32_t scrollTimeMs = 0;
     uint32_t lastFrameticks = SDL_GetTicks();
 
+    int editorAudioLatencyMs = 40;
+    int32_t pendingAudioLatencyMs = 0;
+    bool musicNeedsStart = true;
+
+    Mix_Chunk* tap_sound = Mix_LoadWAV("sounds/tapsound_2.wav");
+    if(!tap_sound){
+        printf("効果音読込失敗\n");
+    }
+
+    auto seekMusicIfNeeded = [&](int32_t chartTimeMs){
+        double audioPosSec = std::max(0.0, (chartTimeMs + meta.offsetMs) / 1000.0);
+        if(audioPosSec > 0.001){
+            Mix_SetMusicPosition(audioPosSec);
+        }
+    };
+
+    auto getCurrentBpm = [&](int32_t timeMs) -> double {
+        double result = meta.bpm;
+        int32_t bestTime = std::numeric_limits<int32_t>::min();
+        for(const auto& b : bpmEvents){
+            if(b.time <= timeMs && b.time > bestTime){
+                bestTime = b.time;
+                result = b.bpm;
+            }
+        }
+        return (result > 0.0) ? result : meta.bpm;
+    };
+
     auto togglePlayback = [&](){
         isPlaying = !isPlaying;
 
@@ -187,13 +245,23 @@ GameScene chartCreateScene(SDL_Window* window, SDL_Renderer* renderer, std::stri
             }
 
             if(bgm){
-                if(Mix_PausedMusic() == 1){
+                if(!musicNeedsStart && Mix_PausedMusic() == 1){
                     Mix_ResumeMusic();
                 }
                 else{
                     Mix_PlayMusic(bgm, 1);
+                    musicNeedsStart = false;
+
+                    if(editorAudioLatencyMs > 0) pendingAudioLatencyMs = editorAudioLatencyMs;
+                    else if(editorAudioLatencyMs < 0){
+                        scrollTimeMs += -editorAudioLatencyMs;
+                        pendingAudioLatencyMs = 0;
+                    }
+                    else{
+                        pendingAudioLatencyMs = 0;
+                    }
                 }
-                Mix_SetMusicPosition(scrollTimeMs / 1000.0);
+                seekMusicIfNeeded(scrollTimeMs);
             }
         }
         else{
@@ -220,6 +288,10 @@ GameScene chartCreateScene(SDL_Window* window, SDL_Renderer* renderer, std::stri
 
     int selectedNoteIndex = -1;
 
+    enum class DragMode{ None, MoveNote, ResizeTail };
+    DragMode dragMode = DragMode::None;
+    int dragNoteIndex = -1;
+
     bool running = true;
     SDL_Event e;
     GameScene nextScene = GameScene::Select;
@@ -232,8 +304,19 @@ GameScene chartCreateScene(SDL_Window* window, SDL_Renderer* renderer, std::stri
         lastFrameticks = nowTicks;
 
         if(isPlaying){
-            scrollTimeMs += static_cast<int32_t>(frameDeltaMs);
+            if(pendingAudioLatencyMs > 0){
+                int32_t consumed = std::min(pendingAudioLatencyMs, static_cast<int32_t>(frameDeltaMs));
+                pendingAudioLatencyMs -= consumed;
+                int32_t remaining = static_cast<int32_t>(frameDeltaMs) - consumed;
+                scrollTimeMs += remaining;
+            }
+            else{
+                scrollTimeMs += static_cast<int32_t>(frameDeltaMs);
+            }
         }
+
+        double currentBpmAtPlayhead = getCurrentBpm(scrollTimeMs);
+        double effectivePixelsPerMs = pixelsPerMs * (currentBpmAtPlayhead / meta.bpm);
 
         //イベント処理
         while(SDL_PollEvent(&e) != 0){
@@ -265,8 +348,8 @@ GameScene chartCreateScene(SDL_Window* window, SDL_Renderer* renderer, std::stri
 
                 if(scrollTimeMs < 0) scrollTimeMs = 0;
 
-                if(bgm && isPlaying){
-                    Mix_SetMusicPosition(scrollTimeMs / 1000.0);
+                if(bgm /*&& isPlaying*/){
+                    seekMusicIfNeeded(scrollTimeMs);
                 }
             }
 
@@ -293,37 +376,59 @@ GameScene chartCreateScene(SDL_Window* window, SDL_Renderer* renderer, std::stri
                 }
 
                 if(clickedLane >= 0){
-                    double rawTime = scrollTimeMs + (judgeY - my) / pixelsPerMs;
+                    double rawTime = scrollTimeMs + (judgeY - my) / effectivePixelsPerMs;
 
                     double beatDurationMs = 60000.0 / meta.bpm;
                     double gridMs = (4.0 / gridDivisor) * beatDurationMs;
                     int32_t snappedTime = static_cast<int32_t>(std::round(rawTime / gridMs) * gridMs);
 
                     if(e.button.button == SDL_BUTTON_LEFT){
-                        int hitIndex = -1;
+                        int tailHitIndex = -1;
                         for(size_t idx = 0; idx < notes.size(); idx++){
                             const auto& n = notes[idx];
-                            if(clickedLane >= n.lane && clickedLane <= n.lane + n.width - 1 && std::abs(n.time - snappedTime) < gridMs / 2){
-                                hitIndex = static_cast<int>(idx);
+                            if(!n.isLong()) continue;
+                            if(clickedLane < n.lane || clickedLane > n.lane + n.width - 1) continue;
+
+                            int32_t tailTime = n.time + n.duration;
+                            if(std::abs(static_cast<double>(tailTime) - rawTime) < gridMs / 2){
+                                tailHitIndex = static_cast<int>(idx);
                                 break;
                             }
                         }
 
-                        if(hitIndex >= 0){
-                            selectedNoteIndex = hitIndex;
+                        if(tailHitIndex >= 0){
+                            selectedNoteIndex = tailHitIndex;
+                            dragMode = DragMode::ResizeTail;
+                            dragNoteIndex = tailHitIndex;
                         }
                         else{
-                            EditorNote newNote;
-                            newNote.noteTypeInt = toolNotetype;
-                            newNote.lane = clickedLane;
-                            newNote.width = toolWidth;
-                            newNote.time = snappedTime;
-                            newNote.duration = toolIsLong ? toolDurationMs : 0;
-                            newNote.hasCustomSpeed = toolHasCustomSpeed;
-                            newNote.customSpeed = toolCustomSpeed;
+                            int hitIndex = -1;
+                            for(size_t idx = 0; idx < notes.size(); idx++){
+                                const auto& n = notes[idx];
+                                if(clickedLane >= n.lane && clickedLane <= n.lane + n.width - 1 && std::abs(n.time - snappedTime) < gridMs / 2){
+                                    hitIndex = static_cast<int>(idx);
+                                    break;
+                                }
+                            }
 
-                            notes.push_back(newNote);
-                            selectedNoteIndex = static_cast<int>(notes.size()) - 1;
+                            if(hitIndex >= 0){
+                                selectedNoteIndex = hitIndex;
+                                dragMode = DragMode::MoveNote;
+                                dragNoteIndex = hitIndex;
+                            }
+                            else{
+                                EditorNote newNote;
+                                newNote.noteTypeInt = toolNotetype;
+                                newNote.lane = clickedLane;
+                                newNote.width = toolWidth;
+                                newNote.time = snappedTime;
+                                newNote.duration = toolIsLong ? toolDurationMs : 0;
+                                newNote.hasCustomSpeed = toolHasCustomSpeed;
+                                newNote.customSpeed = toolCustomSpeed;
+
+                                notes.push_back(newNote);
+                                selectedNoteIndex = static_cast<int>(notes.size()) - 1;
+                            }
                         }
                     }
                     else if(e.button.button == SDL_BUTTON_RIGHT){
@@ -338,6 +443,47 @@ GameScene chartCreateScene(SDL_Window* window, SDL_Renderer* renderer, std::stri
                     }
                 }
             }
+
+            if(e.type == SDL_MOUSEMOTION && dragMode != DragMode::None && dragNoteIndex >= 0 && dragNoteIndex < static_cast<int>(notes.size())){
+
+                int mx = e.motion.x;
+                int my = e.motion.y;
+
+                int hoverLane = -1;
+                for(int l = 0; l < 6; l++){
+                    if(mx >= laneX[l] && mx < laneX[l] + laneWidth){
+                        hoverLane = l;
+                        break;
+                    }
+                }
+
+                double rawTime = scrollTimeMs + (judgeY - my) / effectivePixelsPerMs;
+                double beatDurationMs = 60000.0 / meta.bpm;
+                double gridMs = (4.0 / gridDivisor) * beatDurationMs;
+                int32_t snappedTime = static_cast<int32_t>(std::round(rawTime / gridMs) * gridMs);
+                if(snappedTime < 0) snappedTime = 0;
+
+                EditorNote& n = notes[dragNoteIndex];
+
+                if(dragMode == DragMode::MoveNote){
+                    n.time = snappedTime;
+                    if(hoverLane >= 0){
+                        int maxLane = 6 - n.width;
+                        n.lane = std::clamp(hoverLane, 0, maxLane);
+                    }
+                }
+                else if(dragMode == DragMode::ResizeTail){
+                    int32_t newDuration = snappedTime - n.time;
+                    int32_t minDuration = static_cast<int32_t>(std::max(1.0, gridMs));
+                    if(newDuration < minDuration) newDuration = minDuration;
+                    n.duration = newDuration;
+                }
+            }
+
+            if(e.type == SDL_MOUSEBUTTONUP && e.button.button == SDL_BUTTON_LEFT){
+                dragMode = DragMode::None;
+                dragNoteIndex = -1;
+            }
         }
 
         if(selectedNoteIndex >= static_cast<int>(notes.size())) selectedNoteIndex = -1;
@@ -350,6 +496,7 @@ GameScene chartCreateScene(SDL_Window* window, SDL_Renderer* renderer, std::stri
                     fx.lane = n.lane;
                     fx.spawnTime = nowTicks;
                     flashEffects.push_back(fx);
+                    Mix_PlayChannel(-1, tap_sound, 0);
                 }
             }
         }
@@ -379,16 +526,17 @@ GameScene chartCreateScene(SDL_Window* window, SDL_Renderer* renderer, std::stri
         ImGui::InputText("ChartCreator", creatorBuf, sizeof(creatorBuf));
         meta.chartCreator = creatorBuf;
 
-
+        ImGui::InputDouble("Offset(ms)", &meta.offsetMs, 1.0, 10.0, "%.1f");
+        ImGui::TextDisabled("+:late  -:fast");
         ImGui::Separator();
         ImGui::InputText("Save Path", savePathBuf, sizeof(savePathBuf));
         
         if(ImGui::Button("SAVE")){
-            saveChart(savePathBuf, meta, notes, speedEvents);
+            saveChart(savePathBuf, meta, notes, speedEvents, bpmEvents);
         }
         ImGui::SameLine();
         if(ImGui::Button("LOAD")){
-            loadChartForEdit(savePathBuf, meta, notes, speedEvents);
+            loadChartForEdit(savePathBuf, meta, notes, speedEvents, bpmEvents);
             snprintf(bgmBuf, sizeof(bgmBuf), "%s", meta.bgm.c_str());
             snprintf(composerBuf, sizeof(composerBuf), "%s", meta.composer.c_str());
             snprintf(levelBuf, sizeof(levelBuf), "%s", meta.level.c_str());
@@ -408,6 +556,7 @@ GameScene chartCreateScene(SDL_Window* window, SDL_Renderer* renderer, std::stri
             scrollTimeMs = 0;
             if(bgm) Mix_HaltMusic();
             isPlaying = false;
+            musicNeedsStart = true;
         }
 
         ImGui::Text("NOW TIME: %d ms", scrollTimeMs);
@@ -421,14 +570,17 @@ GameScene chartCreateScene(SDL_Window* window, SDL_Renderer* renderer, std::stri
         int scrubValue = scrollTimeMs;
         if(ImGui::SliderInt("SEEK", &scrubValue, 0, maxScrubMs)){
             scrollTimeMs = scrubValue;
-            if(bgm && isPlaying){
-                Mix_SetMusicPosition(scrollTimeMs / 1000.0);
+            if(bgm){
+                seekMusicIfNeeded(scrollTimeMs);
             }
         }
 
         ImGui::InputDouble("ZOOM", &pixelsPerMs, 0.01, 0.1, "%.3f");
         if(pixelsPerMs < 0.02) pixelsPerMs = 0.02;
         if(pixelsPerMs > 3.0) pixelsPerMs = 3.0;
+
+        ImGui::InputInt("Cold Start Latency(ms)", &editorAudioLatencyMs, 1, 10);
+        ImGui::TextDisabled("RETURN BEGIN SETTING");
         ImGui::End();
 
 
@@ -536,6 +688,36 @@ GameScene chartCreateScene(SDL_Window* window, SDL_Renderer* renderer, std::stri
         }
         ImGui::End();
 
+        ImGui::Begin("BPM Events");
+        
+        if(ImGui::Button("ADD##bpm")){
+            EditorBpmEvent b;
+            b.time = scrollTimeMs;
+            b.bpm = meta.bpm;
+            bpmEvents.push_back(b);
+        }
+
+        int removeBpmIndex = -1;
+        for(size_t idx = 0; idx < bpmEvents.size(); idx++){
+            ImGui::PushID(static_cast<int>(idx) + 100000);
+            auto& b = bpmEvents[idx];
+
+            ImGui::Text("#%zu", idx);
+            ImGui::InputInt("TIME(ms)##bpm", &b.time);
+            ImGui::InputDouble("BPM##bpm", &b.bpm, 1.0, 10.0, "%.3f");
+            if(b.bpm <= 0.0) b.bpm = 1.0;
+            if(ImGui::Button("DELETE##bpm")){
+                removeBpmIndex = static_cast<int>(idx);
+            }
+
+            ImGui::Separator();
+            ImGui::PopID();
+        }
+        if(removeBpmIndex >= 0){
+            bpmEvents.erase(bpmEvents.begin() + removeBpmIndex);
+        }
+        ImGui::End();
+
 
         //SDL描画　タイムライン等など
         SDL_SetRenderDrawColor(renderer, 15, 15, 20, 255);
@@ -558,15 +740,15 @@ GameScene chartCreateScene(SDL_Window* window, SDL_Renderer* renderer, std::stri
         double gridMs = (4.0 / gridDivisor) * beatDurationMs;
         int stepsPerBeat = gridDivisor / 4; // 4,8,12,16,24,32はすべて4の倍数なので割り切れる
 
-        int32_t viewStartTime = static_cast<int32_t>(scrollTimeMs - (SCREEN_H - judgeY) / pixelsPerMs); // 画面下端(過去側)
-        int32_t viewEndTime   = static_cast<int32_t>(scrollTimeMs + judgeY / pixelsPerMs);              // 画面上端(未来側)
+        int32_t viewStartTime = static_cast<int32_t>(scrollTimeMs - (SCREEN_H - judgeY) / effectivePixelsPerMs); // 画面下端(過去側)
+        int32_t viewEndTime   = static_cast<int32_t>(scrollTimeMs + judgeY / effectivePixelsPerMs);              // 画面上端(未来側)
 
         int32_t firstGridIndex = static_cast<int32_t>(std::floor(viewStartTime / gridMs));
         for(int32_t gi = firstGridIndex; ; gi++){
             double t = gi * gridMs;
             if(t > viewEndTime) break;
 
-            int gy = judgeY - static_cast<int>((t - scrollTimeMs) * pixelsPerMs);
+            int gy = judgeY - static_cast<int>((t - scrollTimeMs) * effectivePixelsPerMs);
 
             bool isBeatLine = (stepsPerBeat > 0) && (std::abs(gi) % stepsPerBeat == 0);
             if(isBeatLine) SDL_SetRenderDrawColor(renderer, 120, 120, 140, 255);
@@ -581,10 +763,10 @@ GameScene chartCreateScene(SDL_Window* window, SDL_Renderer* renderer, std::stri
 
     for(size_t idx = 0; idx < notes.size(); idx++){
         const auto& n = notes[idx];
-        int noteY = judgeY - static_cast<int>((n.time - scrollTimeMs) * pixelsPerMs);
+        int noteY = judgeY - static_cast<int>((n.time - scrollTimeMs) * effectivePixelsPerMs);
 
         if(n.isLong()){
-            int tailY = judgeY - static_cast<int>((n.time + n.duration - scrollTimeMs) * pixelsPerMs);
+            int tailY = judgeY - static_cast<int>((n.time + n.duration - scrollTimeMs) * effectivePixelsPerMs);
             SDL_Rect bodyRect;
             bodyRect.x = laneX[n.lane];
             bodyRect.w = laneWidth * n.width;
@@ -638,6 +820,7 @@ if(bgm){
 ImGui_ImplSDLRenderer2_Shutdown();
 ImGui_ImplSDL2_Shutdown();
 ImGui::DestroyContext();
+Mix_FreeChunk(tap_sound);
 
 return nextScene;
 }

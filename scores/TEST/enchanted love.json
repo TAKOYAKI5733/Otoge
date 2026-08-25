@@ -1,0 +1,72 @@
+{
+  "bgm": "enchanted love.mp3",
+  "bpm": 190.0,
+  "bpmEvents": [
+    {
+      "bpm": 95.0,
+      "time": 1260
+    }
+  ],
+  "chartCreator": "Unknown",
+  "composer": "Unknown",
+  "level": "1",
+  "notes": [
+    {
+      "lane": 1,
+      "time": 0,
+      "type": 0
+    },
+    {
+      "lane": 1,
+      "time": 210,
+      "type": 0
+    },
+    {
+      "lane": 2,
+      "time": 315,
+      "type": 0
+    },
+    {
+      "lane": 2,
+      "time": 526,
+      "type": 0
+    },
+    {
+      "lane": 4,
+      "time": 842,
+      "type": 0
+    },
+    {
+      "lane": 3,
+      "time": 947,
+      "type": 0
+    },
+    {
+      "lane": 2,
+      "time": 1157,
+      "type": 0
+    },
+    {
+      "lane": 1,
+      "time": 1263,
+      "type": 0
+    },
+    {
+      "lane": 2,
+      "time": 1473,
+      "type": 0
+    },
+    {
+      "lane": 3,
+      "time": 1578,
+      "type": 0
+    },
+    {
+      "lane": 4,
+      "time": 1789,
+      "type": 0
+    }
+  ],
+  "offset": 0.0,
+  "speedEvents": []
+}

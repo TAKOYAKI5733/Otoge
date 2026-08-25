@@ -8,11 +8,11 @@ inline void renderGamePlayScreen(GameContext& ctx, Tex& tex, Sq& sq, double curr
     GradientBackground(ctx.renderer, SCREEN_W, SCREEN_H, ctx.musicTime);
     draw_waku_init(ctx.renderer, tex, sq, ctx.laneActive);
 
+    SDL_SetRenderDrawBlendMode(ctx.renderer, SDL_BLENDMODE_BLEND);
+
     SDL_SetRenderDrawColor(ctx.renderer, 255, 255, 255, 255);
     for(const auto& note : ctx.notes){
         if(note.lane < 0 || note.lane >= 6) continue;
-
-        if(!ctx.laneActive[note.lane] && note.type != NoteType::Lane) continue;
 
         if(note.isHit && !note.isHolding && ctx.musicTime >= note.targetTime) continue;
 
@@ -20,6 +20,8 @@ inline void renderGamePlayScreen(GameContext& ctx, Tex& tex, Sq& sq, double curr
 
         int noteY = ctx.judgeY - static_cast<int>((static_cast<double>(note.targetTime) - ctx.musicTime) * effectiveSpeed);
         if(noteY < -50) continue;
+
+        bool laneIsInactive = !ctx.laneActive[note.lane];
 
         if(note.type == NoteType::Long){
             int tailY = ctx.judgeY - static_cast<int>((static_cast<double>(note.targetTime + note.durationMs) - ctx.musicTime) * effectiveSpeed);
@@ -43,6 +45,12 @@ inline void renderGamePlayScreen(GameContext& ctx, Tex& tex, Sq& sq, double curr
             bodyRect.y = tailY;
             bodyRect.h = drawNoteY - tailY;
 
+            if(laneIsInactive){
+                SDL_SetRenderDrawColor(ctx.renderer, 0, 0, 0, 150);
+                bodyRect.h = static_cast<int>((drawNoteY - tailY) / 2.0);
+                bodyRect.y = tailY - static_cast<int>(((drawNoteY - tailY) / 2.0) / 4.0);
+            }
+
             SDL_RenderFillRect(ctx.renderer, &bodyRect);
         }
 
@@ -52,11 +60,15 @@ inline void renderGamePlayScreen(GameContext& ctx, Tex& tex, Sq& sq, double curr
                 noteRect.h = 30;
                 noteRect.x = laneX[note.lane];
                 noteRect.y = noteY - 15;
-                
-                // 🌟 5. トレースノーツの描画（金色に変えて差別化）
+
                 if(note.type == NoteType::Drag) SDL_SetRenderDrawColor(ctx.renderer, 250, 250, 150, 255); 
                 else if(note.type == NoteType::Lane) SDL_SetRenderDrawColor(ctx.renderer, 255, 50, 50, 255); 
                 else SDL_SetRenderDrawColor(ctx.renderer, 255, 255, 255, 255);
+
+                if(laneIsInactive && !(note.type == NoteType::Lane)){
+                    SDL_SetRenderDrawColor(ctx.renderer, 0, 0, 0, 150);
+                }
+
             SDL_RenderFillRect(ctx.renderer, &noteRect);
         }
     }
