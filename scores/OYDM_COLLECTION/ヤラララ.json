@@ -1866,37 +1866,14 @@
     },
     {
       "lane": 1,
+      "speed": 1.8,
       "time": 58320,
       "type": 3
     },
     {
       "lane": 1,
+      "speed": 1.8,
       "time": 58440,
-      "type": 3
-    },
-    {
-      "lane": 1,
-      "time": 58560,
-      "type": 3
-    },
-    {
-      "lane": 4,
-      "time": 58800,
-      "type": 3
-    },
-    {
-      "lane": 4,
-      "time": 58920,
-      "type": 3
-    },
-    {
-      "lane": 1,
-      "time": 59160,
-      "type": 3
-    },
-    {
-      "lane": 1,
-      "time": 59280,
       "type": 3
     },
     {
@@ -2780,9 +2757,39 @@
       "lane": 4,
       "time": 65040,
       "type": 4
+    },
+    {
+      "lane": 1,
+      "speed": 1.8,
+      "time": 58560,
+      "type": 3
+    },
+    {
+      "lane": 4,
+      "speed": 1.8,
+      "time": 58800,
+      "type": 3
+    },
+    {
+      "lane": 4,
+      "speed": 1.8,
+      "time": 58920,
+      "type": 3
+    },
+    {
+      "lane": 1,
+      "speed": 1.8,
+      "time": 59160,
+      "type": 3
+    },
+    {
+      "lane": 1,
+      "speed": 1.8,
+      "time": 59280,
+      "type": 3
     }
   ],
-  "offset": 93.0,
+  "offset": 81.0,
   "speedEvents": [
     {
       "duration": 0,
@@ -2791,10 +2798,10 @@
       "time": 0
     },
     {
-      "duration": 2840,
+      "duration": 3500,
       "easing": 1,
       "target": 1.5,
-      "time": 960
+      "time": 480
     },
     {
       "duration": 500,
@@ -2818,7 +2825,7 @@
       "duration": 800,
       "easing": 3,
       "target": 1.8,
-      "time": 58081
+      "time": 58085
     }
   ]
 }

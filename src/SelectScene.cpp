@@ -14,6 +14,7 @@ struct SongInfo{
     std::string ChartCreator = "Unknown";
 
     double currentScale = 1.0;
+    double currentY = -1.0;
 };
 
 struct GenreInfo{
@@ -21,6 +22,7 @@ struct GenreInfo{
     std::vector<SongInfo> songList;
     
     double currentScale = 1.0;
+    double currentY = -1.0;
 };
 
 enum class SelectMode{
@@ -294,11 +296,21 @@ std::vector<GenreInfo> scanScoreFolder(const std::string& baseDir){
 void draw_GenreList(SDL_Renderer* renderer, TTF_Font* font, std::vector<GenreInfo>& categories,size_t genreCursor){
     int startY = 300;
     int lineGap = 80;
+    int centerY = SCREEN_H / 2;
 
     for(size_t i = 0; i < categories.size(); i++){
         double targetScale = (i == genreCursor) ? 1.4 : 1.0;
 
         categories[i].currentScale += (targetScale - categories[i].currentScale) * 0.15;
+
+        double targetY = centerY + (static_cast<double>(i) - static_cast<double>(genreCursor)) * lineGap;
+        
+        if(categories[i].currentY < 0.0){
+            categories[i].currentY = targetY;
+        }
+        else{
+            categories[i].currentY += (targetY - categories[i].currentY) * 0.15;
+        }
 
         SDL_Color textColor = (i == genreCursor) ? SDL_Color{255, 215, 0, 255} : SDL_Color{255, 255, 255, 255};
 
@@ -317,7 +329,8 @@ void draw_GenreList(SDL_Renderer* renderer, TTF_Font* font, std::vector<GenreInf
 
         destRect.x = 200;
 
-        int baseY = startY + (i *  lineGap);
+        int baseY = static_cast<int>(categories[i].currentY);
+        destRect.y = baseY - (destRect.h - surf->h) / 2 - destRect.h / 2;
         destRect.y =baseY - (destRect.h - surf->h) / 2;
 
         SDL_RenderCopy(renderer, tex, NULL, &destRect);
@@ -330,10 +343,20 @@ void draw_GenreList(SDL_Renderer* renderer, TTF_Font* font, std::vector<GenreInf
 void draw_SongList(SDL_Renderer* renderer, TTF_Font* font, std::vector<SongInfo>& songList, size_t songCursor, bool isActive){
     int startY = 250;
     int lineGap = 80;
+    int centerY = SCREEN_H / 2;
 
     for(size_t i = 0; i < songList.size(); i++){
         double targetScale = (i == songCursor && isActive) ? 1.3 : 1.0;
         songList[i].currentScale += (targetScale - songList[i].currentScale) * 0.15;
+
+        double targetY = centerY + (static_cast<double>(i) - static_cast<double>(songCursor)) * lineGap;
+
+        if(songList[i].currentY < 0.0){
+            songList[i].currentY = targetY;
+        }
+        else{
+            songList[i].currentY += (targetY - songList[i].currentY) * 0.15;
+        }
 
         SDL_Color textColor = {150, 150, 150, 255};
         if(isActive){
@@ -356,8 +379,8 @@ void draw_SongList(SDL_Renderer* renderer, TTF_Font* font, std::vector<SongInfo>
         destRect.h = static_cast<int>(surf->h * songList[i].currentScale);
         destRect.x = 900;
 
-        int baseY = startY + (i * lineGap);
-        destRect.y = baseY - (destRect.h - surf->h) / 2;
+        int baseY = static_cast<int>(songList[i].currentY);
+        destRect.y = baseY - (destRect.h - surf->h) / 2 - destRect.h / 2;
 
         SDL_RenderCopy(renderer, tex, NULL, &destRect);
         SDL_DestroyTexture(tex);

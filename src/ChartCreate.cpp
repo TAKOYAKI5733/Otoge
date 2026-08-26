@@ -357,10 +357,28 @@ GameScene chartCreateScene(SDL_Window* window, SDL_Renderer* renderer, std::stri
             bool imguiWantsMouse = io.WantCaptureMouse;
 
             if(!imguiWantsMouse && e.type == SDL_MOUSEWHEEL){
-                double zoomFactor = (e.wheel.y > 0) ? 1.15 : (1.0 / 1.15);
-                pixelsPerMs *= zoomFactor;
-                if(pixelsPerMs < 0.02) pixelsPerMs = 0.02;
-                if(pixelsPerMs > 3.0) pixelsPerMs = 3.0;
+                SDL_Keymod mod = SDL_GetModState();
+                bool ctrlHeld = (mod & KMOD_CTRL) != 0;
+
+                if(ctrlHeld){
+                    double zoomFactor = (e.wheel.y > 0) ? 1.15 : (1.0 / 1.15);
+                    pixelsPerMs *= zoomFactor;
+                    if(pixelsPerMs < 0.02) pixelsPerMs = 0.02;
+                    if(pixelsPerMs > 3.0) pixelsPerMs = 3.0;
+                }
+                else{
+                    double beatDuration = 60000.0 / meta.bpm;
+                    double gridMs = (4.0 / gridDivisor) * beatDuration;
+                    int32_t step = static_cast<int32_t>(std::round(gridMs));
+
+                    //ホイールを上に回すと上にいく
+                    if(e.wheel.y < 0) scrollTimeMs -= step;
+                    else if(e.wheel.y > 0) scrollTimeMs += step;
+
+                    if(scrollTimeMs < 0) scrollTimeMs = 0;
+
+                    if(bgm) seekMusicIfNeeded(scrollTimeMs);
+                }
             }
 
             if(!imguiWantsMouse && e.type == SDL_MOUSEBUTTONDOWN){
@@ -725,7 +743,7 @@ GameScene chartCreateScene(SDL_Window* window, SDL_Renderer* renderer, std::stri
 
         for(int i = 0; i < 6; i++){
             SDL_Rect laneRect = {laneX[i], 0, laneWidth, SCREEN_H};
-            if(i % 2 == 0) SDL_SetRenderDrawColor(renderer, 25, 25, 30, 255);
+            if(i % 2 == 0) SDL_SetRenderDrawColor(renderer, 40, 40, 50, 255);
             else SDL_SetRenderDrawColor(renderer, 20, 20, 25, 255);
             SDL_RenderFillRect(renderer, &laneRect);
         }
@@ -792,6 +810,38 @@ GameScene chartCreateScene(SDL_Window* window, SDL_Renderer* renderer, std::stri
             SDL_SetRenderDrawColor(renderer, 0, 255, 0, 255);
             SDL_Rect outline = {noteRect.x - 3, noteRect.y - 3, noteRect.w + 6, noteRect.h + 6};
             SDL_RenderDrawRect(renderer, &outline);
+        }
+    }
+
+    {
+    ImDrawList* fgDraw = ImGui::GetForegroundDrawList();
+
+    // SpeedEvent: 左側にラベル、線は黄色系
+    for(const auto& s : speedEvents){
+        int ly = judgeY - static_cast<int>((s.time - scrollTimeMs) * effectivePixelsPerMs);
+        if(ly < -20 || ly > SCREEN_H + 20) continue;
+
+        SDL_SetRenderDrawColor(renderer, 255, 220, 80, 200);
+        SDL_RenderDrawLine(renderer, 0, ly, SCREEN_W, ly);
+
+        char buf[64];
+        snprintf(buf, sizeof(buf), "SPD %.2fx", s.target);
+        fgDraw->AddText(ImVec2(90.0f, static_cast<float>(ly - 8)), IM_COL32(255, 220, 80, 255), buf);
+    }
+
+    // BPM Event: 右側にラベル、線は水色系
+    for(const auto& b : bpmEvents){
+        int ly = judgeY - static_cast<int>((b.time - scrollTimeMs) * effectivePixelsPerMs);
+        if(ly < -20 || ly > SCREEN_H + 20) continue;
+
+            SDL_SetRenderDrawColor(renderer, 80, 220, 255, 200);
+            SDL_RenderDrawLine(renderer, 0, ly, SCREEN_W, ly);
+
+            char buf[64];
+            snprintf(buf, sizeof(buf), "BPM %.1f", b.bpm);
+            ImVec2 textSize = ImGui::CalcTextSize(buf);
+            float rightX = static_cast<float>(SCREEN_W) - textSize.x - 90.0f;
+            fgDraw->AddText(ImVec2(rightX, static_cast<float>(ly - 8)), IM_COL32(80, 220, 255, 255), buf);
         }
     }
 

@@ -11,8 +11,8 @@ inline void draw_waku_init(SDL_Renderer* renderer, Tex& tex, Sq& sq, bool laneAc
     for(int i = 0; i < 6; i++){
         SDL_Rect rect = {startX + (laneWidth * i), 0, laneWidth, SCREEN_H};
 
-        if(i % 2 == 0) SDL_SetRenderDrawColor(renderer, 0, 0, 0, 255);
-        else SDL_SetRenderDrawColor(renderer, 25, 25, 25, 255);
+        if(i % 2 == 0) SDL_SetRenderDrawColor(renderer, 0, 0, 5, 255);
+        else SDL_SetRenderDrawColor(renderer, 25, 25, 35, 255);
 
         if(!laneActive[i]) continue;
 
