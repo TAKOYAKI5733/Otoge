@@ -6,7 +6,43 @@
 
 using json = nlohmann::json;
 
-inline bool loadScore(const std::string& filename, std::string& bgmName, std::vector<Note>& notes, std::vector<SpeedEvent>& speedEvents, double bpm, double& offsetMs){
+struct DifficultyInfo{
+    std::string name;
+    std::string level;
+};
+
+inline std::vector<DifficultyInfo> listDifficulties(const std::string& filename){
+    std::vector<DifficultyInfo> result;
+
+    std::ifstream file(filename);
+    if(!file.is_open()) return result;
+
+    json j;
+    try{
+        file >> j;
+    }
+    catch(const json::parse_error&){
+        return result;
+    }
+
+    if(j.contains("difficulties") && j.at("difficulties").is_array()){
+        for(const auto& d : j.at("difficulties")){
+            DifficultyInfo info;
+            info.name = d.value("name", std::string("DEFAULT"));
+            info.level = d.value("level", std::string("0"));
+            result.push_back(info);
+        }
+    }
+    else{
+        DifficultyInfo info;
+        info.name = "DEFAULT";
+        info.level = j.value("level", std::string("0"));
+        result.push_back(info);
+    }
+    return result;
+}
+
+inline bool loadScore(const std::string& filename, std::string& bgmName, std::vector<Note>& notes, std::vector<SpeedEvent>& speedEvents, double bpm, double& offsetMs, int difficultyIndex){
     std::ifstream file(filename);
     if(!file.is_open()){
         printf("譜面ファイル開かん!!\n");
@@ -35,16 +71,26 @@ inline bool loadScore(const std::string& filename, std::string& bgmName, std::ve
     }
 
     (void)j.value("bpm", bpm);
-
     offsetMs = j.value("offset", 0.0);
 
-    //ノーツの読込
-    if(!j.contains("notes") || !j.at("notes").is_array()){
-        printf("JSON: / notes / error\n");
+    const json* chartRoot = &j;
+    if(j.contains("difficulties") && j.at("difficulities").is_array()){
+        const auto& diffs = j.at("difficulties");
+        if(difficultyIndex < 0 || static_cast<size_t>(difficultyIndex) >= diffs.size()){
+            printf("JSON: 難易度が範囲外(%d)\n", difficultyIndex);
+            return false;
+        }
+        chartRoot = &diffs[difficultyIndex];
+    }
+
+    (void)chartRoot->value("bpm", bpm);
+
+    if(!chartRoot->contains("notes") || !chartRoot->at("notes").is_array()){
+        printf("JSON / notes error\n");
         return false;
     }
 
-    for(const auto& item : j.at("notes")){
+    for(const auto& item : chartRoot->at("notes")){
         try{
             int noteType = item.at("type").get<int>();
             int32_t time = item.at("time").get<int32_t>();

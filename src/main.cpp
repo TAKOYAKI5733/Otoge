@@ -30,6 +30,7 @@ int main(){
     GameScene currentScene = GameScene::Select;
     GameScene nextScene = currentScene;
     std::string selectedScore = "";
+    int selectedDifficulty = 0;
 
     SDL_Texture* prev = SDL_CreateTexture(renderer, SDL_PIXELFORMAT_BGRA8888, SDL_TEXTUREACCESS_TARGET, SCREEN_W, SCREEN_H);
     SDL_Texture* nex = SDL_CreateTexture(renderer, SDL_PIXELFORMAT_BGRA8888, SDL_TEXTUREACCESS_TARGET, SCREEN_W, SCREEN_H);
@@ -37,11 +38,11 @@ int main(){
     while(currentScene != GameScene::Shutdown){
         switch(currentScene){
             case GameScene::Select:{
-                nextScene = selectSongScene(window, renderer, selectedScore);
+                nextScene = selectSongScene(window, renderer, selectedScore, selectedDifficulty);
 
                 if(nextScene == GameScene::Load){
                     SDL_SetRenderTarget(renderer, prev);
-                    selectSongScene(window, renderer, selectedScore, prev);
+                    selectSongScene(window, renderer, selectedScore, selectedDifficulty, prev);
 
                     SDL_SetRenderTarget(renderer, nex);
                     loadScene(window, renderer, selectedScore, nex);
@@ -82,7 +83,7 @@ int main(){
             }
 
             case GameScene::Play:{
-                playGame(window, renderer, selectedScore, nullptr);
+                playGame(window, renderer, selectedScore, selectedDifficulty, nullptr);
                 currentScene = GameScene::Result;
                 break;
             }

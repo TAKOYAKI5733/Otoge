@@ -1,5 +1,6 @@
 #include "GameCommon.h"
 #include <nlohmann/json.hpp>
+#include "Play/PlaySceneManager.h"
 
 #define SCREEN_W 1920
 #define SCREEN_H 1080
@@ -17,6 +18,8 @@ struct SongInfo{
     double currentY = -1.0;
     double currentX = -1.0;
     bool positionInittailized = false;
+
+    std::vector<DifficultyInfo> difficulties;
 };
 
 struct GenreInfo{
@@ -31,19 +34,20 @@ struct GenreInfo{
 
 enum class SelectMode{
     SelectGenre,
-    SelectSong
+    SelectSong,
+    SelectDifficulty
 };
 
 //プロトタイプ宣言
-SongInfo parseScoreFile(const std::filesystem::path& filePath);
 std::vector<GenreInfo> scanScoreFolder(const std::string& baseDir);
 void draw_GenreList(SDL_Renderer* renderer, TTF_Font* font, std::vector<GenreInfo>& categories,size_t genreCursor, bool isSongMode, SDL_Rect* outSelectedGenreRect);
 void draw_SongList(SDL_Renderer* renderer, TTF_Font* font, std::vector<SongInfo>& songList, size_t songCursor, bool isActive, const SDL_Rect* priorityRect);
 void draw_songDetail(SDL_Renderer* renderer, TTF_Font* font, const SongInfo& song, double animation);
+SongInfo parseScoreFile(const std::filesystem::path& filePath);
 
 
 //メイン関数
-GameScene selectSongScene(SDL_Window* window, SDL_Renderer* renderer, std::string& outSelectedScorePath, SDL_Texture* targetTex){
+GameScene selectSongScene(SDL_Window* window, SDL_Renderer* renderer, std::string& outSelectedScorePath, int& outSelectedDifficulty, SDL_Texture* targetTex){
     std::vector<GenreInfo> categories = scanScoreFolder("scores");
     if(categories.empty()){
         std::cout << "[エラー]曲がねぇ\n";
@@ -53,6 +57,7 @@ GameScene selectSongScene(SDL_Window* window, SDL_Renderer* renderer, std::strin
     SelectMode currentMode = SelectMode::SelectGenre;
     int genreCursor = 0;
     int songCursor = 0;
+    int difficultyCursor = 0;
 
     TTF_Font* font = TTF_OpenFont("fonts/prac.ttf", 40);
     TTF_Font* sub_font = TTF_OpenFont("fonts/prac.ttf", 35);
@@ -145,7 +150,10 @@ GameScene selectSongScene(SDL_Window* window, SDL_Renderer* renderer, std::strin
 
                 switch(e.key.keysym.sym){
                     case SDLK_ESCAPE:{
-                        if(currentMode == SelectMode::SelectSong){
+                        if(currentMode == SelectMode::SelectDifficulty){
+                            currentMode = SelectMode::SelectSong;
+                        }
+                        else if(currentMode == SelectMode::SelectSong){
                             currentMode = SelectMode::SelectGenre;
                             songCursor = 0;
                         }
@@ -160,10 +168,14 @@ GameScene selectSongScene(SDL_Window* window, SDL_Renderer* renderer, std::strin
                         if(currentMode == SelectMode::SelectGenre){
                             genreCursor = (genreCursor + 1 + categories.size()) % categories.size();
                         }
-                        else{
+                        else if(currentMode == SelectMode::SelectSong){
                             int songCount = categories[genreCursor].songList.size();
                             songCursor = (songCursor + 1 + songCount) % songCount;
                             cursorMoved = true;
+                        }
+                        else{
+                            int diffCount = static_cast<int>(categories[genreCursor].songList[songCursor].difficulties.size());
+                            if(diffCount > 0) difficultyCursor = (difficultyCursor + 1 + diffCount) % diffCount;
                         }
                         break;
                     }
@@ -172,10 +184,14 @@ GameScene selectSongScene(SDL_Window* window, SDL_Renderer* renderer, std::strin
                         if(currentMode == SelectMode::SelectGenre){
                             genreCursor = (genreCursor - 1 + categories.size()) % categories.size();
                         }
-                        else{
+                        else if(currentMode == SelectMode::SelectSong){
                             int songCount = categories[genreCursor].songList.size();
                             songCursor = (songCursor - 1 + songCount) % songCount;
                             cursorMoved = true;
+                        }
+                        else{
+                            int diffCount = static_cast<int>(categories[genreCursor].songList[songCursor].difficulties.size());
+                            if(diffCount > 0) difficultyCursor = (difficultyCursor - 1 + diffCount) % diffCount;
                         }
                         break;
                     }
@@ -186,8 +202,22 @@ GameScene selectSongScene(SDL_Window* window, SDL_Renderer* renderer, std::strin
                             songCursor = 0;
                             cursorMoved = true;
                         }
+                        else if(currentMode == SelectMode::SelectSong){
+                            outSelectedScorePath = categories[genreCursor].songList[songCursor].scorePath;
+                            difficultyCursor = 0;
+
+                            currentMode = SelectMode::SelectDifficulty;
+
+                            if(categories[genreCursor].songList[songCursor].difficulties.empty()){
+                                outSelectedScorePath = categories[genreCursor].songList[songCursor].scorePath;
+                                outSelectedDifficulty = 0;
+                                nextScene = GameScene::Load;
+                                running = false;
+                            }
+                        }
                         else{
                             outSelectedScorePath = categories[genreCursor].songList[songCursor].scorePath;
+                            outSelectedDifficulty = difficultyCursor;
                             nextScene = GameScene::Load;
                             running = false;
                         }
@@ -226,6 +256,32 @@ GameScene selectSongScene(SDL_Window* window, SDL_Renderer* renderer, std::strin
             draw_songDetail(renderer, font, categories[genreCursor].songList[songCursor], detailAnimation);
         }
 
+        if(currentMode == SelectMode::SelectDifficulty){
+            const auto& diffs = categories[genreCursor].songList[songCursor].difficulties;
+
+            SDL_SetRenderDrawBlendMode(renderer, SDL_BLENDMODE_BLEND);
+            SDL_SetRenderDrawColor(renderer, 0, 0, 0, 180);
+            SDL_Rect overlay = {0, 0, SCREEN_W, SCREEN_H};
+            SDL_RenderFillRect(renderer, &overlay);
+
+            int baseY = SCREEN_H / 2 - static_cast<int>(diffs.size()) * 40;
+            for(size_t i = 0; i < diffs.size(); i++){
+                SDL_Color color = (static_cast<int>(i) == difficultyCursor) ? SDL_Color{255, 215, 0, 255} : SDL_Color{200, 200, 200, 255};
+                std::string label = diffs[i].name + "LV." + diffs[i].level;
+                if(static_cast<int>(i) == difficultyCursor) label = ">>" + label;
+
+                SDL_Surface* surf = TTF_RenderUTF8_Blended(font, label.c_str(), color);
+                if(!surf) continue;
+
+                SDL_Texture* tex = SDL_CreateTextureFromSurface(renderer, surf);
+                SDL_Rect r = {SCREEN_W / 2 - surf->w / 2, baseY + static_cast<int>(i) * 80, surf->w, surf->h};
+                SDL_RenderCopy(renderer, tex, NULL, &r);
+
+                SDL_DestroyTexture(tex);
+                SDL_FreeSurface(surf);
+            }
+        }
+
         SDL_RenderPresent(renderer);
         SDL_Delay(16);
     }
@@ -242,34 +298,6 @@ GameScene selectSongScene(SDL_Window* window, SDL_Renderer* renderer, std::strin
 
 
 //関数群
-SongInfo parseScoreFile(const std::filesystem::path& filePath){
-    SongInfo song;
-    song.scorePath = filePath.string();
-    song.title = filePath.stem().string();
-
-    std::ifstream file(filePath);
-    if(!file.is_open()){
-        return song;
-    }
-
-    nlohmann::json j;
-    try{
-        file >> j;
-    }
-    catch(const nlohmann::json::parse_error& e){
-        printf("譜面データ読み込み失敗 : %s\n", e.what());
-        return song;
-    }
-
-    song.audioExtName = j.value("bgm", std::string(""));
-    song.bpm = j.value("bpm", 120.0);
-    song.composer = j.value("composer", std::string("Unknown"));
-    song.level = j.value("level", std::string("0"));
-    song.ChartCreator = j.value("chartCreator", std::string("Unknown"));
-
-    return song;
-}
-
 std::vector<GenreInfo> scanScoreFolder(const std::string& baseDir){
     std::vector<GenreInfo> categories;
     namespace fs = std::filesystem;
@@ -462,4 +490,34 @@ void draw_songDetail(SDL_Renderer* renderer, TTF_Font* font, const SongInfo& son
         SDL_FreeSurface(surf);
     }
     return;
+}
+
+SongInfo parseScoreFile(const std::filesystem::path& filePath){
+    SongInfo song;
+    song.scorePath = filePath.string();
+    song.title = filePath.stem().string();
+
+    std::ifstream file(filePath);
+    if(!file.is_open()){
+        return song;
+    }
+
+    nlohmann::json j;
+    try{
+        file >> j;
+    }
+    catch(const nlohmann::json::parse_error& e){
+        printf("譜面データ読み込み失敗 : %s\n", e.what());
+        return song;
+    }
+
+    song.audioExtName = j.value("bgm", std::string(""));
+    song.bpm = j.value("bpm", 120.0);
+    song.composer = j.value("composer", std::string("Unknown"));
+    song.level = j.value("level", std::string("0"));
+    song.ChartCreator = j.value("chartCreator", std::string("Unknown"));
+
+    song.difficulties = listDifficulties(song.scorePath);
+
+    return song;
 }

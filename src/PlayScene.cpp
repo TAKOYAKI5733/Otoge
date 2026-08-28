@@ -6,7 +6,7 @@
 double bpm = 120;
 
 //playGame関数の制作
-GameScene playGame(SDL_Window* window, SDL_Renderer* renderer, const std::string& selectedScorePath, SDL_Texture* targetTex){
+GameScene playGame(SDL_Window* window, SDL_Renderer* renderer, const std::string& selectedScorePath, int selectedDifficulty, SDL_Texture* targetTex){
 
     //変数定義
     std::vector<Effect> effects;
@@ -56,7 +56,7 @@ GameScene playGame(SDL_Window* window, SDL_Renderer* renderer, const std::string
     ComboPopEffect comboPop;
 
     //反例処理 + 定義
-    if(!loadScore(selectedScorePath, bgmName, notes, speedEvents, bpm, offsetMs)){
+    if(!loadScore(selectedScorePath, bgmName, notes, speedEvents, bpm, offsetMs, selectedDifficulty)){
         return GameScene::Select;
     }
 
