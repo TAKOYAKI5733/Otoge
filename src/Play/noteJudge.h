@@ -95,7 +95,7 @@ inline void NoteJudge(GameContext& ctx, Tex& tex, Sq& sq){
                             if(note.type == NoteType::Lane) toggleLaneActive(ctx, note);
                         }
                         
-                        else if(timeDiff <= 100){
+                        else if(timeDiff <= 90){
                             ctx.laneJudge[i] = {tex.bad, sq.bad, ctx.musicTime};
                             note.isHit = true;
                             newEffect.judgeType = 3;

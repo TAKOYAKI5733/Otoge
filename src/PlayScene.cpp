@@ -139,6 +139,9 @@ GameScene playGame(SDL_Window* window, SDL_Renderer* renderer, const std::string
     uint32_t musicStartTime = SDL_GetTicks() + delayTimeMs;
     bool bgmStarted = false;
 
+    uint32_t lastDriftCheckTime = 0;
+    double clockDriftCorrectionMs = 0.0;
+
     if(targetTex != nullptr){
         SDL_SetRenderTarget(renderer, targetTex);
 
@@ -165,11 +168,27 @@ GameScene playGame(SDL_Window* window, SDL_Renderer* renderer, const std::string
     while(running){
 
         uint32_t globalTime = SDL_GetTicks();
-        int32_t musicTime = static_cast<int32_t>(globalTime - musicStartTime) - offsetMs;
+
+        double rawElapsedMs = static_cast<double>(static_cast<int32_t>(globalTime - musicStartTime)) + clockDriftCorrectionMs;
+        int32_t musicTime = static_cast<int32_t>(rawElapsedMs - offsetMs);
 
         if(!bgmStarted && globalTime >= musicStartTime){
             Mix_PlayMusic(bgm, 1);
             bgmStarted = true;
+        }
+
+        if(bgmStarted && (globalTime - lastDriftCheckTime) >= 200){
+            lastDriftCheckTime = globalTime;
+
+            double actualPosMs = Mix_GetMusicPosition(bgm) * 1000.0;
+            if(actualPosMs >= 0.0){
+                double predictedRawMs = static_cast<double>(static_cast<int32_t>(globalTime - musicStartTime)) + clockDriftCorrectionMs;
+                double drift = actualPosMs - predictedRawMs;
+
+                if(std::abs(drift) > 5.0){
+                    clockDriftCorrectionMs += drift * 0.2;
+                }
+            }
         }
 
         // タイムベース・スピードイベント処理システム

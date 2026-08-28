@@ -15,6 +15,8 @@ struct SongInfo{
 
     double currentScale = 1.0;
     double currentY = -1.0;
+    double currentX = -1.0;
+    bool positionInittailized = false;
 };
 
 struct GenreInfo{
@@ -23,6 +25,8 @@ struct GenreInfo{
     
     double currentScale = 1.0;
     double currentY = -1.0;
+    double currentX = -1.0;
+    bool positionInittailized = false;
 };
 
 enum class SelectMode{
@@ -33,8 +37,8 @@ enum class SelectMode{
 //プロトタイプ宣言
 SongInfo parseScoreFile(const std::filesystem::path& filePath);
 std::vector<GenreInfo> scanScoreFolder(const std::string& baseDir);
-void draw_GenreList(SDL_Renderer* renderer, TTF_Font* font, std::vector<GenreInfo>& categories,size_t genreCursor);
-void draw_SongList(SDL_Renderer* renderer, TTF_Font* font, std::vector<SongInfo>& songList, size_t songCursor, bool isActive);
+void draw_GenreList(SDL_Renderer* renderer, TTF_Font* font, std::vector<GenreInfo>& categories,size_t genreCursor, bool isSongMode, SDL_Rect* outSelectedGenreRect);
+void draw_SongList(SDL_Renderer* renderer, TTF_Font* font, std::vector<SongInfo>& songList, size_t songCursor, bool isActive, const SDL_Rect* priorityRect);
 void draw_songDetail(SDL_Renderer* renderer, TTF_Font* font, const SongInfo& song, double animation);
 
 
@@ -74,9 +78,11 @@ GameScene selectSongScene(SDL_Window* window, SDL_Renderer* renderer, std::strin
         SDL_SetRenderDrawColor(renderer, 15, 15, 25, 255);
         SDL_RenderClear(renderer);
 
-        draw_GenreList(renderer, font, categories, genreCursor);
         bool isSongActive = (currentMode == SelectMode::SelectSong);
-        draw_SongList(renderer, font, categories[genreCursor].songList, songCursor, isSongActive);
+        SDL_Rect selectedGenreRect = {0, 0, 0, 0};
+
+        draw_GenreList(renderer, font, categories, genreCursor, currentMode == SelectMode::SelectSong, &selectedGenreRect);
+        draw_SongList(renderer, font, categories[genreCursor].songList, songCursor, isSongActive, isSongActive ? &selectedGenreRect : nullptr);
         
         SDL_SetRenderTarget(renderer, NULL);
 
@@ -210,10 +216,11 @@ GameScene selectSongScene(SDL_Window* window, SDL_Renderer* renderer, std::strin
         SDL_SetRenderDrawColor(renderer, 15, 15, 25, 255);
         SDL_RenderClear(renderer);
 
-        draw_GenreList(renderer, font, categories, genreCursor);
-
         bool isSongActive = (currentMode == SelectMode::SelectSong);
-        draw_SongList(renderer, font, categories[genreCursor].songList, songCursor, isSongActive);
+        SDL_Rect selectedGenreRect = {0, 0, 0, 0};
+
+        draw_GenreList(renderer, font, categories, genreCursor, currentMode == SelectMode::SelectSong, &selectedGenreRect);
+        draw_SongList(renderer, font, categories[genreCursor].songList, songCursor, isSongActive, isSongActive ? &selectedGenreRect : nullptr);
 
         if(detailAnimation > 0.001){
             draw_songDetail(renderer, font, categories[genreCursor].songList[songCursor], detailAnimation);
@@ -293,22 +300,47 @@ std::vector<GenreInfo> scanScoreFolder(const std::string& baseDir){
     return categories;
 }
 
-void draw_GenreList(SDL_Renderer* renderer, TTF_Font* font, std::vector<GenreInfo>& categories,size_t genreCursor){
+void draw_GenreList(SDL_Renderer* renderer, TTF_Font* font, std::vector<GenreInfo>& categories,size_t genreCursor, bool isSongMode, SDL_Rect* outSelectedGenreRect){
     int startY = 300;
     int lineGap = 80;
     int centerY = SCREEN_H / 2;
+
+    const double selectedGenreTargetX = 100.0;
+    const double selectedGenreTargetY = 120.0;
+    const double offscreenGenreTargetX = -800.0;
 
     for(size_t i = 0; i < categories.size(); i++){
         double targetScale = (i == genreCursor) ? 1.4 : 1.0;
 
         categories[i].currentScale += (targetScale - categories[i].currentScale) * 0.15;
 
-        double targetY = centerY + (static_cast<double>(i) - static_cast<double>(genreCursor)) * lineGap;
-        
-        if(categories[i].currentY < 0.0){
-            categories[i].currentY = targetY;
+        double targetX;
+        double targetY;
+
+        if(!isSongMode){
+            targetX = 200.0;
+            targetY = centerY + (static_cast<double>(i) - static_cast<double>(genreCursor)) * lineGap;
         }
         else{
+            if(i == genreCursor){
+                targetX = selectedGenreTargetX;
+                targetY = selectedGenreTargetY;
+            }
+            else{
+                targetX = offscreenGenreTargetX;
+                targetY = centerY + (static_cast<double>(i) - static_cast<double>(genreCursor)) * lineGap;
+            }
+        }
+        
+        const double UNINITIALIZED_THRESHOLD = -100000.0;
+
+        if(!categories[i].positionInittailized){
+            categories[i].currentX = targetX;
+            categories[i].currentY = targetY;
+            categories[i].positionInittailized = true;
+        }
+        else{
+            categories[i].currentX += (targetX - categories[i].currentX) * 0.15;
             categories[i].currentY += (targetY - categories[i].currentY) * 0.15;
         }
 
@@ -327,20 +359,23 @@ void draw_GenreList(SDL_Renderer* renderer, TTF_Font* font, std::vector<GenreInf
         destRect.w = static_cast<int>(surf->w * categories[i].currentScale);
         destRect.h = static_cast<int>(surf->h * categories[i].currentScale);
 
-        destRect.x = 200;
+        destRect.x = static_cast<int>(categories[i].currentX);
 
         int baseY = static_cast<int>(categories[i].currentY);
-        destRect.y = baseY - (destRect.h - surf->h) / 2 - destRect.h / 2;
         destRect.y =baseY - (destRect.h - surf->h) / 2;
 
         SDL_RenderCopy(renderer, tex, NULL, &destRect);
+
+        if(isSongMode && i == genreCursor && outSelectedGenreRect != nullptr){
+            *outSelectedGenreRect = destRect;
+        }
 
         SDL_DestroyTexture(tex);
         SDL_FreeSurface(surf);
     }
 }
 
-void draw_SongList(SDL_Renderer* renderer, TTF_Font* font, std::vector<SongInfo>& songList, size_t songCursor, bool isActive){
+void draw_SongList(SDL_Renderer* renderer, TTF_Font* font, std::vector<SongInfo>& songList, size_t songCursor, bool isActive, const SDL_Rect* priorityRect){
     int startY = 250;
     int lineGap = 80;
     int centerY = SCREEN_H / 2;
@@ -349,12 +384,16 @@ void draw_SongList(SDL_Renderer* renderer, TTF_Font* font, std::vector<SongInfo>
         double targetScale = (i == songCursor && isActive) ? 1.3 : 1.0;
         songList[i].currentScale += (targetScale - songList[i].currentScale) * 0.15;
 
+        double targetX = isActive ? 200.0 : 900.0;
         double targetY = centerY + (static_cast<double>(i) - static_cast<double>(songCursor)) * lineGap;
 
-        if(songList[i].currentY < 0.0){
+        if(!songList[i].positionInittailized){
+            songList[i].currentX = targetX;
             songList[i].currentY = targetY;
+            songList[i].positionInittailized = true;
         }
         else{
+            songList[i].currentX += (targetX - songList[i].currentX) * 0.15;
             songList[i].currentY += (targetY - songList[i].currentY) * 0.15;
         }
 
@@ -373,15 +412,20 @@ void draw_SongList(SDL_Renderer* renderer, TTF_Font* font, std::vector<SongInfo>
         SDL_Surface* surf  = TTF_RenderUTF8_Blended(font, displayName.c_str(), textColor);
         if(!surf) continue;
 
-        SDL_Texture* tex = SDL_CreateTextureFromSurface(renderer, surf);
         SDL_Rect destRect;
         destRect.w = static_cast<int>(surf->w * songList[i].currentScale);
         destRect.h = static_cast<int>(surf->h * songList[i].currentScale);
-        destRect.x = 900;
+        destRect.x = static_cast<int>(songList[i].currentX);
 
         int baseY = static_cast<int>(songList[i].currentY);
         destRect.y = baseY - (destRect.h - surf->h) / 2 - destRect.h / 2;
 
+        if(priorityRect != nullptr && SDL_HasIntersection(&destRect, priorityRect)){
+            SDL_FreeSurface(surf);
+            continue;
+        }
+
+        SDL_Texture* tex = SDL_CreateTextureFromSurface(renderer, surf);
         SDL_RenderCopy(renderer, tex, NULL, &destRect);
         SDL_DestroyTexture(tex);
         SDL_FreeSurface(surf);
