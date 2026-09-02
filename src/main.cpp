@@ -31,6 +31,10 @@ int main(){
     GameScene nextScene = currentScene;
     std::string selectedScore = "";
     int selectedDifficulty = 0;
+    ResultData resultData;
+
+    PlayerSettings playerSettings;
+    loadPlayerSettings(playerSettings);
 
     SDL_Texture* prev = SDL_CreateTexture(renderer, SDL_PIXELFORMAT_BGRA8888, SDL_TEXTUREACCESS_TARGET, SCREEN_W, SCREEN_H);
     SDL_Texture* nex = SDL_CreateTexture(renderer, SDL_PIXELFORMAT_BGRA8888, SDL_TEXTUREACCESS_TARGET, SCREEN_W, SCREEN_H);
@@ -38,11 +42,11 @@ int main(){
     while(currentScene != GameScene::Shutdown){
         switch(currentScene){
             case GameScene::Select:{
-                nextScene = selectSongScene(window, renderer, selectedScore, selectedDifficulty);
+                nextScene = selectSongScene(window, renderer, selectedScore, selectedDifficulty, playerSettings);
 
                 if(nextScene == GameScene::Load){
                     SDL_SetRenderTarget(renderer, prev);
-                    selectSongScene(window, renderer, selectedScore, selectedDifficulty, prev);
+                    selectSongScene(window, renderer, selectedScore, selectedDifficulty, playerSettings, prev);
 
                     SDL_SetRenderTarget(renderer, nex);
                     loadScene(window, renderer, selectedScore, nex);
@@ -83,13 +87,13 @@ int main(){
             }
 
             case GameScene::Play:{
-                playGame(window, renderer, selectedScore, selectedDifficulty, nullptr);
+                playGame(window, renderer, selectedScore, selectedDifficulty, resultData, playerSettings, nullptr);
                 currentScene = GameScene::Result;
                 break;
             }
             
             case GameScene::Result:{
-                currentScene = GameScene::Select;
+                currentScene = resultScene(window, renderer, resultData);
                 break;
             }
 
@@ -102,6 +106,11 @@ int main(){
 
             case GameScene::ChartCreate:{
                 currentScene = chartCreateScene(window, renderer, selectedScore, nullptr);
+                break;
+            }
+
+            case GameScene::Setting:{
+                currentScene = settingScene(window, renderer, playerSettings);
                 break;
             }
 

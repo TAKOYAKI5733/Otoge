@@ -47,8 +47,12 @@ inline void renderGamePlayScreen(GameContext& ctx, Tex& tex, Sq& sq, double curr
 
             if(laneIsInactive){
                 SDL_SetRenderDrawColor(ctx.renderer, 0, 0, 0, 150);
-                bodyRect.h = static_cast<int>((drawNoteY - tailY) / 2.0);
-                bodyRect.y = tailY - static_cast<int>(((drawNoteY - tailY) / 2.0) / 4.0);
+            }
+            else if(note.isHolding){
+                SDL_SetRenderDrawColor(ctx.renderer, 0, 150, 255, 255);
+            }
+            else{
+                SDL_SetRenderDrawColor(ctx.renderer, 0, 150, 255, 100);
             }
 
             SDL_RenderFillRect(ctx.renderer, &bodyRect);

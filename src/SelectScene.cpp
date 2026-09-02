@@ -41,13 +41,14 @@ enum class SelectMode{
 //プロトタイプ宣言
 std::vector<GenreInfo> scanScoreFolder(const std::string& baseDir);
 void draw_GenreList(SDL_Renderer* renderer, TTF_Font* font, std::vector<GenreInfo>& categories,size_t genreCursor, bool isSongMode, SDL_Rect* outSelectedGenreRect);
-void draw_SongList(SDL_Renderer* renderer, TTF_Font* font, std::vector<SongInfo>& songList, size_t songCursor, bool isActive, const SDL_Rect* priorityRect);
+void draw_SongList(SDL_Renderer* renderer, TTF_Font* font, std::vector<SongInfo>& songList, size_t songCursor, SelectMode currentMode, const SDL_Rect* priorityRect);
 void draw_songDetail(SDL_Renderer* renderer, TTF_Font* font, const SongInfo& song, double animation);
+void draw_DifficultyList(SDL_Renderer* renderer, TTF_Font* font, std::vector<DifficultyInfo>& difficulties, size_t difficultyCursor, SelectMode currentMode);
 SongInfo parseScoreFile(const std::filesystem::path& filePath);
 
 
 //メイン関数
-GameScene selectSongScene(SDL_Window* window, SDL_Renderer* renderer, std::string& outSelectedScorePath, int& outSelectedDifficulty, SDL_Texture* targetTex){
+GameScene selectSongScene(SDL_Window* window, SDL_Renderer* renderer, std::string& outSelectedScorePath, int& outSelectedDifficulty, PlayerSettings& playerSettings, SDL_Texture* targetTex){
     std::vector<GenreInfo> categories = scanScoreFolder("scores");
     if(categories.empty()){
         std::cout << "[エラー]曲がねぇ\n";
@@ -83,11 +84,12 @@ GameScene selectSongScene(SDL_Window* window, SDL_Renderer* renderer, std::strin
         SDL_SetRenderDrawColor(renderer, 15, 15, 25, 255);
         SDL_RenderClear(renderer);
 
-        bool isSongActive = (currentMode == SelectMode::SelectSong);
+        bool genreCollapsed = (currentMode != SelectMode::SelectGenre);
         SDL_Rect selectedGenreRect = {0, 0, 0, 0};
 
-        draw_GenreList(renderer, font, categories, genreCursor, currentMode == SelectMode::SelectSong, &selectedGenreRect);
-        draw_SongList(renderer, font, categories[genreCursor].songList, songCursor, isSongActive, isSongActive ? &selectedGenreRect : nullptr);
+        draw_GenreList(renderer, font, categories, genreCursor, genreCollapsed, &selectedGenreRect);
+        draw_SongList(renderer, font, categories[genreCursor].songList, songCursor, currentMode, &selectedGenreRect);
+        draw_DifficultyList(renderer, font, categories[genreCursor].songList[songCursor].difficulties, difficultyCursor, currentMode);
         
         SDL_SetRenderTarget(renderer, NULL);
 
@@ -99,7 +101,7 @@ GameScene selectSongScene(SDL_Window* window, SDL_Renderer* renderer, std::strin
     while(running){
         std::string targetMusicPath = dafaultBgmPath;
 
-        if(currentMode == SelectMode::SelectSong){
+        if(currentMode == SelectMode::SelectSong || currentMode == SelectMode::SelectDifficulty){
             const SongInfo& currentSong = categories[genreCursor].songList[songCursor];
 
                 if(!currentSong.audioExtName.empty() && std::filesystem::exists("sounds/" + currentSong.audioExtName)){
@@ -235,6 +237,12 @@ GameScene selectSongScene(SDL_Window* window, SDL_Renderer* renderer, std::strin
                         running = false;
                         break;
                     }
+
+                    case SDLK_F2:{
+                        nextScene = GameScene::Setting;
+                        running = false;
+                        break;
+                    }
                 }
                 
                 if(cursorMoved && currentMode == SelectMode::SelectSong){
@@ -246,41 +254,17 @@ GameScene selectSongScene(SDL_Window* window, SDL_Renderer* renderer, std::strin
         SDL_SetRenderDrawColor(renderer, 15, 15, 25, 255);
         SDL_RenderClear(renderer);
 
-        bool isSongActive = (currentMode == SelectMode::SelectSong);
+        bool genreCollapsed = (currentMode != SelectMode::SelectGenre);
         SDL_Rect selectedGenreRect = {0, 0, 0, 0};
 
-        draw_GenreList(renderer, font, categories, genreCursor, currentMode == SelectMode::SelectSong, &selectedGenreRect);
-        draw_SongList(renderer, font, categories[genreCursor].songList, songCursor, isSongActive, isSongActive ? &selectedGenreRect : nullptr);
+        draw_GenreList(renderer, font, categories, genreCursor, genreCollapsed, &selectedGenreRect);
+        draw_SongList(renderer, font, categories[genreCursor].songList, songCursor, currentMode, genreCollapsed ? &selectedGenreRect : nullptr);
 
         if(detailAnimation > 0.001){
             draw_songDetail(renderer, font, categories[genreCursor].songList[songCursor], detailAnimation);
         }
 
-        if(currentMode == SelectMode::SelectDifficulty){
-            const auto& diffs = categories[genreCursor].songList[songCursor].difficulties;
-
-            SDL_SetRenderDrawBlendMode(renderer, SDL_BLENDMODE_BLEND);
-            SDL_SetRenderDrawColor(renderer, 0, 0, 0, 180);
-            SDL_Rect overlay = {0, 0, SCREEN_W, SCREEN_H};
-            SDL_RenderFillRect(renderer, &overlay);
-
-            int baseY = SCREEN_H / 2 - static_cast<int>(diffs.size()) * 40;
-            for(size_t i = 0; i < diffs.size(); i++){
-                SDL_Color color = (static_cast<int>(i) == difficultyCursor) ? SDL_Color{255, 215, 0, 255} : SDL_Color{200, 200, 200, 255};
-                std::string label = diffs[i].name + "LV." + diffs[i].level;
-                if(static_cast<int>(i) == difficultyCursor) label = ">>" + label;
-
-                SDL_Surface* surf = TTF_RenderUTF8_Blended(font, label.c_str(), color);
-                if(!surf) continue;
-
-                SDL_Texture* tex = SDL_CreateTextureFromSurface(renderer, surf);
-                SDL_Rect r = {SCREEN_W / 2 - surf->w / 2, baseY + static_cast<int>(i) * 80, surf->w, surf->h};
-                SDL_RenderCopy(renderer, tex, NULL, &r);
-
-                SDL_DestroyTexture(tex);
-                SDL_FreeSurface(surf);
-            }
-        }
+        draw_DifficultyList(renderer, font, categories[genreCursor].songList[songCursor].difficulties, difficultyCursor, currentMode);
 
         SDL_RenderPresent(renderer);
         SDL_Delay(16);
@@ -329,7 +313,6 @@ std::vector<GenreInfo> scanScoreFolder(const std::string& baseDir){
 }
 
 void draw_GenreList(SDL_Renderer* renderer, TTF_Font* font, std::vector<GenreInfo>& categories,size_t genreCursor, bool isSongMode, SDL_Rect* outSelectedGenreRect){
-    int startY = 300;
     int lineGap = 80;
     int centerY = SCREEN_H / 2;
 
@@ -403,17 +386,49 @@ void draw_GenreList(SDL_Renderer* renderer, TTF_Font* font, std::vector<GenreInf
     }
 }
 
-void draw_SongList(SDL_Renderer* renderer, TTF_Font* font, std::vector<SongInfo>& songList, size_t songCursor, bool isActive, const SDL_Rect* priorityRect){
-    int startY = 250;
+void draw_SongList(SDL_Renderer* renderer, TTF_Font* font, std::vector<SongInfo>& songList, size_t songCursor, SelectMode currentMode, const SDL_Rect* priorityRect){
     int lineGap = 80;
     int centerY = SCREEN_H / 2;
 
-    for(size_t i = 0; i < songList.size(); i++){
-        double targetScale = (i == songCursor && isActive) ? 1.3 : 1.0;
-        songList[i].currentScale += (targetScale - songList[i].currentScale) * 0.15;
+    const double selectedSongTargetX = 100.0;
+    const double selectedSongTargetY = 240.0;
+    const double offscreenSongTargetX = -800.0;
 
-        double targetX = isActive ? 200.0 : 900.0;
-        double targetY = centerY + (static_cast<double>(i) - static_cast<double>(songCursor)) * lineGap;
+    for(size_t i = 0; i < songList.size(); i++){
+        bool isCursor = (i == songCursor);
+
+        double targetScale;
+        double targetX;
+        double targetY;
+        bool colorActive;
+
+        if(currentMode == SelectMode::SelectGenre){
+            targetScale = 1.0;
+            targetX = 900.0;
+            targetY = centerY + (static_cast<double>(i) - static_cast<double>(songCursor)) * lineGap;
+            colorActive = false;
+        }
+        else if(currentMode == SelectMode::SelectSong){
+            targetScale = isCursor ? 1.3 : 1.0;
+            targetX = 200.0;
+            targetY = centerY + (static_cast<double>(i) - static_cast<double>(songCursor)) * lineGap;
+            colorActive = true;
+        }
+        else{
+            if(isCursor){
+                targetScale = 1.0;
+                targetX = selectedSongTargetX;
+                targetY = selectedSongTargetY;
+            }
+            else{
+                targetScale = 1.0;
+                targetX = offscreenSongTargetX;
+                targetY = centerY + (static_cast<double>(i) - static_cast<double>(songCursor)) * lineGap;
+            }
+            colorActive = true;
+        }
+
+        songList[i].currentScale += (targetScale - songList[i].currentScale) * 0.15;
 
         if(!songList[i].positionInittailized){
             songList[i].currentX = targetX;
@@ -426,16 +441,19 @@ void draw_SongList(SDL_Renderer* renderer, TTF_Font* font, std::vector<SongInfo>
         }
 
         SDL_Color textColor = {150, 150, 150, 255};
-        if(isActive){
-            textColor = (i == songCursor) ? SDL_Color{0, 255, 255, 255} : SDL_Color{255, 255, 255, 255};
+        if(colorActive){
+            if(currentMode == SelectMode::SelectDifficulty && isCursor){
+                textColor = SDL_Color{255, 215, 0, 255};
+            }
+            else{
+                textColor = isCursor ? SDL_Color{0, 255, 255, 255} : SDL_Color{255, 255, 255, 255};
+            }
         }
 
         std::string displayName = songList[i].title;
-        if(i == songCursor && isActive){
+        if(i == songCursor && colorActive){
             displayName = ">> " + displayName; 
         }
-
-        displayName += " (BPM: " + std::to_string(static_cast<int>(songList[i].bpm)) + ")";
 
         SDL_Surface* surf  = TTF_RenderUTF8_Blended(font, displayName.c_str(), textColor);
         if(!surf) continue;
@@ -469,9 +487,7 @@ void draw_songDetail(SDL_Renderer* renderer, TTF_Font* font, const SongInfo& son
     int lineGap = 50;
 
     std::vector<std::pair<std::string, SDL_Color>> infoLines = {
-        {"COMPOSER: " + song.composer, {255, 255, 255, 255}},
-        {"CHART CREATOR: " + song.ChartCreator, {255, 255, 255, 255}},
-        {"LV: " + song.level, {255, 69, 0, 255}}
+        {"COMPOSER: " + song.composer, {255, 255, 255, 255}}
     };
 
     for(size_t i = 0; i < infoLines.size(); i++){
@@ -520,4 +536,76 @@ SongInfo parseScoreFile(const std::filesystem::path& filePath){
     song.difficulties = listDifficulties(song.scorePath);
 
     return song;
+}
+
+void draw_DifficultyList(SDL_Renderer* renderer, TTF_Font* font, std::vector<DifficultyInfo>& difficulties, size_t difficultyCursor, SelectMode currentMode){
+    int lineGap = 80;
+    int centerY = SCREEN_H / 2;
+
+    const double offscreenTargetX = -800.0;
+    const double waitingTargetX = 900;
+
+    for(size_t i = 0; i < difficulties.size(); i++){
+        bool isCursor = (i == difficultyCursor);
+
+        double targetScale;
+        double targetX;
+        double targetY;
+        bool colorActive;
+
+        if(currentMode == SelectMode::SelectGenre){
+            targetScale = 1.0;
+            targetX = offscreenTargetX;
+            targetY = centerY + (static_cast<double>(i) - static_cast<double>(difficultyCursor)) * lineGap;
+            colorActive = false;
+        }
+        else if(currentMode == SelectMode::SelectSong){
+            targetScale = 1.0;
+            targetX = waitingTargetX;
+            targetY = centerY + (static_cast<double>(i) - static_cast<double>(difficultyCursor)) * lineGap;
+            colorActive = false;
+        }
+        else{
+            targetScale = isCursor ? 1.3 : 1.0;
+            targetX = 200.0;
+            targetY = centerY + (static_cast<double>(i) - static_cast<double>(difficultyCursor)) * lineGap;
+            colorActive = true;
+        }
+
+        difficulties[i].currentScale += (targetScale - difficulties[i].currentScale) * 0.15;
+
+        if(!difficulties[i].positionInitialized){
+            difficulties[i].currentX = targetX;
+            difficulties[i].currentY = targetY;
+            difficulties[i].positionInitialized = true;
+        }
+        else{
+            difficulties[i].currentX += (targetX - difficulties[i].currentX) * 0.15;
+            difficulties[i].currentY += (targetY - difficulties[i].currentY) * 0.15;
+        }
+
+        SDL_Color textColor = {150, 150, 150, 255};
+        if(colorActive){
+            textColor = isCursor ? SDL_Color{0, 255, 255, 255} : SDL_Color{255, 255, 255, 255};
+        }
+
+        std::string displayName = difficulties[i].name + " (Lv." + difficulties[i].level + ")";
+        if(isCursor && colorActive) displayName = ">> " + displayName;
+
+        SDL_Surface* surf = TTF_RenderUTF8_Blended(font, displayName.c_str(), textColor);
+        if(!surf) continue;
+
+        SDL_Rect destRect;
+        destRect.w = static_cast<int>(surf->w * difficulties[i].currentScale);
+        destRect.h = static_cast<int>(surf->h * difficulties[i].currentScale);
+        destRect.x = static_cast<int>(difficulties[i].currentX);
+
+        int baseY = static_cast<int>(difficulties[i].currentY);
+        destRect.y = baseY - (destRect.h - surf->h) / 2 - destRect.h / 2;
+
+        SDL_Texture* tex = SDL_CreateTextureFromSurface(renderer, surf);
+        SDL_RenderCopy(renderer, tex, NULL, &destRect);
+        SDL_DestroyTexture(tex);
+        SDL_FreeSurface(surf);
+    }
 }

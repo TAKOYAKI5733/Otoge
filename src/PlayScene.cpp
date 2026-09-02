@@ -6,7 +6,7 @@
 double bpm = 120;
 
 //playGame関数の制作
-GameScene playGame(SDL_Window* window, SDL_Renderer* renderer, const std::string& selectedScorePath, int selectedDifficulty, SDL_Texture* targetTex){
+GameScene playGame(SDL_Window* window, SDL_Renderer* renderer, const std::string& selectedScorePath, int selectedDifficulty, ResultData& outResult, PlayerSettings& playerSettings,SDL_Texture* targetTex){
 
     //変数定義
     std::vector<Effect> effects;
@@ -60,6 +60,8 @@ GameScene playGame(SDL_Window* window, SDL_Renderer* renderer, const std::string
         return GameScene::Select;
     }
 
+    offsetMs += playerSettings.offsetMs;
+
     int theoreticaMaxCombo = 0;
     for(const auto& note : notes){
         if(note.lane < 0){
@@ -84,10 +86,15 @@ GameScene playGame(SDL_Window* window, SDL_Renderer* renderer, const std::string
         printf("音源の読込失敗\n");
         return GameScene::Select;
     }
+
+    Mix_VolumeMusic(static_cast<int>(playerSettings.bgmVolume * MIX_MAX_VOLUME / 100.0));
     
     Mix_Chunk* tap_sound = Mix_LoadWAV("sounds/tapsound_2.wav");
     if(!tap_sound){
         printf("効果音読込失敗\n");
+    }
+    else{
+        Mix_VolumeChunk(tap_sound, static_cast<int>(playerSettings.seVolume * MIX_MAX_VOLUME / 100.0));
     }
 
     //SDL系統処理
@@ -275,6 +282,15 @@ GameScene playGame(SDL_Window* window, SDL_Renderer* renderer, const std::string
         //ノーツの描画・アニメーション処理
         renderGamePlayScreen(ctx, tex, sq, currentNoteSpeed, laneX);
     }
+
+    outResult.score = scoreTracker.getScore();
+    outResult.maxCombo = scoreTracker.getMaxComboAchieved();
+    outResult.isAP = isAP;
+    outResult.isFC = isFC;
+    outResult.perfectCount = scoreTracker.getPerfectCount();
+    outResult.goodCount = scoreTracker.getGoodCount();
+    outResult.badCount = scoreTracker.getBadCount();
+    outResult.missCount = scoreTracker.getMissCount();
 
     Mix_HaltMusic();
     TTF_CloseFont(font);

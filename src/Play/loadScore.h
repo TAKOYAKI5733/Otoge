@@ -9,6 +9,11 @@ using json = nlohmann::json;
 struct DifficultyInfo{
     std::string name;
     std::string level;
+
+    double currentScale = 1.0;
+    double currentX = 0.0;
+    double currentY = 0.0;
+    bool positionInitialized = false;
 };
 
 inline std::vector<DifficultyInfo> listDifficulties(const std::string& filename){
@@ -74,7 +79,7 @@ inline bool loadScore(const std::string& filename, std::string& bgmName, std::ve
     offsetMs = j.value("offset", 0.0);
 
     const json* chartRoot = &j;
-    if(j.contains("difficulties") && j.at("difficulities").is_array()){
+    if(j.contains("difficulties") && j.at("difficulties").is_array()){
         const auto& diffs = j.at("difficulties");
         if(difficultyIndex < 0 || static_cast<size_t>(difficultyIndex) >= diffs.size()){
             printf("JSON: 難易度が範囲外(%d)\n", difficultyIndex);
@@ -128,13 +133,13 @@ inline bool loadScore(const std::string& filename, std::string& bgmName, std::ve
     });
 
     //speedEventの読込
-    if(j.contains("speedEvents")){
-        if(!j.at("speedEvents").is_array()){
+    if(chartRoot->contains("speedEvents")){
+        if(!chartRoot->at("speedEvents").is_array()){
             printf("JSON / speedEvent / error\n");
             return false;
         }
 
-        for(const auto& item : j.at("speedEvents")){
+        for(const auto& item : chartRoot->at("speedEvents")){
             try{
                 SpeedEvent ev;
                 ev.triggerTime = item.at("time").get<int32_t>();
