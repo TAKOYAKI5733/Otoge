@@ -120,6 +120,19 @@ inline bool loadScore(const std::string& filename, std::string& bgmName, std::ve
                 newNote.customSpeed = item.at("speed").get<double>();
             }
 
+            if(item.contains("path")){
+                for(const auto& kf : item.at("path")){
+                    PathKeyframe k;
+                    k.time = kf.at("time").get<int32_t>();
+                    k.y = kf.value("easing", 1);
+                    newNote.path.push_back(k);
+                }
+
+                std::sort(newNote.path.begin(), newNote.path.end(), [](const PathKeyframe& a, const PathKeyframe& b){
+                    return a.time < b.time;
+                });
+            }
+
             notes.push_back(newNote);
         }
         catch(const json::exception& e){

@@ -10,14 +10,21 @@ using json = nlohmann::json;
 #define SCREEN_W 1920
 #define SCREEN_H 1080
 
+struct EditorPathKeyfrane{
+    int32_t time = 0;
+    double y = 0.0;
+    int easing = 1;
+};
 struct EditorNote{
     int noteTypeInt = 0;
     int lane;
     int width = 1;
     int32_t time = 0;
-    int32_t duration = 0; //0のときはノーマルノーツと処理
+    int32_t duration = 0; //0のときはノーマルノーツ処理
     bool hasCustomSpeed = false;
     double customSpeed = 1.0;
+
+    std::vector<EditorPathKeyfrane> path;
 
     bool isLong() const {return duration > 0;}
 };
@@ -80,6 +87,19 @@ inline void saveChart(const std::string& path, const ChartMeta& meta, const std:
             if(n.width != 1) item["width"] = n.width;
             if(n.duration > 0) item["duration"] = n.duration;
             if(n.hasCustomSpeed) item["speed"] = n.customSpeed;
+
+            if(!n.path.empty()){
+                json pathArr = json::array();
+                for(const auto& k : n.path){
+                    json kj;
+                    kj["time"] = k.time;
+                    kj["y"] = k.y;
+                    kj["easing"] = k.easing;
+                    pathArr.push_back(kj);
+                }
+                item["path"] = pathArr;
+            }
+
             notesArr.push_back(item);
         }
         dj["notes"] = notesArr;
@@ -137,6 +157,20 @@ inline EditorDifficulty parseOneDifficulty(const json& src){
                 n.hasCustomSpeed = true;
                 n.customSpeed = item.at("speed").get<double>();
             }
+
+            if(item.contains("path")){
+                for(const auto& kf : item.at("path")){
+                    EditorPathKeyfrane k;
+                    k.time = kf.value("time", 0);
+                    k.y = kf.value("y", 0.0);
+                    k.easing = kf.value("easing", 1);
+                    n.path.push_back(k);
+                } 
+                std::sort(n.path.begin(), n.path.end(), [](const EditorPathKeyfrane& a, const EditorPathKeyfrane& b){
+                    return a.time < b.time;
+                });
+            }
+
             d.notes.push_back(n);
         }
     }
@@ -195,6 +229,30 @@ inline bool loadChartForEdit(const std::string & path, ChartMeta& meta, std::vec
     }
 
     return true;
+}
+
+inline double evaluateEditorPathY(const EditorNote& n, int32_t musicTime){
+    const auto& path = n.path;
+    if(path.empty()) return 0.0;
+
+    if(musicTime == n.time) return 0.0;
+
+    if(musicTime <= path.front().time) return path.front().y;
+    if(musicTime >= path.back().time) return path.back().y;
+
+    for(size_t i = 1; i < path.size(); i++){
+        if(musicTime <= path[i].time){
+            const auto& k0 = path[i - 1];
+            const auto& k1 = path[i];
+            double t = static_cast<double>(musicTime - k0.time) / static_cast<double>(k1.time - k0.time);
+
+            if(k1.easing == 2) t = easeOutCubic(t);
+            else if(k1.easing == 3) t = easeInCubic(t);
+
+            return k0.y + (k1.y - k0.y) * t;
+        }
+    }
+    return path.back().y;
 }
 
 //譜面エディター
@@ -337,9 +395,10 @@ GameScene chartCreateScene(SDL_Window* window, SDL_Renderer* renderer, std::stri
 
     int selectedNoteIndex = -1;
 
-    enum class DragMode{ None, MoveNote, ResizeTail };
+    enum class DragMode{ None, MoveNote, ResizeTail, MoveSpeedEvent, MoveBpmEvent };
     DragMode dragMode = DragMode::None;
     int dragNoteIndex = -1;
+    int dragEventIndex = -1;
 
     bool running = true;
     SDL_Event e;
@@ -437,125 +496,187 @@ GameScene chartCreateScene(SDL_Window* window, SDL_Renderer* renderer, std::stri
                 int mx = e.button.x;
                 int my = e.button.y;
 
-                int clickedLane = -1;
-                for(int l = 0; l < 6; l++){
-                    if(mx >= laneX[l] && mx < laneX[l] + laneWidth){
-                        clickedLane = l;
-                        break;
+                bool grabbedEventLine = false;
+                if(e.button.button == SDL_BUTTON_LEFT){
+                    const int LINE_HIT_PX = 10;
+
+                    auto& speedEvents = currentDiff().speedEvents;
+                    for(size_t si = 0; si < speedEvents.size(); si++){
+                        int ly = judgeY - static_cast<int>((speedEvents[si].time - scrollTimeMs) * effectivePixelsPerMs);
+                        if(std::abs(my - ly) <= LINE_HIT_PX){
+                            dragMode = DragMode::MoveSpeedEvent;
+                            dragEventIndex = static_cast<int>(si);
+                            grabbedEventLine = true;
+                            break;
+                        }
                     }
-                }
 
-                if(clickedLane >= 0){
-                    double rawTime = scrollTimeMs + (judgeY - my) / effectivePixelsPerMs;
-
-                    double beatDurationMs = 60000.0 / currentDiff().bpm;
-                    double gridMs = (4.0 / gridDivisor) * beatDurationMs;
-                    int32_t snappedTime = static_cast<int32_t>(std::round(rawTime / gridMs) * gridMs);
-
-                    if(e.button.button == SDL_BUTTON_LEFT){
-                        int tailHitIndex = -1;
-                        for(size_t idx = 0; idx < currentDiff().notes.size(); idx++){
-                            const auto& n = currentDiff().notes[idx];
-                            if(!n.isLong()) continue;
-                            if(clickedLane < n.lane || clickedLane > n.lane + n.width - 1) continue;
-
-                            int32_t tailTime = n.time + n.duration;
-                            if(std::abs(static_cast<double>(tailTime) - rawTime) < gridMs / 2){
-                                tailHitIndex = static_cast<int>(idx);
+                    if(!grabbedEventLine){
+                        auto& bpmEvents = currentDiff().bpmEvents;
+                        for(size_t bi = 0; bi < bpmEvents.size(); bi++){
+                            int ly = judgeY - static_cast<int>((bpmEvents[bi].time - scrollTimeMs) * effectivePixelsPerMs);
+                            if(std::abs(my - ly) <= LINE_HIT_PX){
+                                dragMode = DragMode::MoveBpmEvent;
+                                dragEventIndex = static_cast<int>(bi);
+                                grabbedEventLine = true;
                                 break;
                             }
                         }
+                    }
+                }
 
-                        if(tailHitIndex >= 0){
-                            selectedNoteIndex = tailHitIndex;
-                            dragMode = DragMode::ResizeTail;
-                            dragNoteIndex = tailHitIndex;
+                if(!grabbedEventLine){
+                    int clickedLane = -1;
+                    for(int l = 0; l < 6; l++){
+                        if(mx >= laneX[l] && mx < laneX[l] + laneWidth){
+                            clickedLane = l;
+                            break;
                         }
-                        else{
-                            int hitIndex = -1;
+                    }
+
+                    if(clickedLane >= 0){
+                        double rawTime = scrollTimeMs + (judgeY - my) / effectivePixelsPerMs;
+
+                        double beatDurationMs = 60000.0 / currentDiff().bpm;
+                        double gridMs = (4.0 / gridDivisor) * beatDurationMs;
+                        int32_t snappedTime = static_cast<int32_t>(std::round(rawTime / gridMs) * gridMs);
+
+                        if(e.button.button == SDL_BUTTON_LEFT){
+                            int tailHitIndex = -1;
                             for(size_t idx = 0; idx < currentDiff().notes.size(); idx++){
                                 const auto& n = currentDiff().notes[idx];
-                                if(clickedLane >= n.lane && clickedLane <= n.lane + n.width - 1 && std::abs(n.time - snappedTime) < gridMs / 2){
-                                    hitIndex = static_cast<int>(idx);
+                                if(!n.isLong()) continue;
+                                if(clickedLane < n.lane || clickedLane > n.lane + n.width - 1) continue;
+
+                                int32_t tailTime = n.time + n.duration;
+                                if(std::abs(static_cast<double>(tailTime) - rawTime) < gridMs / 2){
+                                    tailHitIndex = static_cast<int>(idx);
                                     break;
                                 }
                             }
 
-                            if(hitIndex >= 0){
-                                selectedNoteIndex = hitIndex;
-                                dragMode = DragMode::MoveNote;
-                                dragNoteIndex = hitIndex;
+                            if(tailHitIndex >= 0){
+                                selectedNoteIndex = tailHitIndex;
+                                dragMode = DragMode::ResizeTail;
+                                dragNoteIndex = tailHitIndex;
                             }
                             else{
-                                EditorNote newNote;
-                                newNote.noteTypeInt = toolNotetype;
-                                newNote.lane = clickedLane;
-                                newNote.width = toolWidth;
-                                newNote.time = snappedTime;
-                                newNote.duration = toolIsLong ? toolDurationMs : 0;
-                                newNote.hasCustomSpeed = toolHasCustomSpeed;
-                                newNote.customSpeed = toolCustomSpeed;
+                                int hitIndex = -1;
+                                for(size_t idx = 0; idx < currentDiff().notes.size(); idx++){
+                                    const auto& n = currentDiff().notes[idx];
+                                    if(clickedLane >= n.lane && clickedLane <= n.lane + n.width - 1 && std::abs(n.time - snappedTime) < gridMs / 2){
+                                        hitIndex = static_cast<int>(idx);
+                                        break;
+                                    }
+                                }
 
-                                currentDiff().notes.push_back(newNote);
-                                selectedNoteIndex = static_cast<int>(currentDiff().notes.size()) - 1;
+                                if(hitIndex >= 0){
+                                    selectedNoteIndex = hitIndex;
+                                    dragMode = DragMode::MoveNote;
+                                    dragNoteIndex = hitIndex;
+                                }
+                                else{
+                                    EditorNote newNote;
+                                    newNote.noteTypeInt = toolNotetype;
+                                    newNote.lane = clickedLane;
+                                    newNote.width = toolWidth;
+                                    newNote.time = snappedTime;
+                                    newNote.duration = toolIsLong ? toolDurationMs : 0;
+                                    newNote.hasCustomSpeed = toolHasCustomSpeed;
+                                    newNote.customSpeed = toolCustomSpeed;
+
+                                    currentDiff().notes.push_back(newNote);
+                                    selectedNoteIndex = static_cast<int>(currentDiff().notes.size()) - 1;
+                                }
                             }
                         }
-                    }
-                    else if(e.button.button == SDL_BUTTON_RIGHT){
-                        for(size_t idx = 0; idx < currentDiff().notes.size(); idx++){
-                            const auto& n = currentDiff().notes[idx];
-                            if(clickedLane >= n.lane && clickedLane <= n.lane + n.width - 1 && std::abs(n.time - snappedTime) < gridMs / 2){
-                                currentDiff().notes.erase(currentDiff().notes.begin() + idx);
-                                if(selectedNoteIndex == static_cast<int>(idx)) selectedNoteIndex = -1;
-                                break;
+                        else if(e.button.button == SDL_BUTTON_RIGHT){
+                            for(size_t idx = 0; idx < currentDiff().notes.size(); idx++){
+                                const auto& n = currentDiff().notes[idx];
+                                if(clickedLane >= n.lane && clickedLane <= n.lane + n.width - 1 && std::abs(n.time - snappedTime) < gridMs / 2){
+                                    currentDiff().notes.erase(currentDiff().notes.begin() + idx);
+                                    if(selectedNoteIndex == static_cast<int>(idx)) selectedNoteIndex = -1;
+                                    break;
+                                }
                             }
                         }
                     }
                 }
             }
 
-            if(e.type == SDL_MOUSEMOTION && dragMode != DragMode::None && dragNoteIndex >= 0 && dragNoteIndex < static_cast<int>(currentDiff().notes.size())){
+            if(e.type == SDL_MOUSEMOTION && dragMode != DragMode::None){
 
-                int mx = e.motion.x;
                 int my = e.motion.y;
-
-                int hoverLane = -1;
-                for(int l = 0; l < 6; l++){
-                    if(mx >= laneX[l] && mx < laneX[l] + laneWidth){
-                        hoverLane = l;
-                        break;
-                    }
-                }
-
                 double rawTime = scrollTimeMs + (judgeY - my) / effectivePixelsPerMs;
                 double beatDurationMs = 60000.0 / currentDiff().bpm;
                 double gridMs = (4.0 / gridDivisor) * beatDurationMs;
                 int32_t snappedTime = static_cast<int32_t>(std::round(rawTime / gridMs) * gridMs);
                 if(snappedTime < 0) snappedTime = 0;
 
-                EditorNote& n = currentDiff().notes[dragNoteIndex];
+                if(dragMode == DragMode::MoveNote || dragMode == DragMode::ResizeTail){
+                    if(dragNoteIndex >= 0 && dragNoteIndex < static_cast<int>(currentDiff().notes.size())){
+                        int mx = e.motion.x;
+                        int hoverLane = -1;
+                        for(int l = 0; l < 6; l++){
+                            if(mx >= laneX[l] && mx < laneX[l] + laneWidth){
+                                hoverLane = l;
+                                break;
+                            }
+                        }
 
-                if(dragMode == DragMode::MoveNote){
-                    n.time = snappedTime;
-                    if(hoverLane >= 0){
-                        int maxLane = 6 - n.width;
-                        n.lane = std::clamp(hoverLane, 0, maxLane);
+                        EditorNote& n = currentDiff().notes[dragNoteIndex];
+
+                        if(dragMode == DragMode::MoveNote){
+                            if(!n.path.empty()){
+                                int32_t delta = snappedTime - n.time;
+                                for(auto& k : n.path){
+                                    k.time += delta;
+                                }
+                            }
+
+                            n.time = snappedTime;
+                            if(hoverLane >= 0){
+                                int maxLane = 6 - n.width;
+                                n.lane = std::clamp(hoverLane, 0, maxLane);
+                            }
+                        }
+                        else if(dragMode == DragMode::ResizeTail){
+                            int32_t newDuration = snappedTime - n.time;
+                            int32_t minDuration = static_cast<int32_t>(std::max(1.0, gridMs));
+                            if(newDuration < minDuration) newDuration = minDuration;
+                            n.duration = newDuration;
+                        }
                     }
                 }
-                else if(dragMode == DragMode::ResizeTail){
-                    int32_t newDuration = snappedTime - n.time;
-                    int32_t minDuration = static_cast<int32_t>(std::max(1.0, gridMs));
-                    if(newDuration < minDuration) newDuration = minDuration;
-                    n.duration = newDuration;
+                else if(dragMode == DragMode::MoveSpeedEvent){
+                    auto& speedEvents = currentDiff().speedEvents;
+                    if(dragEventIndex >= 0 && dragEventIndex < static_cast<int>(speedEvents.size())){
+                        speedEvents[dragEventIndex].time = snappedTime;
+                    }
+                }
+                else if(dragMode == DragMode::MoveBpmEvent){
+                    auto& bpmEvents = currentDiff().bpmEvents;
+                    if(dragEventIndex >= 0 && dragEventIndex < static_cast<int>(bpmEvents.size())){
+                        bpmEvents[dragEventIndex].time = snappedTime;
+                    }
                 }
             }
 
             if(e.type == SDL_MOUSEBUTTONUP && e.button.button == SDL_BUTTON_LEFT){
+                if(dragMode == DragMode::MoveSpeedEvent){
+                    std::sort(currentDiff().speedEvents.begin(), currentDiff().speedEvents.end(),
+                        [](const EditorSpeedEvent& a, const EditorSpeedEvent& b){ return a.time < b.time; });
+                }
+                else if(dragMode == DragMode::MoveBpmEvent){
+                    std::sort(currentDiff().bpmEvents.begin(), currentDiff().bpmEvents.end(),
+                        [](const EditorBpmEvent& a, const EditorBpmEvent& b){ return a.time < b.time; });
+                }
+
                 dragMode = DragMode::None;
                 dragNoteIndex = -1;
+                dragEventIndex = -1;
             }
         }
-
         if(selectedNoteIndex >= static_cast<int>(currentDiff().notes.size())) selectedNoteIndex = -1;
 
         //オートプレイ : プレビュー
@@ -656,7 +777,7 @@ GameScene chartCreateScene(SDL_Window* window, SDL_Renderer* renderer, std::stri
         meta.composer = composerBuf;
 
         ImGui::InputDouble("Offset(ms)", &meta.offsetMs, 1.0, 10.0, "%.1f");
-        ImGui::TextDisabled("+:late  -:fast");
+        ImGui::TextDisabled("-:late  +:fast");
         ImGui::Separator();
         ImGui::InputText("Save Path", savePathBuf, sizeof(savePathBuf));
         
@@ -771,6 +892,72 @@ GameScene chartCreateScene(SDL_Window* window, SDL_Renderer* renderer, std::stri
             ImGui::Checkbox("SPEED##inspector", &n.hasCustomSpeed);
             if(n.hasCustomSpeed){
                 ImGui::InputDouble("SPEED VALUE##inspector", &n.customSpeed, 0.1, 1.0, "%.2f");
+            }
+
+            ImGui::Separator();
+            bool hasPath = !n.path.empty();
+            if(ImGui::Checkbox("CUSTOM PATH##inspector", &hasPath)){
+                if(hasPath && n.path.empty()){
+                    EditorPathKeyfrane start;
+                    start.time = n.time - 1000;
+                    start.y = 900.0;
+                    start.easing = 1;
+
+                    EditorPathKeyfrane  end;
+                    end.time = n.time;
+                    end.y = 0.0;
+                    end.easing = 1;
+
+                    n.path = { start, end };
+                }
+                else if(!hasPath){
+                    n.path.clear();
+                }
+            }
+
+            if(hasPath){
+                ImGui::TextDisabled("Y = judge line distance(px). Independent of speed/zoom.");
+
+                if(ImGui::Button("ADD KEYFRAME##path")){
+                    EditorPathKeyfrane k;
+                    k.time = scrollTimeMs;
+                    k.y = static_cast<double>(judgeY - (judgeY - static_cast<int>((n.time - scrollTimeMs) * effectivePixelsPerMs)));
+                    n.path.push_back(k);
+                    std::sort(n.path.begin(), n.path.end(), [](const EditorPathKeyfrane& a, const EditorPathKeyfrane& b){
+                        return a.time < b.time;
+                    });
+                }
+
+                int removePathIdx = -1;
+                for(size_t pi = 0; pi < n.path.size(); pi++){
+                    ImGui::PushID(static_cast<int>(pi) + 300000);
+                    auto& k = n.path[pi];
+
+                    ImGui::Text("%zu", pi);
+                    ImGui::InputInt("Time(ms)##path", &k.time);
+                    ImGui::InputDouble("Y(px)##path", &k.y, 10.0, 50.0, "%.0f");
+
+                    const char* pathEaseNames[] = {"Linear(1)", "easeOut(2)", "easeIn(3)"};
+                    int pathEaseIdx = k.easing - 1;
+                    if(pathEaseIdx < 0 || pathEaseIdx > 2) pathEaseIdx = 0;
+                    if(ImGui::Combo("Easing##path", &pathEaseIdx, pathEaseNames, 3)){
+                        k.easing = pathEaseIdx + 1;
+                    }
+
+                    if(ImGui::Button("DELETE##path")){
+                        removePathIdx = static_cast<int>(pi);
+                    }
+
+                    ImGui::Separator();
+                    ImGui::PopID();
+                }
+                if(removePathIdx >= 0){
+                    n.path.erase(n.path.begin() + removePathIdx);
+                }
+
+                std::sort(n.path.begin(), n.path.end(), [](const EditorPathKeyfrane& a, const EditorPathKeyfrane& b){
+                    return a.time < b.time;
+                });
             }
 
             if(ImGui::Button("DELETE THIS NOTE")){
@@ -894,7 +1081,13 @@ GameScene chartCreateScene(SDL_Window* window, SDL_Renderer* renderer, std::stri
 
     for(size_t idx = 0; idx < currentDiff().notes.size(); idx++){
         const auto& n = currentDiff().notes[idx];
-        int noteY = judgeY - static_cast<int>((n.time - scrollTimeMs) * effectivePixelsPerMs);
+        int noteY;
+        if(!n.path.empty()){
+            noteY = judgeY - static_cast<int>(evaluateEditorPathY(n, scrollTimeMs));
+        }
+        else{
+            noteY = judgeY - static_cast<int>((n.time - scrollTimeMs) * effectivePixelsPerMs);
+        }
 
         if(n.isLong()){
             int tailY = judgeY - static_cast<int>((n.time + n.duration - scrollTimeMs) * effectivePixelsPerMs);

@@ -4862,7 +4862,7 @@
       "bpm": 190.0,
       "bpmEvents": [],
       "chartCreator": "TKYK.env",
-      "level": "0",
+      "level": "0 未実装",
       "name": "HARD",
       "notes": [],
       "speedEvents": []
@@ -4871,7 +4871,7 @@
       "bpm": 190.0,
       "bpmEvents": [],
       "chartCreator": "TKYK.env",
-      "level": "0",
+      "level": "0 未実装",
       "name": "NORMAL",
       "notes": [],
       "speedEvents": []
@@ -4880,7 +4880,7 @@
       "bpm": 190.0,
       "bpmEvents": [],
       "chartCreator": "TKYK.env",
-      "level": "2",
+      "level": "2 未実装",
       "name": "EAZY",
       "notes": [
         {

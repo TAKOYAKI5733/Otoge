@@ -4,6 +4,30 @@
 #include "Play/type.h"
 #include "Play/GameContext.h"
 
+inline double evaluatNotePathY(const Note& note, int32_t musicTime){
+    const auto& path = note.path;
+    if(path.empty()) return 0.0;
+
+    if(musicTime == note.targetTime) return 0.0;
+
+    if(musicTime <= path.front().time) return path.front().y;
+    if(musicTime >= path.back().time) return path.back().y;
+
+    for(size_t i = 1; i < path.size(); i++){
+        if(musicTime <= path[i].time){
+            const auto& k0 = path[i - 1];
+            const auto& k1 = path[i];
+            double t = static_cast<double>(musicTime - k0.time) / static_cast<double>(k1.time - k0.time);
+
+            if(k1.easing == 2) t = easeOutCubic(t);
+            else if(k1.easing == 3) t = easeInCubic(t);
+
+            return k0.y + (k1.y - k0.y) * t;
+        }
+    }
+    return path.back().y;
+}
+
 inline void renderGamePlayScreen(GameContext& ctx, Tex& tex, Sq& sq, double currentNoteSpeed, int laneX[6]){
     GradientBackground(ctx.renderer, SCREEN_W, SCREEN_H, ctx.musicTime);
     draw_waku_init(ctx.renderer, tex, sq, ctx.laneActive);
@@ -18,7 +42,15 @@ inline void renderGamePlayScreen(GameContext& ctx, Tex& tex, Sq& sq, double curr
 
         double effectiveSpeed = note.hasCustomSpeed ? note.customSpeed : currentNoteSpeed;
 
-        int noteY = ctx.judgeY - static_cast<int>((static_cast<double>(note.targetTime) - ctx.musicTime) * effectiveSpeed);
+        int noteY;
+        if(note.hasCustomPath()){
+            double distFromLine = evaluatNotePathY(note, ctx.musicTime);
+            noteY = ctx.judgeY - static_cast<int>(distFromLine);
+        }
+        else{
+            noteY = ctx.judgeY - static_cast<int>((static_cast<double>(note.targetTime) - ctx.musicTime) * effectiveSpeed);
+        }
+        
         if(noteY < -50) continue;
 
         bool laneIsInactive = !ctx.laneActive[note.lane];

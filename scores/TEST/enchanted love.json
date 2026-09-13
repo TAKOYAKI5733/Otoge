@@ -4728,13 +4728,13 @@
           "duration": 2526,
           "easing": 1,
           "target": 1.1,
-          "time": 10106
+          "time": 10105
         },
         {
           "duration": 2526,
           "easing": 1,
           "target": 1.5,
-          "time": 12632
+          "time": 12631
         },
         {
           "duration": 0,
@@ -4845,16 +4845,16 @@
           "time": 85895
         },
         {
-          "duration": 150,
-          "easing": 2,
-          "target": 0.9999999999999997,
-          "time": 128215
-        },
-        {
           "duration": 0,
           "easing": 1,
           "target": 0.0,
           "time": 125053
+        },
+        {
+          "duration": 150,
+          "easing": 2,
+          "target": 0.9999999999999997,
+          "time": 128215
         }
       ]
     },
@@ -4862,16 +4862,100 @@
       "bpm": 190.0,
       "bpmEvents": [],
       "chartCreator": "TKYK.env",
-      "level": "0",
+      "level": "9 テスト",
       "name": "HARD",
-      "notes": [],
+      "notes": [
+        {
+          "lane": 1,
+          "time": 0,
+          "type": 0
+        },
+        {
+          "lane": 2,
+          "time": 210,
+          "type": 0
+        },
+        {
+          "lane": 3,
+          "time": 315,
+          "type": 0
+        },
+        {
+          "lane": 4,
+          "time": 526,
+          "type": 0
+        },
+        {
+          "lane": 1,
+          "time": 1263,
+          "type": 0
+        },
+        {
+          "lane": 2,
+          "time": 1473,
+          "type": 0
+        },
+        {
+          "lane": 3,
+          "time": 1578,
+          "type": 0
+        },
+        {
+          "lane": 4,
+          "time": 1789,
+          "type": 0
+        },
+        {
+          "lane": 1,
+          "time": 2526,
+          "type": 3
+        },
+        {
+          "lane": 2,
+          "time": 2736,
+          "type": 3
+        },
+        {
+          "lane": 3,
+          "time": 2842,
+          "type": 3
+        },
+        {
+          "lane": 4,
+          "time": 3052,
+          "type": 3
+        },
+        {
+          "duration": 526,
+          "lane": 1,
+          "time": 3789,
+          "type": 0
+        },
+        {
+          "duration": 316,
+          "lane": 2,
+          "time": 3999,
+          "type": 0
+        },
+        {
+          "duration": 210,
+          "lane": 3,
+          "time": 4105,
+          "type": 0
+        },
+        {
+          "lane": 4,
+          "time": 4315,
+          "type": 0
+        }
+      ],
       "speedEvents": []
     },
     {
       "bpm": 190.0,
       "bpmEvents": [],
       "chartCreator": "TKYK.env",
-      "level": "0",
+      "level": "0 未実装",
       "name": "NORMAL",
       "notes": [],
       "speedEvents": []
@@ -4880,7 +4964,7 @@
       "bpm": 190.0,
       "bpmEvents": [],
       "chartCreator": "TKYK.env",
-      "level": "2",
+      "level": "2 未実装",
       "name": "EAZY",
       "notes": [
         {

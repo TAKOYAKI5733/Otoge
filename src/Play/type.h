@@ -19,6 +19,11 @@ struct Effect{
     int judgeType = 0;
 };
 
+struct PathKeyframe{
+    int32_t time;
+    double y = 0.0;
+    int easing = 1;
+};
 struct Note{
     int lane;
     int widthLanes = 1;
@@ -33,6 +38,9 @@ struct Note{
 
     bool hasCustomSpeed = false;
     double customSpeed = 1.0;
+
+    std::vector<PathKeyframe> path;
+    bool hasCustomPath() const { return !path.empty(); }
 };
 
 struct JudgeEffect{
