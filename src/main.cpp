@@ -5,7 +5,17 @@
 
 void renderTransition(SDL_Renderer* renderer, SDL_Texture* prev, SDL_Texture* nex, double progress);
 
+// 🌟 修正: Windows環境では、C言語で書かれたlibSDL2mainライブラリが
+//          マングリングされていない"SDL_main"という名前を直接探しにくるため、
+//          extern "C" で関数名をそのまま公開する。
+//          Linux等それ以外の環境では、従来通り通常のmain()のままにする。
+#if defined(_WIN32)
+extern "C" int SDL_main(int argc, char* argv[]){
+    (void)argc;
+    (void)argv;
+#else
 int main(){
+#endif
     if(SDL_Init(SDL_INIT_VIDEO | SDL_INIT_AUDIO) < 0){
         std::cout << "SDL初期化失敗\n";
         return -1;

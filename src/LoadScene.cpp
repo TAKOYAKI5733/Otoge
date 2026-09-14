@@ -1,6 +1,9 @@
 #include <iostream>
 #include <vector>
 #include <string>
+
+#define _USE_MATH_DEFINES
+
 #include <cmath>
 #include <SDL2/SDL.h>
 #include <SDL2/SDL_ttf.h>
@@ -25,7 +28,7 @@ GameScene loadScene([[__attribute_maybe_unused__]]SDL_Window* window, SDL_Render
     }
 
     std::vector<std::string> notes;
-    std::ifstream file("notes.txt");
+    std::ifstream file("fonts/notes.txt");
     if(file.is_open()){
         std::string line;
         while(std::getline(file, line)){

@@ -19,3 +19,4 @@
 
 #define SCREEN_W 1920
 #define SCREEN_H 1080
+#define _USE_MATH_DEFINES

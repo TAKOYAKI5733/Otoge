@@ -51,6 +51,18 @@ GameScene settingScene(SDL_Window* window, SDL_Renderer* renderer, PlayerSetting
     IMGUI_CHECKVERSION();
     ImGui::CreateContext();
     ImGuiIO& io = ImGui::GetIO();
+
+    ImFontConfig font_cfg;
+    font_cfg.OversampleH = 2;
+    font_cfg.OversampleV = 2;
+
+    io.Fonts->AddFontFromFileTTF(
+        "fonts/prac.ttf",
+        18.0f,
+        &font_cfg,
+        io.Fonts->GetGlyphRangesJapanese()
+    );
+
     io.ConfigFlags |= ImGuiConfigFlags_NavEnableKeyboard;
 
     ImGui::StyleColorsDark();
