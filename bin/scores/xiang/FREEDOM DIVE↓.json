@@ -1,0 +1,277 @@
+{
+  "bgm": "FREEDOM DIVE↓.mp3",
+  "composer": "xi",
+  "difficulties": [
+    {
+      "bpm": 222.21287226049014,
+      "bpmEvents": [],
+      "chartCreator": "Unknown",
+      "level": "0",
+      "name": "EAZY",
+      "notes": [
+        {
+          "lane": 1,
+          "time": 2025,
+          "type": 0
+        },
+        {
+          "lane": 2,
+          "time": 2092,
+          "type": 0
+        },
+        {
+          "lane": 3,
+          "time": 2160,
+          "type": 0
+        },
+        {
+          "lane": 4,
+          "time": 2227,
+          "type": 0
+        },
+        {
+          "lane": 3,
+          "time": 2295,
+          "type": 0
+        },
+        {
+          "lane": 2,
+          "time": 2362,
+          "type": 0
+        },
+        {
+          "lane": 1,
+          "time": 2430,
+          "type": 0
+        },
+        {
+          "lane": 2,
+          "time": 2497,
+          "type": 0
+        },
+        {
+          "lane": 3,
+          "time": 2565,
+          "type": 0
+        },
+        {
+          "lane": 4,
+          "time": 2632,
+          "type": 0
+        },
+        {
+          "lane": 1,
+          "time": 2700,
+          "type": 0
+        },
+        {
+          "lane": 2,
+          "time": 2767,
+          "type": 0
+        },
+        {
+          "lane": 3,
+          "time": 2835,
+          "type": 0
+        },
+        {
+          "lane": 4,
+          "time": 2902,
+          "type": 0
+        },
+        {
+          "lane": 3,
+          "time": 1890,
+          "type": 0
+        },
+        {
+          "lane": 4,
+          "time": 1890,
+          "type": 0
+        },
+        {
+          "lane": 1,
+          "time": 2970,
+          "type": 0
+        },
+        {
+          "lane": 2,
+          "time": 2970,
+          "type": 0
+        },
+        {
+          "lane": 3,
+          "time": 3037,
+          "type": 0
+        },
+        {
+          "lane": 4,
+          "time": 3037,
+          "type": 0
+        },
+        {
+          "lane": 1,
+          "time": 3105,
+          "type": 0
+        },
+        {
+          "lane": 2,
+          "time": 3105,
+          "type": 0
+        },
+        {
+          "lane": 3,
+          "time": 3172,
+          "type": 0
+        },
+        {
+          "lane": 4,
+          "time": 3172,
+          "type": 0
+        },
+        {
+          "lane": 1,
+          "time": 3240,
+          "type": 0
+        },
+        {
+          "lane": 2,
+          "time": 3307,
+          "type": 0
+        },
+        {
+          "lane": 3,
+          "time": 3375,
+          "type": 0
+        },
+        {
+          "lane": 4,
+          "time": 3442,
+          "type": 0
+        },
+        {
+          "lane": 1,
+          "time": 3510,
+          "type": 0
+        },
+        {
+          "lane": 2,
+          "time": 3577,
+          "type": 0
+        },
+        {
+          "lane": 3,
+          "time": 3645,
+          "type": 0
+        },
+        {
+          "lane": 4,
+          "time": 3712,
+          "type": 0
+        },
+        {
+          "lane": 3,
+          "time": 3780,
+          "type": 0
+        },
+        {
+          "lane": 4,
+          "time": 3847,
+          "type": 0
+        },
+        {
+          "lane": 1,
+          "time": 3915,
+          "type": 0
+        },
+        {
+          "lane": 2,
+          "time": 3982,
+          "type": 0
+        },
+        {
+          "lane": 4,
+          "time": 4050,
+          "type": 0
+        },
+        {
+          "lane": 3,
+          "time": 4117,
+          "type": 0
+        },
+        {
+          "lane": 2,
+          "time": 4185,
+          "type": 0
+        },
+        {
+          "lane": 1,
+          "time": 4252,
+          "type": 0
+        },
+        {
+          "lane": 2,
+          "time": 4320,
+          "type": 0
+        },
+        {
+          "lane": 3,
+          "time": 4387,
+          "type": 0
+        },
+        {
+          "lane": 4,
+          "time": 4455,
+          "type": 0
+        },
+        {
+          "lane": 3,
+          "time": 4522,
+          "type": 0
+        },
+        {
+          "lane": 4,
+          "time": 4590,
+          "type": 0
+        },
+        {
+          "lane": 3,
+          "time": 4657,
+          "type": 0
+        },
+        {
+          "lane": 2,
+          "time": 4725,
+          "type": 0
+        },
+        {
+          "lane": 1,
+          "time": 4792,
+          "type": 0
+        },
+        {
+          "lane": 4,
+          "time": 4860,
+          "type": 0
+        },
+        {
+          "lane": 3,
+          "time": 4927,
+          "type": 0
+        },
+        {
+          "lane": 2,
+          "time": 4995,
+          "type": 0
+        },
+        {
+          "lane": 3,
+          "time": 5062,
+          "type": 0
+        }
+      ],
+      "speedEvents": []
+    }
+  ],
+  "offset": 200.0
+}

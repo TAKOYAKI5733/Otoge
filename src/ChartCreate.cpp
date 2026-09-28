@@ -1,6 +1,8 @@
 #include "GameCommon.h"
 #include <nlohmann/json.hpp>
 #include <limits>
+#include "Editortempo.h"
+#include "bpmdetect.h"
 #include "imgui.h"
 #include "imgui_impl_sdl2.h"
 #include "imgui_impl_sdlrenderer2.h"
@@ -54,6 +56,9 @@ struct EditorDifficulty{
     std::vector<EditorNote> notes;
     std::vector<EditorSpeedEvent> speedEvents;
     std::vector<EditorBpmEvent> bpmEvents;
+
+    TempoMap alignedMap;
+    bool tempoAligned = false;
 };
 
 struct ChartMeta{
@@ -395,7 +400,25 @@ GameScene chartCreateScene(SDL_Window* window, SDL_Renderer* renderer, std::stri
     int laneX[6];
     for(int i = 0; i < 6; i++) laneX[i] = startX + laneWidth * i;
 
-    int gridDivisor = 4; //標準で4分
+    int gridDivisor = 16; //標準で16分
+
+    auto currentTempoMap = [&]() -> TempoMap {
+        std::vector<TempoPoint> pts;
+        for(const auto& b : currentDiff().bpmEvents) pts.push_back({static_cast<double>(b.time), b.bpm});
+        return makeTempoMap(currentDiff().bpm, pts);
+    };
+    // 最も近いグリッド線へ吸着
+    auto snapToGrid = [&](double rawTimeMs) -> int32_t {
+        return static_cast<int32_t>(std::lround(tempoSnap(currentTempoMap(), rawTimeMs, 4.0 / gridDivisor)));
+    };
+    // 次(+1)/前(-1)のグリッド線へ
+    auto stepGrid = [&](int32_t fromMs, int dir) -> int32_t {
+        return tempoStepMs(currentTempoMap(), fromMs, 4.0 / gridDivisor, dir);
+    };
+    // その時刻付近のグリッド1マスの長さ(ms)。当たり判定の許容幅に使う
+    auto localGridMs = [&](double atMs) -> double {
+        return 60000.0 / tempoBpmAt(currentTempoMap(), atMs) * (4.0 / gridDivisor);
+    };
 
     //ツールバー設定
     int toolNotetype = 0;
@@ -406,11 +429,17 @@ GameScene chartCreateScene(SDL_Window* window, SDL_Renderer* renderer, std::stri
     double toolCustomSpeed = 1.8;
 
     int selectedNoteIndex = -1;
+    bool moveNotesOnBpmChange = true;
 
     enum class DragMode{ None, MoveNote, ResizeTail, MoveSpeedEvent, MoveBpmEvent };
     DragMode dragMode = DragMode::None;
     int dragNoteIndex = -1;
     int dragEventIndex = -1;
+    BpmAnalysisResult bpmResult;
+    bool hasBpmResult = false;
+    TempoMapResult tempoMap;
+    bool hasTempoMap = false;
+    bool replaceBpmEvents = true;
 
     bool running = true;
     SDL_Event e;
@@ -462,12 +491,7 @@ GameScene chartCreateScene(SDL_Window* window, SDL_Renderer* renderer, std::stri
             }
 
             if(!imguiWantsKeyBoard && e.type == SDL_KEYDOWN && e.key.repeat == 0 && (e.key.keysym.sym == SDLK_w || e.key.keysym.sym == SDLK_s)){
-                double beatDurationMs = 60000.0 / currentDiff().bpm;
-                double gridMs = (4.0 / gridDivisor) * beatDurationMs;
-                int32_t step = static_cast<int32_t>(std::round(gridMs));
-
-                if(e.key.keysym.sym == SDLK_w) scrollTimeMs += step;
-                else scrollTimeMs -= step;
+                scrollTimeMs = stepGrid(scrollTimeMs, (e.key.keysym.sym == SDLK_w) ? +1 : -1);
 
                 if(scrollTimeMs < 0) scrollTimeMs = 0;
 
@@ -490,13 +514,8 @@ GameScene chartCreateScene(SDL_Window* window, SDL_Renderer* renderer, std::stri
                     if(pixelsPerMs > 3.0) pixelsPerMs = 3.0;
                 }
                 else{
-                    double beatDuration = 60000.0 / currentDiff().bpm;
-                    double gridMs = (4.0 / gridDivisor) * beatDuration;
-                    int32_t step = static_cast<int32_t>(std::round(gridMs));
-
-                    //ホイールを上に回すと上にいく
-                    if(e.wheel.y < 0) scrollTimeMs -= step;
-                    else if(e.wheel.y > 0) scrollTimeMs += step;
+                    if(e.wheel.y < 0) scrollTimeMs = stepGrid(scrollTimeMs, -1);
+                    else if(e.wheel.y > 0) scrollTimeMs = stepGrid(scrollTimeMs, +1);
 
                     if(scrollTimeMs < 0) scrollTimeMs = 0;
 
@@ -549,9 +568,9 @@ GameScene chartCreateScene(SDL_Window* window, SDL_Renderer* renderer, std::stri
                     if(clickedLane >= 0){
                         double rawTime = scrollTimeMs + (judgeY - my) / effectivePixelsPerMs;
 
-                        double beatDurationMs = 60000.0 / currentDiff().bpm;
-                        double gridMs = (4.0 / gridDivisor) * beatDurationMs;
-                        int32_t snappedTime = static_cast<int32_t>(std::round(rawTime / gridMs) * gridMs);
+                        double gridMs = localGridMs(rawTime);
+                        int32_t snappedTime = snapToGrid(rawTime);
+                        if(snappedTime < 0) snappedTime = 0;
 
                         if(e.button.button == SDL_BUTTON_LEFT){
                             int tailHitIndex = -1;
@@ -620,9 +639,8 @@ GameScene chartCreateScene(SDL_Window* window, SDL_Renderer* renderer, std::stri
 
                 int my = e.motion.y;
                 double rawTime = scrollTimeMs + (judgeY - my) / effectivePixelsPerMs;
-                double beatDurationMs = 60000.0 / currentDiff().bpm;
-                double gridMs = (4.0 / gridDivisor) * beatDurationMs;
-                int32_t snappedTime = static_cast<int32_t>(std::round(rawTime / gridMs) * gridMs);
+                double gridMs = localGridMs(rawTime);
+                int32_t snappedTime = snapToGrid(rawTime);
                 if(snappedTime < 0) snappedTime = 0;
 
                 if(dragMode == DragMode::MoveNote || dragMode == DragMode::ResizeTail){
@@ -784,6 +802,99 @@ GameScene chartCreateScene(SDL_Window* window, SDL_Renderer* renderer, std::stri
         ImGui::Begin("File / Meta");
         ImGui::InputText("BGM File Name", bgmBuf, sizeof(bgmBuf));
         meta.bgm = bgmBuf;
+
+        if(ImGui::Button("ANALYZE BPM")){
+            if(meta.bgm.empty()){
+                bpmResult = BpmAnalysisResult{};
+                bpmResult.error = "BGM File Name is empty";
+            }
+            else{
+                bpmResult = detectBpmFromFile("sounds/" + meta.bgm);
+            }
+            hasBpmResult = true;
+        }
+        ImGui::SameLine();
+        ImGui::TextDisabled("(UI freezes for ~1s)");
+
+        if(hasBpmResult){
+            if(!bpmResult.ok){
+                ImGui::TextColored(ImVec4(1.0f, 0.4f, 0.4f, 1.0f), "%s", bpmResult.error.c_str());
+            }
+            else{
+                ImGui::Text("Estimated: %.2f BPM  (clarity %.0f%%)", bpmResult.bpm, bpmResult.confidence * 100.0);
+                ImGui::Text("Beat phase: about %.0f ms", bpmResult.beatPhaseMs);
+
+                char lbl[3][48];
+                snprintf(lbl[0], sizeof(lbl[0]), "USE %.2f", bpmResult.bpm);
+                snprintf(lbl[1], sizeof(lbl[1]), "USE x2 = %.2f", bpmResult.bpm * 2.0);
+                snprintf(lbl[2], sizeof(lbl[2]), "USE /2 = %.2f", bpmResult.bpm / 2.0);
+
+                if(ImGui::Button(lbl[0])) currentDiff().bpm = bpmResult.bpm;
+                ImGui::SameLine();
+                if(ImGui::Button(lbl[1])) currentDiff().bpm = bpmResult.bpm * 2.0;
+                ImGui::SameLine();
+                if(ImGui::Button(lbl[2])) currentDiff().bpm = bpmResult.bpm / 2.0;
+                ImGui::TextDisabled("Applies to the difficulty being edited");
+            }
+        }
+
+        ImGui::Separator();
+        if(ImGui::Button("ANALYZE TEMPO CHANGES")){
+            if(meta.bgm.empty()){
+                tempoMap = TempoMapResult{};
+                tempoMap.error = "BGM File Name is empty";
+            }
+            else{
+                tempoMap = detectTempoMapFromFile("sounds/" + meta.bgm);
+            }
+            hasTempoMap = true;
+        }
+        ImGui::SameLine();
+        ImGui::TextDisabled("(UI freezes for ~1s)");
+
+        if(hasTempoMap){
+            if(!tempoMap.ok){
+                ImGui::TextColored(ImVec4(1.0f, 0.4f, 0.4f, 1.0f), "%s", tempoMap.error.c_str());
+            }
+            else{
+                ImGui::Text("Detected %zu section(s):", tempoMap.segments.size());
+                for(size_t i = 0; i < tempoMap.segments.size(); i++){
+                    ImGui::PushID(static_cast<int>(i) + 400000);
+                    auto& sg = tempoMap.segments[i];
+                    ImGui::Text("%7.0f ms : %.2f BPM", sg.startMs, sg.bpm);
+                    ImGui::SameLine();
+                    if(ImGui::SmallButton("x2")) sg.bpm *= 2.0;
+                    ImGui::SameLine();
+                    if(ImGui::SmallButton("/2")) sg.bpm /= 2.0;
+                    ImGui::PopID();
+                }
+                if(ImGui::SmallButton("ALL x2##tempo")){
+                    for(auto& sg : tempoMap.segments) sg.bpm *= 2.0;
+                }
+                ImGui::SameLine();
+                if(ImGui::SmallButton("ALL /2##tempo")){
+                    for(auto& sg : tempoMap.segments) sg.bpm /= 2.0;
+                }
+
+                ImGui::Checkbox("Replace existing BPM events", &replaceBpmEvents);
+                if(ImGui::Button("APPLY TO CURRENT DIFFICULTY")){
+                    EditorDifficulty& d = currentDiff();
+                    if(replaceBpmEvents) d.bpmEvents.clear();
+
+                    d.bpm = tempoMap.segments[0].bpm;
+                    for(size_t i = 1; i < tempoMap.segments.size(); i++){
+                        EditorBpmEvent b;
+                        // 音源上の位置 → 譜面上の時刻(音声位置 = 譜面時刻 + Offset の関係に合わせる)
+                        b.time = std::max(0, static_cast<int>(std::lround(tempoMap.segments[i].startMs - meta.offsetMs)));
+                        b.bpm = tempoMap.segments[i].bpm;
+                        d.bpmEvents.push_back(b);
+                    }
+                    std::sort(d.bpmEvents.begin(), d.bpmEvents.end(),
+                        [](const EditorBpmEvent& a, const EditorBpmEvent& b){ return a.time < b.time; });
+                }
+                ImGui::TextDisabled("No undo. Uncheck Replace to keep existing events.");
+            }
+        }
 
         ImGui::InputText("Composer", composerBuf, sizeof(composerBuf));
         meta.composer = composerBuf;
@@ -1019,6 +1130,9 @@ GameScene chartCreateScene(SDL_Window* window, SDL_Renderer* renderer, std::stri
         ImGui::End();
 
         ImGui::Begin("BPM Events");
+
+        ImGui::Checkbox("Move notes on BPM change", &moveNotesOnBpmChange);
+        ImGui::TextDisabled("Notes follow after editing ends (Enter / click away)");
         
         if(ImGui::Button("ADD##bpm")){
             EditorBpmEvent b;
@@ -1048,6 +1162,33 @@ GameScene chartCreateScene(SDL_Window* window, SDL_Renderer* renderer, std::stri
         }
         ImGui::End();
 
+        {
+            EditorDifficulty& d = currentDiff();
+            const TempoMap nowMap = currentTempoMap();
+
+            if(!d.tempoAligned){
+                d.alignedMap = nowMap;          // 初回・LOAD直後・難易度追加直後は動かさない
+                d.tempoAligned = true;
+            }
+            else if(!tempoEqual(d.alignedMap, nowMap)){
+                // 入力中やドラッグ中は待ち、確定してから1回だけ動かす
+                const bool stillEditing = ImGui::IsAnyItemActive() || dragMode != DragMode::None;
+                if(!stillEditing){
+                    if(moveNotesOnBpmChange){
+                        for(auto& n : d.notes){
+                            const int32_t newStart = remapTime(d.alignedMap, nowMap, n.time);
+                            if(n.duration > 0){
+                                const int32_t newEnd = remapTime(d.alignedMap, nowMap, n.time + n.duration);
+                                n.duration = std::max<int32_t>(1, newEnd - newStart);
+                            }
+                            for(auto& k : n.path) k.time = remapTime(d.alignedMap, nowMap, k.time);
+                            n.time = newStart;
+                        }
+                    }
+                    d.alignedMap = nowMap;
+                }
+            }
+        }
 
         //SDL描画　タイムライン等など
         SDL_SetRenderDrawColor(renderer, 15, 15, 20, 255);
@@ -1066,27 +1207,28 @@ GameScene chartCreateScene(SDL_Window* window, SDL_Renderer* renderer, std::stri
         }
 
         {
-        double beatDurationMs = 60000.0 / currentDiff().bpm;
-        double gridMs = (4.0 / gridDivisor) * beatDurationMs;
-        int stepsPerBeat = gridDivisor / 4; // 4,8,12,16,24,32はすべて4の倍数なので割り切れる
+            const TempoMap tm = currentTempoMap();
+            const double gb = 4.0 / gridDivisor;   // グリッド1マスの拍数
 
-        int32_t viewStartTime = static_cast<int32_t>(scrollTimeMs - (SCREEN_H - judgeY) / effectivePixelsPerMs); // 画面下端(過去側)
-        int32_t viewEndTime   = static_cast<int32_t>(scrollTimeMs + judgeY / effectivePixelsPerMs);              // 画面上端(未来側)
+            const double viewStartTime = scrollTimeMs - (SCREEN_H - judgeY) / effectivePixelsPerMs;
+            const double viewEndTime   = scrollTimeMs + judgeY / effectivePixelsPerMs;
 
-        int32_t firstGridIndex = static_cast<int32_t>(std::floor(viewStartTime / gridMs));
-        for(int32_t gi = firstGridIndex; ; gi++){
-            double t = gi * gridMs;
-            if(t > viewEndTime) break;
+            const long kFirst = static_cast<long>(std::floor(tempoBeatAt(tm, viewStartTime) / gb));
+            const long kLast  = static_cast<long>(std::ceil(tempoBeatAt(tm, viewEndTime) / gb));
+            if(kLast - kFirst < 20000){
+                for(long k = kFirst; k <= kLast; k++){
+                    const double beat = k * gb;
+                    const double t = tempoTimeAt(tm, beat);
+                    const int gy = judgeY - static_cast<int>((t - scrollTimeMs) * effectivePixelsPerMs);
 
-            int gy = judgeY - static_cast<int>((t - scrollTimeMs) * effectivePixelsPerMs);
+                    const bool isBeatLine = std::abs(beat - std::round(beat)) < 1.0e-6;
+                    if(isBeatLine) SDL_SetRenderDrawColor(renderer, 120, 120, 140, 255);
+                    else SDL_SetRenderDrawColor(renderer, 50, 50, 60, 255);
 
-            bool isBeatLine = (stepsPerBeat > 0) && (std::abs(gi) % stepsPerBeat == 0);
-            if(isBeatLine) SDL_SetRenderDrawColor(renderer, 120, 120, 140, 255);
-            else SDL_SetRenderDrawColor(renderer, 50, 50, 60, 255);
-
-            SDL_RenderDrawLine(renderer, startX, gy, startX + laneWidth * 6, gy);
-        }    
-    }
+                    SDL_RenderDrawLine(renderer, startX, gy, startX + laneWidth * 6, gy);
+                }
+            }
+        }
 
     SDL_SetRenderDrawColor(renderer, 255, 255, 255, 255);
     SDL_RenderDrawLine(renderer, 0, judgeY, SCREEN_W, judgeY);

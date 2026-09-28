@@ -1,0 +1,16 @@
+{
+  "bgm": "Re：End of a Dream.mp3",
+  "composer": "Unknown",
+  "difficulties": [
+    {
+      "bpm": 120.0,
+      "bpmEvents": [],
+      "chartCreator": "Unknown",
+      "level": "0",
+      "name": "EAZY",
+      "notes": [],
+      "speedEvents": []
+    }
+  ],
+  "offset": 0.0
+}
