@@ -3,7 +3,7 @@
   "composer": "Unknown",
   "difficulties": [
     {
-      "bpm": 120.0,
+      "bpm": 170.211593549178,
       "bpmEvents": [],
       "chartCreator": "Unknown",
       "level": "0",
@@ -12,5 +12,5 @@
       "speedEvents": []
     }
   ],
-  "offset": 0.0
+  "offset": 140.0
 }
