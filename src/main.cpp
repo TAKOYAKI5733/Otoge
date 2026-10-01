@@ -42,6 +42,7 @@ int main(){
     std::string selectedScore = "";
     int selectedDifficulty = 0;
     ResultData resultData;
+    bool autoplay = false;
 
     PlayerSettings playerSettings;
     loadPlayerSettings(playerSettings);
@@ -52,11 +53,11 @@ int main(){
     while(currentScene != GameScene::Shutdown){
         switch(currentScene){
             case GameScene::Select:{
-                nextScene = selectSongScene(window, renderer, selectedScore, selectedDifficulty, playerSettings);
+                nextScene = selectSongScene(window, renderer, selectedScore, selectedDifficulty, playerSettings, autoplay);
 
                 if(nextScene == GameScene::Load){
                     SDL_SetRenderTarget(renderer, prev);
-                    selectSongScene(window, renderer, selectedScore, selectedDifficulty, playerSettings, prev);
+                    selectSongScene(window, renderer, selectedScore, selectedDifficulty, playerSettings, autoplay, prev);
 
                     SDL_SetRenderTarget(renderer, nex);
                     loadScene(window, renderer, selectedScore, nex);
@@ -97,7 +98,7 @@ int main(){
             }
 
             case GameScene::Play:{
-                playGame(window, renderer, selectedScore, selectedDifficulty, resultData, playerSettings, nullptr);
+                playGame(window, renderer, selectedScore, selectedDifficulty, resultData, playerSettings, autoplay, nullptr);
                 currentScene = GameScene::Result;
                 break;
             }

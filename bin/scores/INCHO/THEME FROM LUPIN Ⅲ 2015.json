@@ -1,16 +1,22 @@
 {
   "bgm": "THEME FROM LUPIN Ⅲ 2015.mp3",
-  "composer": "Unknown",
+  "composer": "大野雄二",
   "difficulties": [
     {
-      "bpm": 120.0,
+      "bpm": 137.17440605268,
       "bpmEvents": [],
       "chartCreator": "Unknown",
       "level": "0",
       "name": "EAZY",
-      "notes": [],
+      "notes": [
+        {
+          "lane": 3,
+          "time": 437,
+          "type": 0
+        }
+      ],
       "speedEvents": []
     }
   ],
-  "offset": 0.0
+  "offset": 302.0
 }

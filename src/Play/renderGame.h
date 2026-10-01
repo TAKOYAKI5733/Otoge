@@ -143,6 +143,72 @@ inline void renderGamePlayScreen(GameContext& ctx, Tex& tex, Sq& sq, double curr
         SDL_RenderFillRect(ctx.renderer, &fxRect);
     }
 
+    /*
+    {
+        constexpr int32_t KEY_BEAM_DURATION_MS = 1200;
+        constexpr int beamHeight = 500;
+        constexpr int stripCount = 40;
+        constexpr int baseAlpha = 255;
+
+        for(const auto& beam : ctx.keyBeams){
+            if(beam.lane < 0 || beam.lane >= 6) continue;
+
+            int32_t elapsed = ctx.musicTime - beam.spawnTime;
+
+            // 発生前、または寿命終了後
+            if(elapsed < 0 || elapsed >= KEY_BEAM_DURATION_MS){
+                continue;
+            }
+
+            double timeProgress =
+                static_cast<double>(elapsed)
+                / KEY_BEAM_DURATION_MS;
+
+            double timeFade = 1.0 - timeProgress;
+
+            int bx = laneX[beam.lane];
+            int bw = ctx.laneWidth;
+
+            for(int s = 0; s < stripCount; s++){
+                double stripProgressLow =
+                    static_cast<double>(s) / stripCount;
+
+                double stripProgressHigh =
+                    static_cast<double>(s + 1) / stripCount;
+
+                int yBottom =
+                    ctx.judgeY -
+                    static_cast<int>(stripProgressLow * beamHeight);
+
+                int yTop =
+                    ctx.judgeY -
+                    static_cast<int>(stripProgressHigh * beamHeight);
+
+                double verticalFade = 1.0 - stripProgressLow;
+
+                int alpha = static_cast<int>(
+                    baseAlpha * verticalFade * timeFade
+                );
+
+                if(alpha <= 0) continue;
+
+                SDL_SetRenderDrawColor(
+                    ctx.renderer,
+                    255, 255, 255, alpha
+                );
+
+                SDL_Rect stripRect;
+                stripRect.x = bx;
+                stripRect.w = bw;
+                stripRect.y = yTop;
+                stripRect.h = yBottom - yTop;
+
+                SDL_RenderFillRect(ctx.renderer, &stripRect);
+            }
+        }
+    }
+    */
+
     for(int i = 0; i < 6; i++){
         if(ctx.laneJudge[i].texture != nullptr){
             SDL_RenderCopy(ctx.renderer, ctx.laneJudge[i].texture, NULL, &ctx.laneJudge[i].rect);
@@ -164,6 +230,10 @@ inline void erase_some(GameContext& ctx){
     std::erase_if(ctx.effects, [&ctx](const Effect& fx){
         return (ctx.musicTime - fx.spawnTime) >= static_cast<int32_t>(fx.duration);
     });
+
+    std::erase_if(ctx.keyBeams, [&ctx](const KeyBeam& beam){
+            return (ctx.musicTime - beam.spawnTime) >= 300;
+        });
 
     std::erase_if(ctx.notes, [&ctx](const Note& note){
         if(note.isHolding){

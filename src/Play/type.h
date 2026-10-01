@@ -86,3 +86,8 @@ struct Sq{
     SDL_Rect miss;
     SDL_Rect waku_init;
 };
+
+struct KeyBeam{
+    int lane;
+    int32_t spawnTime;
+};

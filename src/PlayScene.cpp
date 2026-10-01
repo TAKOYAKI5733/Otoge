@@ -6,7 +6,7 @@
 double bpm = 120;
 
 //playGame関数の制作
-GameScene playGame(SDL_Window* window, SDL_Renderer* renderer, const std::string& selectedScorePath, int selectedDifficulty, ResultData& outResult, PlayerSettings& playerSettings,SDL_Texture* targetTex){
+GameScene playGame(SDL_Window* window, SDL_Renderer* renderer, const std::string& selectedScorePath, int selectedDifficulty, ResultData& outResult, PlayerSettings& playerSettings, bool isAutoplay, SDL_Texture* targetTex){
 
     //変数定義
     std::vector<Effect> effects;
@@ -172,6 +172,8 @@ GameScene playGame(SDL_Window* window, SDL_Renderer* renderer, const std::string
     SDL_Event e;
     GameScene nextScene = GameScene::Select;
 
+    int32_t prevMusicTime = 0;
+
     while(running){
 
         uint32_t globalTime = SDL_GetTicks();
@@ -254,6 +256,41 @@ GameScene playGame(SDL_Window* window, SDL_Renderer* renderer, const std::string
             .laneActive = laneActive
             };
 
+        if(isAutoplay){
+            for(int i = 0; i < 6; i++) ctx.currentPressed[i] = false;
+
+            for(const auto& note : ctx.notes){
+                if(note.lane < 0 || note.lane >= 6) continue;
+
+                if(note.type == NoteType::Long && note.isHolding){
+                    ctx.currentPressed[note.lane] = true;
+                    continue;
+                }
+
+                if(note.isHit) continue;
+
+                if(note.type == NoteType::Drag){
+                    if(ctx.musicTime >= note.targetTime && ctx.musicTime <= note.targetTime + 60){
+                        ctx.currentPressed[note.lane] = true;
+                    }
+                }
+                else{
+                    if(prevMusicTime < note.targetTime && ctx.musicTime >= note.targetTime){
+                        ctx.currentPressed[note.lane] = true;
+                    }
+                }
+            }
+        }
+
+        for(int i = 0; i < 6; i++){
+            if(ctx.currentPressed[i] && !ctx.prevPressed[i]){
+                KeyBeam beam;
+                beam.lane = i;
+                beam.spawnTime = ctx.musicTime;
+                ctx.keyBeams.push_back(beam);
+            }
+        }
+
         //ノーツの判定処理 noteJudge.h    
         NoteJudge(ctx, tex, sq);
 
@@ -281,6 +318,8 @@ GameScene playGame(SDL_Window* window, SDL_Renderer* renderer, const std::string
 
         //ノーツの描画・アニメーション処理
         renderGamePlayScreen(ctx, tex, sq, currentNoteSpeed, laneX);
+
+        prevMusicTime = ctx.musicTime;
     }
 
     outResult.score = scoreTracker.getScore();

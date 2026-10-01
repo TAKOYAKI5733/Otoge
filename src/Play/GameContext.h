@@ -23,11 +23,12 @@ struct GameContext{
     ScorePopEffect& scorePop;
     ComboPopEffect& comboPop;
 
-    const bool* currentPressed;
+    bool* currentPressed;
     bool* prevPressed;
     JudgeEffect* laneJudge;
     std::vector<Note>& notes;
     std::vector<Effect>& effects;
+    std::vector<KeyBeam> keyBeams;
     
     Mix_Chunk* tap_sound;
 

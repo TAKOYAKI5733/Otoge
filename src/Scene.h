@@ -34,8 +34,8 @@ struct PlayerSettings{
 void loadPlayerSettings(PlayerSettings& settings);
 void savePlayerSettings(const PlayerSettings& settings);
 
-GameScene playGame(SDL_Window* window, SDL_Renderer* renderer, const std::string& selectedScorePath, int selectedDifficulty, ResultData& outResult, PlayerSettings& playerSettings, SDL_Texture* targetTex = nullptr);
-GameScene selectSongScene(SDL_Window* window, SDL_Renderer* renderer, std::string& selectedScorePath, int& selectedDifficulty, PlayerSettings& playerSettings,SDL_Texture* targetTex = nullptr);
+GameScene playGame(SDL_Window* window, SDL_Renderer* renderer, const std::string& selectedScorePath, int selectedDifficulty, ResultData& outResult, PlayerSettings& playerSettings, bool isAutoplay ,SDL_Texture* targetTex = nullptr);
+GameScene selectSongScene(SDL_Window* window, SDL_Renderer* renderer, std::string& selectedScorePath, int& selectedDifficulty, PlayerSettings& playerSettings, bool& outAutoplay, SDL_Texture* targetTex = nullptr);
 GameScene loadScene(SDL_Window* window, SDL_Renderer* renderer, std::string& selectedScorePath, SDL_Texture* targetTex = nullptr);
 GameScene chartCreateScene(SDL_Window* window, SDL_Renderer* renderer, std::string& scorePath, SDL_Texture* targetTex = nullptr);
 GameScene resultScene(SDL_Window* window, SDL_Renderer* renderer, const ResultData& result, SDL_Texture* targettex = nullptr);

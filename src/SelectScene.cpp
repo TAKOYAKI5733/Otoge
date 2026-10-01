@@ -48,7 +48,7 @@ SongInfo parseScoreFile(const std::filesystem::path& filePath);
 
 
 //メイン関数
-GameScene selectSongScene(SDL_Window* window, SDL_Renderer* renderer, std::string& outSelectedScorePath, int& outSelectedDifficulty, PlayerSettings& playerSettings, SDL_Texture* targetTex){
+GameScene selectSongScene(SDL_Window* window, SDL_Renderer* renderer, std::string& outSelectedScorePath, int& outSelectedDifficulty, PlayerSettings& playerSettings, bool& outAutoplay, SDL_Texture* targetTex){
     std::vector<GenreInfo> categories = scanScoreFolder("scores");
     if(categories.empty()){
         std::cout << "[エラー]曲がねぇ\n";
@@ -213,11 +213,15 @@ GameScene selectSongScene(SDL_Window* window, SDL_Renderer* renderer, std::strin
                             if(categories[genreCursor].songList[songCursor].difficulties.empty()){
                                 outSelectedScorePath = categories[genreCursor].songList[songCursor].scorePath;
                                 outSelectedDifficulty = 0;
+                                outAutoplay = false;
                                 nextScene = GameScene::Load;
                                 running = false;
                             }
                         }
                         else{
+                            SDL_Keymod mod = SDL_GetModState();
+                            outAutoplay = (mod & KMOD_CTRL) != 0;
+
                             outSelectedScorePath = categories[genreCursor].songList[songCursor].scorePath;
                             outSelectedDifficulty = difficultyCursor;
                             nextScene = GameScene::Load;

@@ -3,12 +3,23 @@
   "composer": "Unknown",
   "difficulties": [
     {
-      "bpm": 120.0,
+      "bpm": 140.17635794269552,
       "bpmEvents": [],
       "chartCreator": "Unknown",
       "level": "0",
-      "name": "EAZY",
-      "notes": [],
+      "name": "MASTER",
+      "notes": [
+        {
+          "lane": 2,
+          "time": 1712,
+          "type": 0
+        },
+        {
+          "lane": 3,
+          "time": 1712,
+          "type": 0
+        }
+      ],
       "speedEvents": []
     }
   ],

@@ -6,8 +6,8 @@
       "bpm": 190.0,
       "bpmEvents": [],
       "chartCreator": "TKYK.env",
-      "level": "13",
-      "name": "MASTER",
+      "level": "11",
+      "name": "MASTER(6LINE)",
       "notes": [
         {
           "duration": 526,
@@ -1152,7 +1152,7 @@
         },
         {
           "lane": 4,
-          "time": 28315,
+          "time": 28316,
           "type": 0
         },
         {
@@ -5403,5 +5403,5 @@
       ]
     }
   ],
-  "offset": 20.0
+  "offset": 40.0
 }
