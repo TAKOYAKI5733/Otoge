@@ -8,9 +8,30 @@
       "chartCreator": "Unknown",
       "level": "0",
       "name": "MASTER",
-      "notes": [],
+      "notes": [
+        {
+          "lane": 4,
+          "time": 283,
+          "type": 0
+        },
+        {
+          "lane": 2,
+          "time": 425,
+          "type": 0
+        },
+        {
+          "lane": 3,
+          "time": 566,
+          "type": 0
+        },
+        {
+          "lane": 1,
+          "time": 708,
+          "type": 0
+        }
+      ],
       "speedEvents": []
     }
   ],
-  "offset": 0.0
+  "offset": 140.0
 }

@@ -1,6 +1,6 @@
 {
   "bgm": "初音ミク『個々々々々々人』.mp3",
-  "composer": "Unknown",
+  "composer": "Sohbana",
   "difficulties": [
     {
       "bpm": 144.0,
@@ -27,7 +27,7 @@
         }
       ],
       "chartCreator": "TKYK.env",
-      "level": "14",
+      "level": "15",
       "name": "MASTER【4LINE】",
       "notes": [
         {
