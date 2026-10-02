@@ -143,28 +143,19 @@ inline void renderGamePlayScreen(GameContext& ctx, Tex& tex, Sq& sq, double curr
         SDL_RenderFillRect(ctx.renderer, &fxRect);
     }
 
-    /*
     {
-        constexpr int32_t KEY_BEAM_DURATION_MS = 1200;
-        constexpr int beamHeight = 500;
-        constexpr int stripCount = 40;
-        constexpr int baseAlpha = 255;
+        const int32_t beamDurationMs = 600;
+        const int beamHeight = 500;
+        const int stripCount = 40;
+        const int baseAlpha = 200;
 
         for(const auto& beam : ctx.keyBeams){
             if(beam.lane < 0 || beam.lane >= 6) continue;
 
-            int32_t elapsed = ctx.musicTime - beam.spawnTime;
+            double timeProggress = static_cast<double>(ctx.musicTime - beam.spawnTime) / beamDurationMs;
+            if(timeProggress >= 1.0) continue;
 
-            // 発生前、または寿命終了後
-            if(elapsed < 0 || elapsed >= KEY_BEAM_DURATION_MS){
-                continue;
-            }
-
-            double timeProgress =
-                static_cast<double>(elapsed)
-                / KEY_BEAM_DURATION_MS;
-
-            double timeFade = 1.0 - timeProgress;
+            double timeFade = 1.0 - easeOutCubic(timeProggress);
 
             int bx = laneX[beam.lane];
             int bw = ctx.laneWidth;
@@ -207,7 +198,6 @@ inline void renderGamePlayScreen(GameContext& ctx, Tex& tex, Sq& sq, double curr
             }
         }
     }
-    */
 
     for(int i = 0; i < 6; i++){
         if(ctx.laneJudge[i].texture != nullptr){
@@ -232,7 +222,7 @@ inline void erase_some(GameContext& ctx){
     });
 
     std::erase_if(ctx.keyBeams, [&ctx](const KeyBeam& beam){
-            return (ctx.musicTime - beam.spawnTime) >= 300;
+            return (ctx.musicTime - beam.spawnTime) >= 600;
         });
 
     std::erase_if(ctx.notes, [&ctx](const Note& note){

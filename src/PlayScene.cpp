@@ -10,6 +10,7 @@ GameScene playGame(SDL_Window* window, SDL_Renderer* renderer, const std::string
 
     //変数定義
     std::vector<Effect> effects;
+    std::vector<KeyBeam> keyBeams;
     JudgeEffect laneJudge[6] = {};
     std::vector<Note> notes;
     std::string bgmName;
@@ -247,6 +248,7 @@ GameScene playGame(SDL_Window* window, SDL_Renderer* renderer, const std::string
             .laneJudge = laneJudge,
             .notes = notes,
             .effects = effects,
+            .keyBeams = keyBeams,
             .tap_sound = tap_sound,
             .comboCount = comboCount,
             .startX = startX,

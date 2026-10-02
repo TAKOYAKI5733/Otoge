@@ -28,7 +28,7 @@ struct GameContext{
     JudgeEffect* laneJudge;
     std::vector<Note>& notes;
     std::vector<Effect>& effects;
-    std::vector<KeyBeam> keyBeams;
+    std::vector<KeyBeam>& keyBeams;
     
     Mix_Chunk* tap_sound;
 

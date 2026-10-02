@@ -28,3 +28,9 @@ Note:このゲームを上手くなりたいなら... もっとやれ!!!
 Note:【TKYK.env】 このゲームの製作者。享年は2026年10月31日
 Note:while(true) printf("HA★HA\n");
 Note:rand関数の素晴らしさをこの身をもって感じろ!
+Note:MASTERが一番難しい難易度だけどたまに特殊な難易度があったりするよ
+Note:MASTERの譜面が一番凝ってるから是非挑戦してみてね！
+Note:難しくてできないだって？そんなときは難易度選択のときに[Ctrl]キーを押しながらはじめよう！
+Note:Calling Simple.notes...   Success...
+Note:同時押しが難しかったら一度全部のキーを押してみよう！
+Note:このゲームは全部C++でできているよ Unityとか使いてぇ...
