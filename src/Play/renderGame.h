@@ -147,7 +147,7 @@ inline void renderGamePlayScreen(GameContext& ctx, Tex& tex, Sq& sq, double curr
         const int32_t beamDurationMs = 600;
         const int beamHeight = 500;
         const int stripCount = 40;
-        const int baseAlpha = 200;
+        const int baseAlpha = 150;
 
         for(const auto& beam : ctx.keyBeams){
             if(beam.lane < 0 || beam.lane >= 6) continue;
