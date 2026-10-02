@@ -1,0 +1,22 @@
+{
+  "bgm": "孤独のあかつき.mp3",
+  "composer": "椎名林檎",
+  "difficulties": [
+    {
+      "bpm": 169.0148949092559,
+      "bpmEvents": [],
+      "chartCreator": "Unknown",
+      "level": "0",
+      "name": "EAZY",
+      "notes": [
+        {
+          "lane": 4,
+          "time": 1420,
+          "type": 0
+        }
+      ],
+      "speedEvents": []
+    }
+  ],
+  "offset": 0.0
+}

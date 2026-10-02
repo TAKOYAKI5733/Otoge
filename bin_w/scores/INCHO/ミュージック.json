@@ -1,0 +1,32 @@
+{
+  "bgm": "ミュージック.mp3",
+  "composer": "サカナクション",
+  "difficulties": [
+    {
+      "bpm": 136.01138835082037,
+      "bpmEvents": [],
+      "chartCreator": "Unknown",
+      "level": "0",
+      "name": "EAZY",
+      "notes": [
+        {
+          "lane": 1,
+          "time": 18528,
+          "type": 0
+        },
+        {
+          "lane": 4,
+          "time": 1875,
+          "type": 0
+        },
+        {
+          "lane": 1,
+          "time": 1875,
+          "type": 0
+        }
+      ],
+      "speedEvents": []
+    }
+  ],
+  "offset": 189.0
+}

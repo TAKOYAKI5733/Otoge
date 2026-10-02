@@ -1,0 +1,27 @@
+{
+  "bgm": "【BOFXVII】Sobrem × Silentroom - Random.mp3",
+  "composer": "Sobrem / Silentroom",
+  "difficulties": [
+    {
+      "bpm": 131.99896696730184,
+      "bpmEvents": [],
+      "chartCreator": "Unknown",
+      "level": "0",
+      "name": "EAZY",
+      "notes": [
+        {
+          "lane": 4,
+          "time": 455,
+          "type": 0
+        },
+        {
+          "lane": 3,
+          "time": 909,
+          "type": 0
+        }
+      ],
+      "speedEvents": []
+    }
+  ],
+  "offset": 7.0
+}

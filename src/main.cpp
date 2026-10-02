@@ -3,6 +3,13 @@
 #define SCREEN_W 1920
 #define SCREEN_H 1080
 
+#if defined(_WIN32)
+#define WIN32_LEAN_AND_MEAN
+#define NOMINMAX
+#include <windows.h>
+#include <timeapi.h>
+#endif
+
 void renderTransition(SDL_Renderer* renderer, SDL_Texture* prev, SDL_Texture* nex, double progress);
 
 // 🌟 修正: Windows環境では、C言語で書かれたlibSDL2mainライブラリが
@@ -10,19 +17,20 @@ void renderTransition(SDL_Renderer* renderer, SDL_Texture* prev, SDL_Texture* ne
 //          extern "C" で関数名をそのまま公開する。
 //          Linux等それ以外の環境では、従来通り通常のmain()のままにする。
 #if defined(_WIN32)
-extern "C" int SDL_main(int argc, char* argv[])
+extern "C" int SDL_main(int argc, char* argv[]){
     (void)argc;
     (void)argv;
 #else
-#endif
-
-#if defined(_WIN32)
-#include <timeapi.h>
-#endif
-
 int main(){
+#endif
+
     #if defined(_WIN32)
         SDL_SetHint(SDL_HINT_WINDOWS_DPI_AWARENESS, "permonitorv2");
+    #endif
+
+    #if defined(_WIN32)
+        SDL_SetHint(SDL_HINT_WINDOWS_DPI_AWARENESS, "permonitorv2");
+        SDL_SetHint(SDL_HINT_RENDER_DRIVER, "opengl");   // ← 追加:D3D9のバッファリング遅延を回避
     #endif
 
     if(SDL_Init(SDL_INIT_VIDEO | SDL_INIT_AUDIO) < 0){

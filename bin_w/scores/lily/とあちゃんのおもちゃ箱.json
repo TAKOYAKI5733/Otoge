@@ -1,0 +1,22 @@
+{
+  "bgm": "linear ring - とあちゃんのおもちゃ箱 [CHUNITHM _ Official Audio].mp3",
+  "composer": "linear ring",
+  "difficulties": [
+    {
+      "bpm": 106.13779332145289,
+      "bpmEvents": [],
+      "chartCreator": "Unknown",
+      "level": "0",
+      "name": "EAZY",
+      "notes": [
+        {
+          "lane": 4,
+          "time": 2827,
+          "type": 0
+        }
+      ],
+      "speedEvents": []
+    }
+  ],
+  "offset": 0.0
+}

@@ -1,0 +1,52 @@
+{
+  "bgm": "DECO_27 - キメラ feat. 初音ミク.mp3",
+  "composer": "DECO*27",
+  "difficulties": [
+    {
+      "bpm": 120.0,
+      "bpmEvents": [],
+      "chartCreator": "Unknown",
+      "level": "0",
+      "name": "MASTER",
+      "notes": [],
+      "speedEvents": []
+    },
+    {
+      "bpm": 120.0,
+      "bpmEvents": [],
+      "chartCreator": "Unknown",
+      "level": "0",
+      "name": "HARD",
+      "notes": [],
+      "speedEvents": []
+    },
+    {
+      "bpm": 120.0,
+      "bpmEvents": [],
+      "chartCreator": "Unknown",
+      "level": "0",
+      "name": "NORMAL",
+      "notes": [],
+      "speedEvents": []
+    },
+    {
+      "bpm": 120.0,
+      "bpmEvents": [],
+      "chartCreator": "Unknown",
+      "level": "0",
+      "name": "EASY",
+      "notes": [],
+      "speedEvents": []
+    },
+    {
+      "bpm": 120.0,
+      "bpmEvents": [],
+      "chartCreator": "Unknown",
+      "level": "???",
+      "name": "繧ｭ繝｡繝ｩ",
+      "notes": [],
+      "speedEvents": []
+    }
+  ],
+  "offset": 0.0
+}
