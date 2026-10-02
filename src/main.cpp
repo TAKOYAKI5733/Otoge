@@ -34,8 +34,10 @@ int main(){
     }
     Mix_AllocateChannels(256);
 
-    SDL_Window* window = SDL_CreateWindow("Otoge test --- Scene_Manager",SDL_WINDOWPOS_UNDEFINED, SDL_WINDOWPOS_UNDEFINED, SCREEN_W, SCREEN_H, SDL_WINDOW_SHOWN);
+    SDL_Window* window = SDL_CreateWindow("Otoge test --- Scene_Manager",SDL_WINDOWPOS_UNDEFINED, SDL_WINDOWPOS_UNDEFINED, SCREEN_W, SCREEN_H, SDL_WINDOW_SHOWN | SDL_WINDOW_RESIZABLE);
     SDL_Renderer* renderer = SDL_CreateRenderer(window, -1, SDL_RENDERER_ACCELERATED);
+
+    SDL_RenderSetLogicalSize(renderer, SCREEN_W, SCREEN_H);
 
     GameScene currentScene = GameScene::Select;
     GameScene nextScene = currentScene;
