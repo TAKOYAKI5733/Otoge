@@ -133,7 +133,7 @@ inline void saveChart(const std::string& path, const ChartMeta& meta, const std:
     }
     j["difficulties"] = diffArr;
 
-    std::ofstream out(path);
+    std::ofstream out(toUtf8Path(path));
     if(out.is_open()){
         out << j.dump(2);
         printf("[譜面エディタ] 保存完了 : %s\n", path.c_str());
@@ -204,7 +204,7 @@ inline EditorDifficulty parseOneDifficulty(const json& src){
 }
 
 inline bool loadChartForEdit(const std::string & path, ChartMeta& meta, std::vector<EditorDifficulty>& difficulties){
-    std::ifstream file(path);
+    std::ifstream file(toUtf8Path(path));
     if(!file.is_open()) return false;
 
     json j;
@@ -1319,7 +1319,7 @@ GameScene chartCreateScene(SDL_Window* window, SDL_Renderer* renderer, std::stri
     ImGui_ImplSDLRenderer2_RenderDrawData(ImGui::GetDrawData(), renderer);
 
     SDL_RenderPresent(renderer);
-    SDL_Delay(16);
+    SDL_Delay(8);
 }
 
 if(bgm){

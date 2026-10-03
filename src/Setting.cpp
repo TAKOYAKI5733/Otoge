@@ -144,7 +144,7 @@ GameScene settingScene(SDL_Window* window, SDL_Renderer* renderer, PlayerSetting
         ImGui_ImplSDLRenderer2_RenderDrawData(ImGui::GetDrawData(), renderer);
 
         SDL_RenderPresent(renderer);
-        SDL_Delay(16);
+        SDL_Delay(8);
     }
 
     if(previewTap) Mix_FreeChunk(previewTap);

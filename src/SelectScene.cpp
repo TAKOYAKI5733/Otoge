@@ -271,7 +271,7 @@ GameScene selectSongScene(SDL_Window* window, SDL_Renderer* renderer, std::strin
         draw_DifficultyList(renderer, font, categories[genreCursor].songList[songCursor].difficulties, difficultyCursor, currentMode);
 
         SDL_RenderPresent(renderer);
-        SDL_Delay(16);
+        SDL_Delay(8);
     }
 
     if(bgm){
@@ -514,7 +514,8 @@ void draw_songDetail(SDL_Renderer* renderer, TTF_Font* font, const SongInfo& son
 
 SongInfo parseScoreFile(const std::filesystem::path& filePath){
     SongInfo song;
-    song.scorePath = filePath.string();
+    std::u8string u8 = filePath.u8string();
+    song.scorePath.assign(reinterpret_cast<const char*>(u8.data()), u8.size());
     song.title = filePath.stem().string();
 
     std::ifstream file(filePath);

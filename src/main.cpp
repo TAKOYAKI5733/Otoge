@@ -10,12 +10,21 @@ void renderTransition(SDL_Renderer* renderer, SDL_Texture* prev, SDL_Texture* ne
 //          extern "C" で関数名をそのまま公開する。
 //          Linux等それ以外の環境では、従来通り通常のmain()のままにする。
 #if defined(_WIN32)
-extern "C" int SDL_main(int argc, char* argv[]){
+extern "C" int SDL_main(int argc, char* argv[])
     (void)argc;
     (void)argv;
 #else
-int main(){
 #endif
+
+#if defined(_WIN32)
+#include <timeapi.h>
+#endif
+
+int main(){
+    #if defined(_WIN32)
+        SDL_SetHint(SDL_HINT_WINDOWS_DPI_AWARENESS, "permonitorv2");
+    #endif
+
     if(SDL_Init(SDL_INIT_VIDEO | SDL_INIT_AUDIO) < 0){
         std::cout << "SDL初期化失敗\n";
         return -1;
@@ -35,7 +44,7 @@ int main(){
     Mix_AllocateChannels(256);
 
     SDL_Window* window = SDL_CreateWindow("Otoge test --- Scene_Manager",SDL_WINDOWPOS_UNDEFINED, SDL_WINDOWPOS_UNDEFINED, SCREEN_W, SCREEN_H, SDL_WINDOW_SHOWN | SDL_WINDOW_RESIZABLE);
-    SDL_Renderer* renderer = SDL_CreateRenderer(window, -1, SDL_RENDERER_ACCELERATED);
+    SDL_Renderer* renderer = SDL_CreateRenderer(window, -1, SDL_RENDERER_ACCELERATED | SDL_RENDERER_PRESENTVSYNC);
 
     SDL_RenderSetLogicalSize(renderer, SCREEN_W, SCREEN_H);
 
@@ -51,6 +60,10 @@ int main(){
 
     SDL_Texture* prev = SDL_CreateTexture(renderer, SDL_PIXELFORMAT_BGRA8888, SDL_TEXTUREACCESS_TARGET, SCREEN_W, SCREEN_H);
     SDL_Texture* nex = SDL_CreateTexture(renderer, SDL_PIXELFORMAT_BGRA8888, SDL_TEXTUREACCESS_TARGET, SCREEN_W, SCREEN_H);
+
+    #if defined(_WIN32)
+        timeBeginPeriod(1);
+    #endif
 
     while(currentScene != GameScene::Shutdown){
         switch(currentScene){
@@ -87,7 +100,7 @@ int main(){
                         if(currentScene == GameScene::Shutdown) break;
 
                         renderTransition(renderer, prev, nex, progress);
-                        SDL_Delay(16);
+                        SDL_Delay(8);
                     }
                 }
 
@@ -100,8 +113,7 @@ int main(){
             }
 
             case GameScene::Play:{
-                playGame(window, renderer, selectedScore, selectedDifficulty, resultData, playerSettings, autoplay, nullptr);
-                currentScene = GameScene::Result;
+                currentScene = playGame(window, renderer, selectedScore, selectedDifficulty, resultData, playerSettings, autoplay, nullptr);
                 break;
             }
             
@@ -141,6 +153,10 @@ int main(){
     Mix_CloseAudio();
     TTF_Quit();
     SDL_Quit();
+
+    #if defined(_WIN32)
+        timeEndPeriod(1);
+    #endif
 
     std::cout << "ゲームの正常終了\n";
     return 0;

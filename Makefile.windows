@@ -1,6 +1,4 @@
 CXX      := g++
-# 🌟 修正: -Dmain=SDL_main を削除。pkg-config --cflags sdl2 が
-#          自動的にこの定義を含んでくれるため、二重定義を避ける
 CXXFLAGS := -std=c++20 -Wall -Wextra -MMD -MP
 
 SDL_CFLAGS    := $(shell pkg-config --cflags sdl2 SDL2_ttf SDL2_mixer)
@@ -8,8 +6,11 @@ SDL_LIBS      := $(shell pkg-config --libs sdl2 SDL2_ttf SDL2_mixer)
 SDL_MAIN_LIBS := -lmingw32 -lSDL2main
 
 SRC_DIR  := src
-OBJ_DIR  := obj
-BIN_DIR  := bin
+
+# 🌟 Windows専用ビルドはUbuntu用(obj/, bin/)と完全に分離する
+OBJ_DIR  := obj_w
+BIN_DIR  := bin_w
+DIST_DIR := dist/Otoge
 
 TARGET   := $(BIN_DIR)/otoge.exe
 
@@ -22,10 +23,9 @@ ASSET_DIRS := sounds scores fonts
 
 all: $(TARGET) copy_assets copy_dlls
 
-# 🌟 修正: リンク時に CXXFLAGS を使わない(-Dmain=SDL_main がリンクコマンドに混ざるのを防ぐ)
 $(TARGET): $(OBJS)
 	@mkdir -p $(BIN_DIR)
-	$(CXX) -std=c++20 $(SDL_MAIN_LIBS) $^ -o $@ $(SDL_LIBS) -mwindows
+	$(CXX) -std=c++20 $(SDL_MAIN_LIBS) $^ -o $@ $(SDL_LIBS) -lwinmm -mwindows
 
 copy_assets:
 	@mkdir -p $(BIN_DIR)
@@ -36,13 +36,18 @@ copy_assets:
 	        fi; \
 	    done
 
-copy_dlls:
+copy_dlls: $(TARGET)
 	@echo "Copying required DLLs to $(BIN_DIR)/..."
-	@for dll in SDL2 SDL2_ttf SDL2_mixer libgcc_s_seh-1 libstdc++-6 libwinpthread-1; do \
-	        if [ -f /ucrt64/bin/$$dll.dll ]; then \
-	            cp /ucrt64/bin/$$dll.dll $(BIN_DIR)/; \
-	        fi; \
+	@ldd $(TARGET) | grep -i '/ucrt64/bin/' | awk '{print $$3}' | while read dll; do \
+	        cp -u "$$dll" $(BIN_DIR)/; \
 	    done
+
+dist: all
+	@echo "Building clean distribution directory..."
+	@rm -rf $(DIST_DIR)
+	@mkdir -p $(DIST_DIR)
+	@cp -r $(BIN_DIR)/* $(DIST_DIR)/
+	@echo "Distribution ready at $(DIST_DIR)/"
 
 $(OBJ_DIR)/%.o: $(SRC_DIR)/%.cpp
 	@mkdir -p $(dir $@)
@@ -51,6 +56,9 @@ $(OBJ_DIR)/%.o: $(SRC_DIR)/%.cpp
 clean:
 	rm -rf $(OBJ_DIR) $(BIN_DIR)
 
+distclean: clean
+	rm -rf dist
+
 -include $(DEPS)
 
-.PHONY: all clean copy_assets copy_dlls
+.PHONY: all clean distclean copy_assets copy_dlls dist

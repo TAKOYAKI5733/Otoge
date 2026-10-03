@@ -20,3 +20,8 @@
 #define SCREEN_W 1920
 #define SCREEN_H 1080
 #define _USE_MATH_DEFINES
+
+inline std::filesystem::path toUtf8Path(const std::string& utf8str){
+    std::u8string u8(reinterpret_cast<const char8_t*>(utf8str.data()), utf8str.size());
+    return std::filesystem::path(u8);
+}

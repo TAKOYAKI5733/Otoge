@@ -1,0 +1,8 @@
+# Windows用ビルド(bin_w/ に出力、Ubuntu用bin/には一切触れない)
+make -f Makefile.windows
+
+# 配布用フォルダをまとめて作る
+make -f Makefile.windows dist
+
+# Windows用の成果物だけ掃除(Ubuntu用のbin/やobj/はそのまま残る)
+make -f Makefile.windows clean

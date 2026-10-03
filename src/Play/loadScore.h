@@ -19,7 +19,7 @@ struct DifficultyInfo{
 inline std::vector<DifficultyInfo> listDifficulties(const std::string& filename){
     std::vector<DifficultyInfo> result;
 
-    std::ifstream file(filename);
+    std::ifstream file(toUtf8Path(filename));
     if(!file.is_open()) return result;
 
     json j;
@@ -48,7 +48,7 @@ inline std::vector<DifficultyInfo> listDifficulties(const std::string& filename)
 }
 
 inline bool loadScore(const std::string& filename, std::string& bgmName, std::vector<Note>& notes, std::vector<SpeedEvent>& speedEvents, double bpm, double& offsetMs, int difficultyIndex){
-    std::ifstream file(filename);
+    std::ifstream file(toUtf8Path(filename));
     if(!file.is_open()){
         printf("譜面ファイル開かん!!\n");
         return false;

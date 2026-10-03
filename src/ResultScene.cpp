@@ -107,7 +107,7 @@ GameScene resultScene([[__attribute_maybe_unused__]]SDL_Window* window, SDL_Rend
 
         drawAll();
         SDL_RenderPresent(renderer);
-        SDL_Delay(16);
+        SDL_Delay(8);
     }
 
     TTF_CloseFont(fontLarge);
