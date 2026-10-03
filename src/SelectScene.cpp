@@ -271,7 +271,7 @@ GameScene selectSongScene(SDL_Window* window, SDL_Renderer* renderer, std::strin
         draw_DifficultyList(renderer, font, categories[genreCursor].songList[songCursor].difficulties, difficultyCursor, currentMode);
 
         SDL_RenderPresent(renderer);
-        SDL_Delay(8);
+        SDL_Delay(16);
     }
 
     if(bgm){

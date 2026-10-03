@@ -5834,16 +5834,16 @@
           "time": 65686
         },
         {
-          "duration": 0,
-          "easing": 1,
-          "target": 1000.0,
-          "time": 79105
-        },
-        {
           "duration": 1500,
           "easing": 1,
           "target": 2.3,
           "time": 76986
+        },
+        {
+          "duration": 0,
+          "easing": 1,
+          "target": 1000.0,
+          "time": 79105
         },
         {
           "duration": 0,
@@ -5861,7 +5861,7 @@
           "duration": 400,
           "easing": 2,
           "target": 1.2,
-          "time": 122065
+          "time": 122154
         }
       ]
     }

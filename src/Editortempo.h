@@ -166,3 +166,11 @@ inline int32_t tempoStepMs(const TempoMap& m, int32_t fromMs, double gridBeats, 
 inline int32_t remapTime(const TempoMap& from, const TempoMap& to, int32_t t){
     return static_cast<int32_t>(std::lround(tempoTimeAt(to, tempoBeatAt(from, static_cast<double>(t)))));
 }
+
+inline bool tempoBreakpointsSameTimes(const TempoMap& a, const TempoMap& b){
+    if(a.pts.size() != b.pts.size()) return false;
+    for(size_t i = 0; i < a.pts.size(); i++){
+        if(a.pts[i].timeMs != b.pts[i].timeMs) return false;
+    }
+    return true;
+}

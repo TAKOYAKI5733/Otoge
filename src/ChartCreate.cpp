@@ -11,7 +11,6 @@ using json = nlohmann::json;
 
 #define SCREEN_W 1920
 #define SCREEN_H 1080
-
 struct EditorPathKeyfrane{
     int32_t time = 0;
     double y = 0.0;
@@ -329,6 +328,7 @@ GameScene chartCreateScene(SDL_Window* window, SDL_Renderer* renderer, std::stri
     bool isPlaying = false;
     int32_t scrollTimeMs = 0;
     uint32_t lastFrameticks = SDL_GetTicks();
+    uint32_t lastDriftCheckTicks = 0;
 
     int editorAudioLatencyMs = 40;
     int32_t pendingAudioLatencyMs = 0;
@@ -431,7 +431,7 @@ GameScene chartCreateScene(SDL_Window* window, SDL_Renderer* renderer, std::stri
     int selectedNoteIndex = -1;
     bool moveNotesOnBpmChange = true;
 
-    enum class DragMode{ None, MoveNote, ResizeTail, MoveSpeedEvent, MoveBpmEvent };
+    enum class DragMode{ None, MoveNote, ResizeTail, MoveSpeedEvent, MoveBpmEvent, ResizeSpeedDuration };
     DragMode dragMode = DragMode::None;
     int dragNoteIndex = -1;
     int dragEventIndex = -1;
@@ -464,6 +464,23 @@ GameScene chartCreateScene(SDL_Window* window, SDL_Renderer* renderer, std::stri
             }
             else{
                 scrollTimeMs += static_cast<int32_t>(frameDeltaMs);
+            }
+        }
+
+        if(isPlaying && bgm && pendingAudioLatencyMs == 0 &&
+        Mix_PlayingMusic() && Mix_PausedMusic() == 0 &&
+        (nowTicks - lastDriftCheckTicks) >= 200){
+            lastDriftCheckTicks = nowTicks;
+
+            double actualAudioMs = Mix_GetMusicPosition(bgm) * 1000.0;
+            if(actualAudioMs >= 0.0){
+                // seekMusicIfNeededの「音声位置 = chartTime - offset」という関係式の逆算
+                double predictedAudioMs = static_cast<double>(scrollTimeMs) + meta.offsetMs;
+                double drift = actualAudioMs - predictedAudioMs;
+
+                if(std::abs(drift) > 5.0){
+                    scrollTimeMs += static_cast<int32_t>(drift * 0.2);
+                }
             }
         }
 
@@ -531,24 +548,29 @@ GameScene chartCreateScene(SDL_Window* window, SDL_Renderer* renderer, std::stri
                 if(e.button.button == SDL_BUTTON_LEFT){
                     const int LINE_HIT_PX = 10;
 
+                    SDL_Keymod mod = SDL_GetModState();
+                    bool ctrlHeld = (mod & KMOD_CTRL) != 0;
+
                     auto& speedEvents = currentDiff().speedEvents;
-                    for(size_t si = 0; si < speedEvents.size(); si++){
-                        int ly = judgeY - static_cast<int>((speedEvents[si].time - scrollTimeMs) * effectivePixelsPerMs);
-                        if(std::abs(my - ly) <= LINE_HIT_PX){
-                            dragMode = DragMode::MoveSpeedEvent;
-                            dragEventIndex = static_cast<int>(si);
-                            grabbedEventLine = true;
-                            break;
+
+                    if(ctrlHeld){
+                        for(size_t si = 0; si < speedEvents.size(); si++){
+                            int ey = judgeY - static_cast<int>((speedEvents[si].time + speedEvents[si].duration - scrollTimeMs) * effectivePixelsPerMs);
+                            if(std::abs(my - ey) <= LINE_HIT_PX){
+                                dragMode = DragMode::ResizeSpeedDuration;
+                                dragEventIndex = static_cast<int>(si);
+                                grabbedEventLine = true;
+                                break;
+                            }
                         }
                     }
 
                     if(!grabbedEventLine){
-                        auto& bpmEvents = currentDiff().bpmEvents;
-                        for(size_t bi = 0; bi < bpmEvents.size(); bi++){
-                            int ly = judgeY - static_cast<int>((bpmEvents[bi].time - scrollTimeMs) * effectivePixelsPerMs);
+                        for(size_t si = 0; si < speedEvents.size(); si++){
+                            int ly = judgeY - static_cast<int>((speedEvents[si].time - scrollTimeMs) * effectivePixelsPerMs);
                             if(std::abs(my - ly) <= LINE_HIT_PX){
-                                dragMode = DragMode::MoveBpmEvent;
-                                dragEventIndex = static_cast<int>(bi);
+                                dragMode = DragMode::MoveSpeedEvent;
+                                dragEventIndex = static_cast<int>(si);
                                 grabbedEventLine = true;
                                 break;
                             }
@@ -688,6 +710,15 @@ GameScene chartCreateScene(SDL_Window* window, SDL_Renderer* renderer, std::stri
                     auto& bpmEvents = currentDiff().bpmEvents;
                     if(dragEventIndex >= 0 && dragEventIndex < static_cast<int>(bpmEvents.size())){
                         bpmEvents[dragEventIndex].time = snappedTime;
+                    }
+                }
+                else if(dragMode == DragMode::ResizeSpeedDuration){
+                    auto& speedEvents = currentDiff().speedEvents;
+                    if(dragEventIndex >= 0 && dragEventIndex < static_cast<int>(speedEvents.size())){
+                        auto& ev = speedEvents[dragEventIndex];
+                        int32_t newDuration = snappedTime - ev.time;
+                        int32_t minDuration = static_cast<int32_t>(std::max(1.0, gridMs));   // 最低1グリッド分は確保
+                        ev.duration = std::max(minDuration, newDuration);
                     }
                 }
             }
@@ -1167,14 +1198,16 @@ GameScene chartCreateScene(SDL_Window* window, SDL_Renderer* renderer, std::stri
             const TempoMap nowMap = currentTempoMap();
 
             if(!d.tempoAligned){
-                d.alignedMap = nowMap;          // 初回・LOAD直後・難易度追加直後は動かさない
+                d.alignedMap = nowMap;
                 d.tempoAligned = true;
             }
             else if(!tempoEqual(d.alignedMap, nowMap)){
-                // 入力中やドラッグ中は待ち、確定してから1回だけ動かす
                 const bool stillEditing = ImGui::IsAnyItemActive() || dragMode != DragMode::None;
                 if(!stillEditing){
                     if(moveNotesOnBpmChange){
+                        // 🌟 追加: BPMイベントの「時刻」自体が変わったかどうかで方針を分ける
+                        const bool timesUnchanged = tempoBreakpointsSameTimes(d.alignedMap, nowMap);
+
                         for(auto& n : d.notes){
                             const int32_t newStart = remapTime(d.alignedMap, nowMap, n.time);
                             if(n.duration > 0){
@@ -1184,9 +1217,31 @@ GameScene chartCreateScene(SDL_Window* window, SDL_Renderer* renderer, std::stri
                             for(auto& k : n.path) k.time = remapTime(d.alignedMap, nowMap, k.time);
                             n.time = newStart;
                         }
+
+                        // 🌟 追加: SpeedEventもノーツと同じように拍位置を保って追従させる
+                        for(auto& s : d.speedEvents){
+                            s.time = remapTime(d.alignedMap, nowMap, s.time);
+                        }
+
+                        // 🌟 追加: BPMイベント自身の時刻は、「値だけが変わった」場合に限って追従させる。
+                        //          時刻そのものが変わった(ドラッグ・直接入力)場合は、
+                        //          その新しい時刻がユーザーの意図した位置そのものなので触らない。
+                        if(timesUnchanged){
+                            for(auto& b : d.bpmEvents){
+                                b.time = remapTime(d.alignedMap, nowMap, b.time);
+                            }
+                        }
                     }
-                    d.alignedMap = nowMap;
+
+                    // 🌟 修正: nowMap(変更前のBPMイベント配置を元にした参照用の表)ではなく、
+                    //          実際に書き換えた後の現在のデータから作り直す。
+                    //          これを怠ると、次のフレームで「まだズレている」と誤検出され、
+                    //          意図せず再度動いてしまう。
+                    d.alignedMap = currentTempoMap();
                 }
+            }
+            else{
+                d.alignedMap = nowMap;
             }
         }
 
@@ -1279,7 +1334,22 @@ GameScene chartCreateScene(SDL_Window* window, SDL_Renderer* renderer, std::stri
     // SpeedEvent: 左側にラベル、線は黄色系
     for(const auto& s : currentDiff().speedEvents){
         int ly = judgeY - static_cast<int>((s.time - scrollTimeMs) * effectivePixelsPerMs);
-        if(ly < -20 || ly > SCREEN_H + 20) continue;
+        int ey = judgeY - static_cast<int>((s.time + s.duration - scrollTimeMs) * effectivePixelsPerMs);
+
+        // 🌟 追加: 適用時間を薄い黄色の帯で表現する(画面内に一部でも重なっていれば描画)
+        if(!(ly < -20 && ey < -20) && !(ly > SCREEN_H + 20 && ey > SCREEN_H + 20)){
+            int yTop = std::min(ly, ey);
+            int yBottom = std::max(ly, ey);
+            SDL_SetRenderDrawColor(renderer, 255, 240, 150, 50);
+            SDL_Rect bandRect = {0, yTop, SCREEN_W, yBottom - yTop};
+            SDL_RenderFillRect(renderer, &bandRect);
+
+            // 🌟 追加: 終端にも薄い線を引き、Ctrl+ドラッグで掴める位置を視覚的に示す
+            SDL_SetRenderDrawColor(renderer, 255, 220, 80, 100);
+            SDL_RenderDrawLine(renderer, 0, ey, SCREEN_W, ey);
+        }
+
+        if(ly < -20 || ly > SCREEN_H + 20) continue;   // 従来通り: 開始線自体が画面外ならラベル等はスキップ
 
         SDL_SetRenderDrawColor(renderer, 255, 220, 80, 200);
         SDL_RenderDrawLine(renderer, 0, ly, SCREEN_W, ly);
@@ -1319,7 +1389,6 @@ GameScene chartCreateScene(SDL_Window* window, SDL_Renderer* renderer, std::stri
     ImGui_ImplSDLRenderer2_RenderDrawData(ImGui::GetDrawData(), renderer);
 
     SDL_RenderPresent(renderer);
-    SDL_Delay(8);
 }
 
 if(bgm){

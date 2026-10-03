@@ -108,7 +108,7 @@ int main(){
                         if(currentScene == GameScene::Shutdown) break;
 
                         renderTransition(renderer, prev, nex, progress);
-                        SDL_Delay(8);
+                        SDL_Delay(16);
                     }
                 }
 

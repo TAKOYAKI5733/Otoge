@@ -183,7 +183,7 @@ GameScene loadScene([[__attribute_maybe_unused__]]SDL_Window* window, SDL_Render
             SDL_RenderDrawRect(renderer, &sqRect);
         }
         SDL_RenderPresent(renderer);
-        SDL_Delay(8);
+        SDL_Delay(16);
     }
 
     SDL_DestroyTexture(tex);
