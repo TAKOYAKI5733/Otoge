@@ -1,8 +1,9 @@
 CXX      := g++
 CXXFLAGS := -std=c++20 -Wall -Wextra -MMD -MP
 
-SDL_CFLAGS    := $(shell pkg-config --cflags sdl2 SDL2_ttf SDL2_mixer)
-SDL_LIBS      := $(shell pkg-config --libs sdl2 SDL2_ttf SDL2_mixer)
+# SDL2_image を追加(GameCommon.h が SDL2/SDL_image.h を include しているため)
+SDL_CFLAGS    := $(shell pkg-config --cflags sdl2 SDL2_image SDL2_ttf SDL2_mixer)
+SDL_LIBS      := $(shell pkg-config --libs sdl2 SDL2_image SDL2_ttf SDL2_mixer)
 SDL_MAIN_LIBS := -lmingw32 -lSDL2main
 
 SRC_DIR  := src
