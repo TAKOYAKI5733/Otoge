@@ -224,6 +224,9 @@ GameScene playGame(SDL_Window* window, SDL_Renderer* renderer, const std::string
     Uint64 profPrevEnd = SDL_GetPerformanceCounter();
     #endif
 
+    SpectrumVisualizer visualizer;
+    visualizer.attach();
+
     //描画処理
     bool running = true;
     SDL_Event e;
@@ -339,9 +342,10 @@ GameScene playGame(SDL_Window* window, SDL_Renderer* renderer, const std::string
             .noteTextureDrag = noteTextureDrag,
             .noteTextureLane = noteTextureLane,
             .musicTimeExact = musicTimeExact,    // GameContext.h の最後に追加したメンバ
-            .digitFont = &digitFont
+            .digitFont = &digitFont,
+            .tutorial = tutorial,
+            .visualizer = &visualizer
             };
-            ctx.tutorial = tutorial;
 
         if(isAutoplay){
             for(int i = 0; i < 6; i++) ctx.currentPressed[i] = false;
@@ -401,6 +405,8 @@ GameScene playGame(SDL_Window* window, SDL_Renderer* renderer, const std::string
             }
         }
 
+        visualizer.update();
+
         SDL_SetRenderDrawColor(ctx.renderer, 155, 155, 155, 255);
         SDL_RenderClear(ctx.renderer);
 
@@ -447,6 +453,8 @@ GameScene playGame(SDL_Window* window, SDL_Renderer* renderer, const std::string
     outResult.goodCount = scoreTracker.getGoodCount();
     outResult.badCount = scoreTracker.getBadCount();
     outResult.missCount = scoreTracker.getMissCount();
+
+    visualizer.detach();
 
     Mix_HaltMusic();
     digitFont.destroy();

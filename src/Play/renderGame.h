@@ -5,6 +5,7 @@
 #include "Play/GameContext.h"
 #include "Play/roundedRect.h"
 #include "Play/tutorialOverlay.h"
+#include "Play/visualizer.h"
 
 inline double evaluatNotePathY(const Note& note, double musicTime){
     const auto& path = note.path;
@@ -33,6 +34,7 @@ inline double evaluatNotePathY(const Note& note, double musicTime){
 inline void renderGamePlayScreen(GameContext& ctx, Tex& tex, Sq& sq, double currentNoteSpeed, int laneX[6]){
     GradientBackground(ctx.renderer, SCREEN_W, SCREEN_H, ctx.musicTime);
     draw_waku_init(ctx.renderer, tex, sq, ctx.laneActive);
+    if(ctx.visualizer) ctx.visualizer->render(ctx.renderer);
 
     SDL_SetRenderDrawBlendMode(ctx.renderer, SDL_BLENDMODE_BLEND);
 

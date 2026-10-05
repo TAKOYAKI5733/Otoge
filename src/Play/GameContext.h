@@ -5,6 +5,7 @@
 #include "Play/scoreTracker.h"
 #include "Play/DigitRenderer.h"
 
+struct SpectrumVisualizer;
 struct GameContext{
     SDL_Renderer* renderer;
     TTF_Font* font;
@@ -55,4 +56,6 @@ struct GameContext{
     double comboScale = 1.0;
 
     TutorialOverlay* tutorial = nullptr;
+
+    SpectrumVisualizer* visualizer = nullptr;
 };
