@@ -1,5 +1,7 @@
 {
-  "bgmVolume": 50,
+  "bgmVolume": 25,
+  "fpsCap": 0,
   "offsetMs": 0.0,
-  "seVolume": 100
+  "seVolume": 50,
+  "vsync": true
 }

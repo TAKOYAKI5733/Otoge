@@ -3,6 +3,8 @@
 
 #include "GameCommon.h"
 
+class TutorialOverlay;
+
 enum class GameScene{
     Title,
     Select,
@@ -11,7 +13,8 @@ enum class GameScene{
     Shutdown,
     Setting,
     Load,
-    ChartCreate
+    ChartCreate,
+    Tutorial
 };
 
 struct ResultData{
@@ -29,12 +32,14 @@ struct PlayerSettings{
     double offsetMs = 0.0;
     int bgmVolume = 70;
     int seVolume = 100;
+    bool vsync = true;
+    int fpsCap = 0;
 };
 
 void loadPlayerSettings(PlayerSettings& settings);
 void savePlayerSettings(const PlayerSettings& settings);
 
-GameScene playGame(SDL_Window* window, SDL_Renderer* renderer, const std::string& selectedScorePath, int selectedDifficulty, ResultData& outResult, PlayerSettings& playerSettings, bool isAutoplay ,SDL_Texture* targetTex = nullptr);
+GameScene playGame(SDL_Window* window, SDL_Renderer* renderer, const std::string& selectedScorePath, int selectedDifficulty, ResultData& outResult, PlayerSettings& playerSettings, bool isAutoplay ,SDL_Texture* targetTex = nullptr, TutorialOverlay* tutorial = nullptr);
 GameScene selectSongScene(SDL_Window* window, SDL_Renderer* renderer, std::string& selectedScorePath, int& selectedDifficulty, PlayerSettings& playerSettings, bool& outAutoplay, SDL_Texture* targetTex = nullptr);
 GameScene loadScene(SDL_Window* window, SDL_Renderer* renderer, std::string& selectedScorePath, SDL_Texture* targetTex = nullptr);
 GameScene chartCreateScene(SDL_Window* window, SDL_Renderer* renderer, std::string& scorePath, SDL_Texture* targetTex = nullptr);

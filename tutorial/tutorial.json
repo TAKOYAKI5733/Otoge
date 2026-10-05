@@ -1,0 +1,68 @@
+{
+  "chart": "tutorial/tutorial_chart.json",
+  "difficulty": 0,
+  "font": "fonts/prac.ttf",
+  "laneWidth": 120,
+  "items": [
+    { "type": "text", "start": 0, "end": 2600, "text": "Simple.notesにようこそ！", "x": 960, "y": 380, "size": 84, "anim": "pop", "in": 500, "out": 500, "wrap": 1200, "panel": false },
+
+    { "type": "text", "start": 2600, "end": 5200, "text": "これからこのゲームの遊び方を教えるよ！", "x": 960, "y": 380, "size": 36, "anim": "slideUp", "in": 500, "out": 500, "wrap": 1200, "panel": false },
+    { "type": "text", "start": 5200, "end": 9000, "text": "このゲームは基礎的に[E][R][U][I]を、", "x": 860, "y": 380, "size": 42, "anim": "slideUp", "in": 500, "out": 500, "wrap": 1200, "panel": false },
+    { "type": "text", "start": 5400, "end": 9000, "text": "難しい曲は[W][O]のキーを使うよ！", "x": 960, "y": 480, "size": 42, "anim": "slideUp", "in": 500, "out": 500, "wrap": 1200, "panel": false },
+
+    { "type": "text", "start": 9000, "end": 12000, "text": "次にノーツのことを教えるよ！", "x": 960, "y": 380, "size": 64, "anim": "pop", "in": 500, "out": 500, "wrap": 1200, "panel": false },
+
+    { "type": "text", "start": 12000, "end": 30923, "text": "① 通常ノーツ", "x": 300, "y": 230, "size": 44, "color": [255, 215, 0], "anim": "slideUp", "wrap": 480 },
+    { "type": "text", "start": 12200, "end": 30923, "text": "白いノーツが判定ラインに\n重なる瞬間に、そのレーンの\nキーを押そう", "x": 300, "y": 390, "size": 30, "anim": "fade", "wrap": 480 },
+    { "type": "note", "start": 12400, "end": 30923, "noteType": "normal", "x": 300, "y": 560, "label": "通常ノーツ", "anim": "pop" },
+    { "type": "text", "start": 14923, "end": 23200, "text": "さあ、叩いてみよう!", "x": 300, "y": 740, "size": 36, "anim": "pop", "wrap": 480 },
+
+    { "type": "text", "start": 23538, "end": 24923, "text": "いいね！", "x": 960, "y": 480, "size": 60, "anim": "pop", "in": 500, "out": 500, "wrap": 1200, "panel": false },
+
+    { "type": "text", "start": 24923, "end": 30923, "text": "逆も叩いてみよう!", "x": 300, "y": 740, "size": 36, "anim": "pop", "wrap": 480 },
+
+    { "type": "text", "start": 30923, "end": 32323, "text": "すごい！", "x": 960, "y": 480, "size": 60, "anim": "pop", "in": 500, "out": 500, "wrap": 1200, "panel": false },
+
+    { "type": "text", "start": 32323, "end": 45692, "text": "② ロングノーツ", "x": 300, "y": 230, "size": 44, "color": [255, 215, 0], "anim": "slideUp", "wrap": 480 },
+    { "type": "text", "start": 32523, "end": 45692, "text": "青い帯のついたノーツは長押し。\n押し始めたら、帯の終わりまで\n押し続けよう", "x": 300, "y": 390, "size": 30, "anim": "fade", "wrap": 480 },
+    { "type": "note", "start": 32723, "end": 45692, "noteType": "long", "x": 300, "y": 680, "length": 180, "label": "ロングノーツ", "anim": "pop" },
+    { "type": "text", "start": 36462, "end": 45692, "text": "押したままキープ!", "x": 300, "y": 820, "size": 36, "anim": "pop", "wrap": 480 },
+
+    { "type": "text", "start": 45692, "end": 46892, "text": "ナイス！", "x": 960, "y": 480, "size": 60, "anim": "pop", "in": 500, "out": 500, "wrap": 1200, "panel": false },
+
+    { "type": "text", "start": 46892, "end": 60462, "text": "③ ドラッグノーツ", "x": 300, "y": 230, "size": 44, "color": [255, 215, 0], "anim": "slideUp", "wrap": 480 },
+    { "type": "text", "start": 47092, "end": 60462, "text": "黄色のノーツは、判定ラインに\n来たときにキーを押していれば\n自動で成功になるよ", "x": 300, "y": 390, "size": 30, "anim": "fade", "wrap": 480 },
+    { "type": "note", "start": 47292, "end": 60462, "noteType": "drag", "x": 300, "y": 560, "label": "ドラッグノーツ", "anim": "pop" },
+    { "type": "text", "start": 49385, "end": 53077, "text": "なぞってみよう!", "x": 300, "y": 740, "size": 36, "anim": "pop", "wrap": 480 },
+
+    { "type": "text", "start": 53077, "end": 55077, "text": "うまい！", "x": 960, "y": 480, "size": 60, "anim": "pop", "in": 500, "out": 500, "wrap": 1200, "panel": false },
+
+    { "type": "text", "start": 55077, "end": 60462, "text": "逆もなぞってみよう!", "x": 300, "y": 740, "size": 36, "anim": "pop", "wrap": 480 },
+
+    { "type": "text", "start": 60462, "end": 62308, "text": "その調子！", "x": 960, "y": 480, "size": 60, "anim": "pop", "in": 500, "out": 500, "wrap": 1200, "panel": false },
+
+    { "type": "text", "start": 62308, "end": 77077, "text": "④ レーンノーツ", "x": 300, "y": 230, "size": 44, "color": [255, 215, 0], "anim": "slideUp", "wrap": 480 },
+    { "type": "text", "start": 62508, "end": 77077, "text": "赤いノーツを叩くと、\nそのレーンが\n閉じたり開いたりするよ", "x": 300, "y": 390, "size": 30, "anim": "fade", "wrap": 480 },
+    { "type": "note", "start": 62708, "end": 77077, "noteType": "lane", "x": 300, "y": 560, "label": "レーンノーツ", "anim": "pop" },
+    { "type": "text", "start": 64154, "end": 69692, "text": "レーンを切り替えてみよう", "x": 300, "y": 740, "size": 32, "anim": "pop", "wrap": 480 },
+
+    { "type": "text", "start": 69692, "end": 71538, "text": "最高！", "x": 960, "y": 480, "size": 60, "anim": "pop", "in": 500, "out": 500, "wrap": 1200, "panel": false },
+
+    { "type": "text", "start": 71538, "end": 77077, "text": "レーンが閉じているときは\n半透明なノーツになるよ！", "x": 300, "y": 740, "size": 32, "anim": "pop", "wrap": 480 },
+    { "type": "text", "start": 71738, "end": 77077, "text": "これも普通に叩こう！", "x": 300, "y": 840, "size": 32, "anim": "pop", "wrap": 480 },
+
+    { "type": "text", "start": 77077, "end": 80769, "text": "これで説明は終わり！", "x": 960, "y": 380, "size": 42, "anim": "slideUp", "in": 500, "out": 500, "wrap": 1200, "panel": false },
+    { "type": "text", "start": 80769, "end": 82615, "text": "少し実践してみよう！", "x": 960, "y": 380, "size": 42, "anim": "slideUp", "in": 500, "out": 500, "wrap": 1200, "panel": false },
+
+    { "type": "text", "start": 82625, "end": 83077, "text": "3", "x": 960, "y": 380, "size": 70, "anim": "pop", "in": 500, "out": 500, "wrap": 1200, "panel": false },
+    { "type": "text", "start": 83077, "end": 83538, "text": "2", "x": 960, "y": 380, "size": 75, "anim": "pop", "in": 500, "out": 500, "wrap": 1200, "panel": false },
+    { "type": "text", "start": 83538, "end": 84000, "text": "1", "x": 960, "y": 380, "size": 80, "anim": "pop", "in": 500, "out": 500, "wrap": 1200, "panel": false },
+    { "type": "text", "start": 84000, "end": 84462, "text": "がんばれ！", "x": 960, "y": 380, "size": 70, "anim": "pop", "in": 500, "out": 500, "wrap": 1200, "panel": false },
+
+    { "type": "text", "start": 91385, "end": 100000, "text": "これでチュートリアルは終わり！", "x": 960, "y": 380, "size": 74, "anim": "pop", "in": 500, "out": 500, "wrap": 1200, "panel": false },
+    { "type": "text", "start": 92385, "end": 100000, "text": "「自分には難しすぎるな」って思ったら難易度の画面で", "x": 960, "y": 480, "size": 44, "anim": "pop", "in": 500, "out": 500, "wrap": 1200, "panel": false },
+    { "type": "text", "start": 93385, "end": 100000, "text": "[Ctrl] + [Enter] ！", "x": 960, "y": 580, "size": 54, "color": [255, 215, 0], "anim": "pop", "in": 500, "out": 500, "wrap": 1200, "panel": false },
+    { "type": "text", "start": 94385, "end": 100000, "text": "オートプレイができるから、鑑賞もしてみてね！", "x": 960, "y": 680, "size": 44, "anim": "pop", "in": 500, "out": 500, "wrap": 1200, "panel": false }
+
+  ]
+}

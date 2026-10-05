@@ -30,6 +30,7 @@ struct GenreInfo{
     double currentY = -1.0;
     double currentX = -1.0;
     bool positionInittailized = false;
+    bool isTutorial = false;
 };
 
 enum class SelectMode{
@@ -53,6 +54,19 @@ GameScene selectSongScene(SDL_Window* window, SDL_Renderer* renderer, std::strin
     if(categories.empty()){
         std::cout << "[エラー]曲がねぇ\n";
         return GameScene::Shutdown;
+    }
+
+    {
+        GenreInfo tutorial;
+        tutorial.genreName = "チュートリアル";
+        tutorial.isTutorial = true;
+
+        SongInfo hint;                                  // 曲リストの描画が曲を1つ必要とするため
+        hint.title = "ENTER で開始";
+        hint.scorePath = "tutorial/tutorial.json";      // 台本のパス
+        tutorial.songList.push_back(hint);
+
+        categories.push_back(tutorial);                 // 最後に追加。先頭にするなら begin() へ insert
     }
 
     SelectMode currentMode = SelectMode::SelectGenre;
@@ -200,6 +214,13 @@ GameScene selectSongScene(SDL_Window* window, SDL_Renderer* renderer, std::strin
 
                     case SDLK_RETURN:{
                         if(currentMode == SelectMode::SelectGenre){
+                            if(categories[genreCursor].isTutorial){
+                                outSelectedScorePath = categories[genreCursor].songList[0].scorePath;
+                                nextScene = GameScene::Tutorial;
+                                running = false;
+                                break;
+                            }
+
                             currentMode = SelectMode::SelectSong;
                             songCursor = 0;
                             cursorMoved = true;
@@ -271,7 +292,6 @@ GameScene selectSongScene(SDL_Window* window, SDL_Renderer* renderer, std::strin
         draw_DifficultyList(renderer, font, categories[genreCursor].songList[songCursor].difficulties, difficultyCursor, currentMode);
 
         SDL_RenderPresent(renderer);
-        SDL_Delay(16);
     }
 
     if(bgm){

@@ -1,212 +1,46 @@
-# Otoge
-音ゲーの制作
+// ====================================================================
+//  tutorialOverlay.h — チュートリアル用の説明表示(文字・ノーツ図)
+//
+//  PlayScene の画面の「上」に、台本(JSON)どおりの時刻で説明を重ねる。
+//  時刻は PlayScene の musicTime(譜面と同じ時刻)で、曲は止めない。
+//
+//  台本(JSON)の形:
+//  {
+//    "chart": "tutorial/tutorial_chart.json",   // 遊ぶ譜面(必須)
+//    "difficulty": 0,                           // 譜面内の難易度の番号(省略時0)
+//    "font": "fonts/prac.ttf",                  // 省略時これ
+//    "laneWidth": 120,                          // ノーツ図の1レーン分の幅(px)。省略時120
+//    "items": [
+//      { "type": "text", "start": 2800, "end": 8200, "text": "説明文\n2行目",
+//        "x": 300, "y": 380, "size": 30, "color": [255,255,255], "wrap": 480,
+//        "anim": "slideUp", "in": 400, "out": 400, "panel": true },
+//      { "type": "note", "noteType": "normal", "start": 3200, "end": 8200,
+//        "x": 300, "y": 560, "width": 1, "label": "通常ノーツ", "anim": "pop" }
+//    ]
+//  }
+//
+//  ・時刻はms。曲の頭が0で、曲が始まる前(カウントダウン中)は負の値
+//  ・x,y は中心の座標(画面は 1920x1080 として扱う)
+//  ・items は配列の後ろにあるものほど手前に描かれる
+//  ・noteType: normal / drag / lane / long(longは length で帯の長さpx)
+//  ・anim: none / fade / pop / slideUp / slideDown / wipe
+//  ・書き間違い(知らないキー名・アニメ名など)は、起動時にコンソールへ警告する
+// ====================================================================
 
-ディレクトリについて
-.
-├── Makefile
-├── README.md
-├── bin
-│   ├── fonts
-│   │   └── prac.ttf
-│   ├── otoge
-│   ├── scores
-│   │   ├── MAS CORRECTION
-│   │   │   ├── MARENOL.txt
-│   │   │   └── Re：End of a Dream.txt
-│   │   ├── MR CORRECTION
-│   │   │   └── enchanted love.txt
-│   │   ├── My Like Song - ■37
-│   │   │   ├── domino.txt
-│   │   │   ├── found footage.txt
-│   │   │   └── poolside railway.txt
-│   │   ├── OYDM_COLLECTION
-│   │   │   └── ヤラララ.json
-│   │   ├── OYMD CORRECTION
-│   │   │   └── ヤラララ.txt
-│   │   ├── TEST
-│   │   │   ├── a.json
-│   │   │   ├── b.json
-│   │   │   ├── c.json
-│   │   │   ├── d.json
-│   │   │   ├── e.json
-│   │   │   ├── enchanted love.json
-│   │   │   ├── enchanted.json
-│   │   │   ├── f.json
-│   │   │   ├── g.json
-│   │   │   └── h.json
-│   │   ├── TKYK.env CORRECTION
-│   │   │   ├── 99 Glooms.txt
-│   │   │   ├── echo.txt
-│   │   │   ├── storia.txt
-│   │   │   ├── yubikiri genman.txt
-│   │   │   └── そして勇者は眠りにつく.txt
-│   │   ├── YAMATO CORRECTION
-│   │   │   ├── pupa.json
-│   │   │   ├── pupa.json2
-│   │   │   └── pupa.txt
-│   │   ├── a
-│   │   │   └── a.json
-│   │   ├── b
-│   │   │   └── b.json
-│   │   ├── c
-│   │   │   └── c.json
-│   │   ├── d
-│   │   ├── d.d.json
-│   │   ├── e
-│   │   │   └── e.json
-│   │   ├── xiang CORRECTION
-│   │   │   ├── Ascension to Heaven.txt
-│   │   │   ├── FREEDOM DIVE↓.txt
-│   │   │   ├── Parousia.txt
-│   │   │   ├── Sedap Malam.txt
-│   │   │   └── halcyon.txt
-│   │   ├── yunyum
-│   │   │   ├── Precipice.txt
-│   │   │   └── ポーカーフェイス.txt
-│   │   └── ヤラララ.json
-│   └── sounds
-│       ├── 99 Glooms.mp3
-│       ├── Ascension to Heaven.mp3
-│       ├── FREEDOM DIVE↓.mp3
-│       ├── High Hopes.mp3
-│       ├── MARENOL.mp3
-│       ├── MEOVV.mp3
-│       ├── Parousia.mp3
-│       ├── Precipice.mp3
-│       ├── Re：End of a Dream.mp3
-│       ├── Sedap Malam.mp3
-│       ├── THEME FROM LUPIN Ⅲ 2015.mp3
-│       ├── Yubikiri Genman.mp3
-│       ├── domino.mp3
-│       ├── echo.mp3
-│       ├── enchanted love.mp3
-│       ├── found footage.mp3
-│       ├── halcyon.mp3
-│       ├── poolside railway.mp3
-│       ├── pupa.mp3
-│       ├── rensyuu.wav
-│       ├── storia.mp3
-│       ├── tap_sound.wav
-│       ├── tapsound_2.wav
-│       ├── そして勇者は眠りにつく.mp3
-│       ├── ポーカーフェイス.mp3
-│       ├── ミュージック.mp3
-│       ├── ヤラララ.mp3
-│       ├── 孤独のあかつき.mp3
-│       └── 十番街、雨【シティ探索BGM】.mp3
-├── fonts
-│   └── prac.ttf
-├── imgui.ini
-├── nlohmann
-│   └── json.hpp
-├── notes.txt
-├── obj
-│   ├── ChartCreate.d
-│   ├── ChartCreate.o
-│   ├── LoadScene.d
-│   ├── LoadScene.o
-│   ├── PlayScene.d
-│   ├── PlayScene.o
-│   ├── ResultScene.d
-│   ├── ResultScene.o
-│   ├── SelectScene.d
-│   ├── SelectScene.o
-│   ├── Setting.d
-│   ├── Setting.o
-│   ├── Title.d
-│   ├── Title.o
-│   ├── imgui
-│   │   ├── imgui.d
-│   │   ├── imgui.o
-│   │   ├── imgui_draw.d
-│   │   ├── imgui_draw.o
-│   │   ├── imgui_impl_sdl2.d
-│   │   ├── imgui_impl_sdl2.o
-│   │   ├── imgui_impl_sdlrenderer2.d
-│   │   ├── imgui_impl_sdlrenderer2.o
-│   │   ├── imgui_tables.d
-│   │   ├── imgui_tables.o
-│   │   ├── imgui_widgets.d
-│   │   └── imgui_widgets.o
-│   ├── main.d
-│   └── main.o
-├── readme.txt
-├── scores
-│   ├── OYDM_COLLECTION
-│   │   └── ヤラララ.json
-│   ├── TEST
-│   │   └── enchanted love.json
-│   └── YAMATO CORRECTION
-│       └── pupa.json
-├── sounds
-│   ├── 99 Glooms.mp3
-│   ├── Ascension to Heaven.mp3
-│   ├── FREEDOM DIVE↓.mp3
-│   ├── High Hopes.mp3
-│   ├── MARENOL.mp3
-│   ├── MEOVV.mp3
-│   ├── Parousia.mp3
-│   ├── Precipice.mp3
-│   ├── Re：End of a Dream.mp3
-│   ├── Sedap Malam.mp3
-│   ├── THEME FROM LUPIN Ⅲ 2015.mp3
-│   ├── Yubikiri Genman.mp3
-│   ├── domino.mp3
-│   ├── echo.mp3
-│   ├── enchanted love.mp3
-│   ├── found footage.mp3
-│   ├── halcyon.mp3
-│   ├── poolside railway.mp3
-│   ├── pupa.mp3
-│   ├── rensyuu.wav
-│   ├── storia.mp3
-│   ├── tap_sound.wav
-│   ├── tapsound_2.wav
-│   ├── そして勇者は眠りにつく.mp3
-│   ├── ポーカーフェイス.mp3
-│   ├── ミュージック.mp3
-│   ├── ヤラララ.mp3
-│   ├── 孤独のあかつき.mp3
-│   └── 十番街、雨【シティ探索BGM】.mp3
-├── src
-│   ├── ChartCreate.cpp
-│   ├── GameCommon.h
-│   ├── Graphics.h
-│   ├── LoadScene.cpp
-│   ├── Play
-│   │   ├── GameContext.h
-│   │   ├── PlaySceneManager.h
-│   │   ├── drawFrame.h
-│   │   ├── loadScore.h
-│   │   ├── noteJudge.h
-│   │   ├── renderGame.h
-│   │   ├── scoreTracker.h
-│   │   ├── type.h
-│   │   ├── updateAndRenderTexture.h
-│   │   └── updateSpeed.h
-│   ├── PlayScene.cpp
-│   ├── ResultScene.cpp
-│   ├── Scene.h
-│   ├── SelectScene.cpp
-│   ├── Setting.cpp
-│   ├── Title.cpp
-│   ├── imgui
-│   │   ├── imconfig.h
-│   │   ├── imgui.cpp
-│   │   ├── imgui.h
-│   │   ├── imgui_draw.cpp
-│   │   ├── imgui_impl_sdl2.cpp
-│   │   ├── imgui_impl_sdl2.h
-│   │   ├── imgui_impl_sdlrenderer2.cpp
-│   │   ├── imgui_impl_sdlrenderer2.h
-│   │   ├── imgui_internal.h
-│   │   ├── imgui_tables.cpp
-│   │   ├── imgui_widgets.cpp
-│   │   ├── imstb_rectpack.h
-│   │   ├── imstb_textedit.h
-│   │   └── imstb_truetype.h
-│   └── main.cpp
-├── 計画書.txt
-└── 譜面制作テンプレート.txt
 
-32 directories, 174 files
+// ====================================================================
+//  tutorialAnim.h — チュートリアルの表示アニメーションの計算
+//
+//  1つの表示物(文字・ノーツ図)について、時刻 t のときの
+//  「透明度・拡大率・ずれ・見えている割合」を返す。SDL にも JSON にも依存しない。
+//
+//   start ──in──▶ 完全表示 ◀──out── end
+//   (start から in ミリ秒かけて現れ、end の out ミリ秒前から消え始める)
+//
+//   fade      : 透明度だけが変わる
+//   pop       : 小さい所から少し行き過ぎて収まる(消えるときは少し縮みながら消える)
+//   slideUp   : 下から上へ浮き上がって現れる(消えるときはさらに上へ抜ける)
+//   slideDown : 上から下へ降りて現れる(消えるときはさらに下へ抜ける)
+//   wipe      : 左から右へ文字が現れる(消えるときは透明になる)
+//   none      : 現れる/消えるを瞬間的に切り替える
+// ====================================================================

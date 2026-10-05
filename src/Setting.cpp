@@ -26,6 +26,8 @@ void loadPlayerSettings(PlayerSettings& settings){
     settings.offsetMs = j.value("offsetMs", 0.0);
     settings.bgmVolume = j.value("bgmVolume", 70);
     settings.seVolume = j.value("seVolume", 100);
+    settings.vsync  = j.value("vsync", true);
+    settings.fpsCap = j.value("fpsCap", 0);
 }
 
 void savePlayerSettings(const PlayerSettings& settings){
@@ -33,6 +35,8 @@ void savePlayerSettings(const PlayerSettings& settings){
     j["offsetMs"] = settings.offsetMs;
     j["bgmVolume"] = settings.bgmVolume;
     j["seVolume"] = settings.seVolume;
+    j["vsync"]  = settings.vsync;
+    j["fpsCap"] = settings.fpsCap;
 
     std::ofstream out(SETTING_PATH);
     if(out.is_open()){
@@ -105,6 +109,10 @@ GameScene settingScene(SDL_Window* window, SDL_Renderer* renderer, PlayerSetting
         ImGui::InputDouble("Offset(ms)", &edit.offsetMs, 1.0, 10.0, "%.1f");
         ImGui::TextDisabled("+:notes come later  -:notes come earlier");
 
+        ImGui::Checkbox("VSync", &edit.vsync);
+        ImGui::SliderInt("FPS Cap (0 = unlimited)", &edit.fpsCap, 0, 1000);
+        ImGui::TextDisabled("VSync OFF + FPS Cap = 低遅延 / VSync ON = 滑らか");
+
         ImGui::Separator();
 
         ImGui::Text("Volume");
@@ -126,6 +134,8 @@ GameScene settingScene(SDL_Window* window, SDL_Renderer* renderer, PlayerSetting
         if(ImGui::Button("SAVE")){
             playerSettings = edit;
             savePlayerSettings(playerSettings);
+            SDL_RenderSetVSync(renderer, playerSettings.vsync ? 1 : 0);
+            g_framePacer.setCap(playerSettings.fpsCap); 
         }
         ImGui::SameLine();
         if(ImGui::Button("BACK")){
@@ -144,7 +154,7 @@ GameScene settingScene(SDL_Window* window, SDL_Renderer* renderer, PlayerSetting
         ImGui_ImplSDLRenderer2_RenderDrawData(ImGui::GetDrawData(), renderer);
 
         SDL_RenderPresent(renderer);
-        SDL_Delay(16);
+        
     }
 
     if(previewTap) Mix_FreeChunk(previewTap);

@@ -3,8 +3,10 @@
 #include "GameCommon.h"
 #include "Play/type.h"
 #include "Play/GameContext.h"
+#include "Play/roundedRect.h"
+#include "Play/tutorialOverlay.h"
 
-inline double evaluatNotePathY(const Note& note, int32_t musicTime){
+inline double evaluatNotePathY(const Note& note, double musicTime){
     const auto& path = note.path;
     if(path.empty()) return 0.0;
 
@@ -35,6 +37,8 @@ inline void renderGamePlayScreen(GameContext& ctx, Tex& tex, Sq& sq, double curr
     SDL_SetRenderDrawBlendMode(ctx.renderer, SDL_BLENDMODE_BLEND);
 
     SDL_SetRenderDrawColor(ctx.renderer, 255, 255, 255, 255);
+    RoundedRectBatch noteBatch;
+    
     for(const auto& note : ctx.notes){
         if(note.lane < 0 || note.lane >= 6) continue;
 
@@ -44,11 +48,11 @@ inline void renderGamePlayScreen(GameContext& ctx, Tex& tex, Sq& sq, double curr
 
         int noteY;
         if(note.hasCustomPath()){
-            double distFromLine = evaluatNotePathY(note, ctx.musicTime);
+            double distFromLine = evaluatNotePathY(note, ctx.musicTimeExact);
             noteY = ctx.judgeY - static_cast<int>(distFromLine);
         }
         else{
-            noteY = ctx.judgeY - static_cast<int>((static_cast<double>(note.targetTime) - ctx.musicTime) * effectiveSpeed);
+            noteY = ctx.judgeY - static_cast<int>((static_cast<double>(note.targetTime) - ctx.musicTimeExact) * effectiveSpeed);
         }
         
         if(noteY < -50) continue;
@@ -56,7 +60,7 @@ inline void renderGamePlayScreen(GameContext& ctx, Tex& tex, Sq& sq, double curr
         bool laneIsInactive = !ctx.laneActive[note.lane];
 
         if(note.type == NoteType::Long){
-            int tailY = ctx.judgeY - static_cast<int>((static_cast<double>(note.targetTime + note.durationMs) - ctx.musicTime) * effectiveSpeed);
+            int tailY = ctx.judgeY - static_cast<int>((static_cast<double>(note.targetTime + note.durationMs) - ctx.musicTimeExact) * effectiveSpeed);
 
             int drawNoteY = noteY;
             if(note.isHolding){
@@ -64,15 +68,8 @@ inline void renderGamePlayScreen(GameContext& ctx, Tex& tex, Sq& sq, double curr
             }
 
             SDL_Rect bodyRect;
-                bodyRect.x = laneX[note.lane];
-                bodyRect.w = ctx.laneWidth * note.widthLanes;
-
-                if(note.isHolding){
-                    SDL_SetRenderDrawColor(ctx.renderer, 0, 150, 255, 255);
-                }
-                else{
-                    SDL_SetRenderDrawColor(ctx.renderer, 0, 150, 255, 100);
-                }
+            bodyRect.x = laneX[note.lane];
+            bodyRect.w = ctx.laneWidth * note.widthLanes;
 
             bodyRect.y = tailY;
             bodyRect.h = drawNoteY - tailY;
@@ -91,23 +88,25 @@ inline void renderGamePlayScreen(GameContext& ctx, Tex& tex, Sq& sq, double curr
         }
 
         if(!note.isHit){
-            SDL_Rect noteRect;
-                noteRect.w = ctx.laneWidth * note.widthLanes;
-                noteRect.h = 30;
-                noteRect.x = laneX[note.lane];
-                noteRect.y = noteY - 15;
+            // 色は頂点に持たせるので、テクスチャも ColorMod/AlphaMod も使わない
+            SDL_Color col;
+            if(laneIsInactive && !(note.type == NoteType::Lane)) col = {20, 20, 20, 200};
+            else if(note.type == NoteType::Drag)                 col = {250, 250, 150, 255};
+            else if(note.type == NoteType::Lane)                 col = {255, 50, 50, 255};
+            else                                                 col = {255, 255, 255, 255};
 
-                if(note.type == NoteType::Drag) SDL_SetRenderDrawColor(ctx.renderer, 250, 250, 150, 255); 
-                else if(note.type == NoteType::Lane) SDL_SetRenderDrawColor(ctx.renderer, 255, 50, 50, 255); 
-                else SDL_SetRenderDrawColor(ctx.renderer, 255, 255, 255, 255);
-
-                if(laneIsInactive && !(note.type == NoteType::Lane)){
-                    SDL_SetRenderDrawColor(ctx.renderer, 0, 0, 0, 150);
-                }
-
-            SDL_RenderFillRect(ctx.renderer, &noteRect);
+            // ここでは溜めるだけ。実際の描画はループの後で1回にまとめて行う
+            noteBatch.add(static_cast<float>(laneX[note.lane]),
+                          static_cast<float>(noteY - 15),
+                          static_cast<float>(ctx.laneWidth * note.widthLanes),
+                          30.0f,    // 高さ
+                          8.0f,     // 角の半径(px)。丸みを変えるならこの数値
+                          col);
         }
     }
+
+    // 溜めたノーツのヘッドを1回の描画でまとめて出す(ロングノーツの帯より手前に描かれる)
+    noteBatch.flush(ctx.renderer);
 
     SDL_SetRenderDrawBlendMode(ctx.renderer, SDL_BLENDMODE_BLEND);
     for(const auto &fx : ctx.effects){
@@ -143,58 +142,24 @@ inline void renderGamePlayScreen(GameContext& ctx, Tex& tex, Sq& sq, double curr
         SDL_RenderFillRect(ctx.renderer, &fxRect);
     }
 
+    // キービーム：焼き込みテクスチャ1枚を貼る（1本あたり40回 → 1回）
     {
         const int32_t beamDurationMs = 600;
         const int beamHeight = 500;
-        const int stripCount = 40;
-        const int baseAlpha = 150;
+        SDL_Texture* beamTex = getBeamTexture(ctx.renderer);
 
-        for(const auto& beam : ctx.keyBeams){
-            if(beam.lane < 0 || beam.lane >= 6) continue;
+        if(beamTex){
+            for(const auto& beam : ctx.keyBeams){
+                if(beam.lane < 0 || beam.lane >= 6) continue;
 
-            double timeProggress = static_cast<double>(ctx.musicTime - beam.spawnTime) / beamDurationMs;
-            if(timeProggress >= 1.0) continue;
+                double timeProgress = static_cast<double>(ctx.musicTime - beam.spawnTime) / beamDurationMs;
+                if(timeProgress >= 1.0) continue;
 
-            double timeFade = 1.0 - easeOutCubic(timeProggress);
+                double timeFade = 1.0 - easeOutCubic(timeProgress);
 
-            int bx = laneX[beam.lane];
-            int bw = ctx.laneWidth;
-
-            for(int s = 0; s < stripCount; s++){
-                double stripProgressLow =
-                    static_cast<double>(s) / stripCount;
-
-                double stripProgressHigh =
-                    static_cast<double>(s + 1) / stripCount;
-
-                int yBottom =
-                    ctx.judgeY -
-                    static_cast<int>(stripProgressLow * beamHeight);
-
-                int yTop =
-                    ctx.judgeY -
-                    static_cast<int>(stripProgressHigh * beamHeight);
-
-                double verticalFade = 1.0 - stripProgressLow;
-
-                int alpha = static_cast<int>(
-                    baseAlpha * verticalFade * timeFade
-                );
-
-                if(alpha <= 0) continue;
-
-                SDL_SetRenderDrawColor(
-                    ctx.renderer,
-                    255, 255, 255, alpha
-                );
-
-                SDL_Rect stripRect;
-                stripRect.x = bx;
-                stripRect.w = bw;
-                stripRect.y = yTop;
-                stripRect.h = yBottom - yTop;
-
-                SDL_RenderFillRect(ctx.renderer, &stripRect);
+                SDL_SetTextureAlphaMod(beamTex, static_cast<Uint8>(255 * timeFade));
+                SDL_Rect beamRect = {laneX[beam.lane], ctx.judgeY - beamHeight, ctx.laneWidth, beamHeight};
+                SDL_RenderCopy(ctx.renderer, beamTex, NULL, &beamRect);
             }
         }
     }
@@ -205,14 +170,29 @@ inline void renderGamePlayScreen(GameContext& ctx, Tex& tex, Sq& sq, double curr
         }
     }
 
-    int currentComboCount = ctx.scoreTracker.getCurrentCombo();
-    if(ctx.scoreTexture != nullptr){
-        SDL_RenderCopy(ctx.renderer, ctx.scoreTexture, NULL, &ctx.scoreRect);
-    }
-    if(ctx.comboTexture != nullptr && ctx.scoreTracker.getCurrentCombo() > 0){
-        SDL_RenderCopy(ctx.renderer, ctx.comboTexture, NULL, &ctx.comboRect);
+    // スコア・コンボ：数字テクスチャを並べて貼るだけ（毎フレームの文字生成なし）
+    if(ctx.digitFont != nullptr){
+        char scoreStr[16];
+        snprintf(scoreStr, sizeof(scoreStr), "%07d", ctx.lastDisplayScoreValue);
+        ctx.digitFont->drawCentered(ctx.renderer, scoreStr, false,
+                                    static_cast<int>(SCREEN_W * (7.0 / 8.0)), 80,
+                                    ctx.scoreScale, SDL_Color{255, 255, 255, 255});
+
+        int currentCombo = ctx.scoreTracker.getCurrentCombo();
+        if(currentCombo > 0){
+            SDL_Color comboColor = {255, 255, 255, 255};
+            if(ctx.isAP) comboColor = {255, 215, 0, 255};
+            else if(ctx.isFC) comboColor = {0, 255, 255, 255};
+
+            char comboStr[16];
+            snprintf(comboStr, sizeof(comboStr), "%d", currentCombo);
+            ctx.digitFont->drawCentered(ctx.renderer, comboStr, true,
+                                        static_cast<int>(SCREEN_W * (7.0 / 8.0)), SCREEN_W / 3,
+                                        ctx.comboScale, comboColor);
+        }
     }
 
+    if(ctx.tutorial) ctx.tutorial->draw(ctx.renderer, ctx.musicTime);
     SDL_RenderPresent(ctx.renderer);
 }
 

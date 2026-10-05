@@ -5,8 +5,39 @@
 //グローバル変数
 double bpm = 120;
 
+struct PlayInputGuard{
+    PlayInputGuard(){
+        cursorWasShown_ = (SDL_ShowCursor(SDL_QUERY) != 0);
+        textInputWasActive_ = (SDL_IsTextInputActive() == SDL_TRUE);
+
+        SDL_ShowCursor(SDL_DISABLE);   // ウィンドウの中にあるときだけポインターが消える
+        SDL_StopTextInput();           // 日本語入力(IME)の変換を止める
+    }
+
+    ~PlayInputGuard(){
+        SDL_ShowCursor(cursorWasShown_ ? SDL_ENABLE : SDL_DISABLE);
+        if(textInputWasActive_) SDL_StartTextInput();
+    }
+
+    PlayInputGuard(const PlayInputGuard&) = delete;
+    PlayInputGuard& operator=(const PlayInputGuard&) = delete;
+
+private:
+    bool cursorWasShown_ = true;
+    bool textInputWasActive_ = false;
+};
+
 //playGame関数の制作
-GameScene playGame(SDL_Window* window, SDL_Renderer* renderer, const std::string& selectedScorePath, int selectedDifficulty, ResultData& outResult, PlayerSettings& playerSettings, bool isAutoplay, SDL_Texture* targetTex){
+GameScene playGame(SDL_Window* window, SDL_Renderer* renderer, const std::string& selectedScorePath, int selectedDifficulty, ResultData& outResult, PlayerSettings& playerSettings, bool isAutoplay, SDL_Texture* targetTex, TutorialOverlay* tutorial){
+    PlayInputGuard inputGuard;
+
+    SDL_Texture* noteTextureNormal = IMG_LoadTexture(renderer, "images/normal.png");
+    SDL_Texture* noteTextureDrag   = IMG_LoadTexture(renderer, "images/drag.png");
+    SDL_Texture* noteTextureLane   = IMG_LoadTexture(renderer, "images/lane.png");
+
+    if(!noteTextureNormal || !noteTextureDrag || !noteTextureLane){
+        printf("ノーツ画像の読込失敗: %s\n", IMG_GetError());
+    }
 
     //変数定義
     std::vector<Effect> effects;
@@ -142,13 +173,24 @@ GameScene playGame(SDL_Window* window, SDL_Renderer* renderer, const std::string
     SDL_FreeSurface(miss);
     SDL_FreeSurface(waku_init);
 
+    // ==========================================
+    // 高精度タイマー（SDL_GetTicksの1ms単位ではなく、サブミリ秒単位）
+    // ==========================================
+    const double perfFreq = static_cast<double>(SDL_GetPerformanceFrequency());
+    const Uint64 perfStart = SDL_GetPerformanceCounter();
+    auto nowMs = [&](){
+        return static_cast<double>(SDL_GetPerformanceCounter() - perfStart) * 1000.0 / perfFreq;
+    };
 
-    uint32_t delayTimeMs = 1500;
-    uint32_t musicStartTime = SDL_GetTicks() + delayTimeMs;
+    const double delayTimeMs = 1500.0;
+    double musicStartTimeMs = nowMs() + delayTimeMs;
     bool bgmStarted = false;
 
-    uint32_t lastDriftCheckTime = 0;
-    double clockDriftCorrectionMs = 0.0;
+    double lastDriftCheckMs = 0.0;
+    double clockDriftCorrectionMs = 0.0;   // 実際に時刻へ加えている補正量
+    double driftTargetMs = 0.0;            // 本来あるべき補正量（ここへ少しずつ近づける）
+    double prevGlobalMs = nowMs();
+    double lastMusicTimeExact = -1e18;     // 時刻が逆戻りしないようにするための記録
 
     if(targetTex != nullptr){
         SDL_SetRenderTarget(renderer, targetTex);
@@ -168,6 +210,20 @@ GameScene playGame(SDL_Window* window, SDL_Renderer* renderer, const std::string
         return GameScene::Play;
     }
 
+    // スコア・コンボ用の数字テクスチャ（ここで1回だけ作る）
+    DigitFont digitFont;
+    if(!digitFont.init(renderer, font, " COMBO")){
+        printf("数字テクスチャの作成失敗: %s\n", TTF_GetError());
+    }
+
+    // ===== 処理落ち調査用（原因が分かったら 0 にしてよい） =====
+    #define PLAY_PROFILE 1
+    #if PLAY_PROFILE
+    const double profFreq = static_cast<double>(SDL_GetPerformanceFrequency());
+    auto profMs = [&](Uint64 a, Uint64 b){ return static_cast<double>(b - a) * 1000.0 / profFreq; };
+    Uint64 profPrevEnd = SDL_GetPerformanceCounter();
+    #endif
+
     //描画処理
     bool running = true;
     SDL_Event e;
@@ -177,29 +233,52 @@ GameScene playGame(SDL_Window* window, SDL_Renderer* renderer, const std::string
 
     while(running){
 
-        uint32_t globalTime = SDL_GetTicks();
+        #if PLAY_PROFILE
+        Uint64 prof0 = SDL_GetPerformanceCounter();
+        #endif
 
-        double rawElapsedMs = static_cast<double>(static_cast<int32_t>(globalTime - musicStartTime)) + clockDriftCorrectionMs;
-        int32_t musicTime = static_cast<int32_t>(rawElapsedMs - offsetMs);
+        double globalMs = nowMs();
+        double frameDtMs = globalMs - prevGlobalMs;
+        prevGlobalMs = globalMs;
 
-        if(!bgmStarted && globalTime >= musicStartTime){
+        if(!bgmStarted && globalMs >= musicStartTimeMs){
             Mix_PlayMusic(bgm, 1);
             bgmStarted = true;
         }
 
-        if(bgmStarted && (globalTime - lastDriftCheckTime) >= 200){
-            lastDriftCheckTime = globalTime;
+        // ① 200msごとに「本来あるべき補正量」だけを更新する
+        if(bgmStarted && (globalMs - lastDriftCheckMs) >= 200.0){
+            lastDriftCheckMs = globalMs;
 
             double actualPosMs = Mix_GetMusicPosition(bgm) * 1000.0;
             if(actualPosMs >= 0.0){
-                double predictedRawMs = static_cast<double>(static_cast<int32_t>(globalTime - musicStartTime)) + clockDriftCorrectionMs;
+                double predictedRawMs = (globalMs - musicStartTimeMs) + driftTargetMs;
                 double drift = actualPosMs - predictedRawMs;
 
                 if(std::abs(drift) > 5.0){
-                    clockDriftCorrectionMs += drift * 0.2;
+                    driftTargetMs += drift * 0.2;
                 }
             }
         }
+
+        // ② 実際の補正は毎フレーム少しずつ（経過時間の3%まで）近づける
+        //    → 時刻が一気に飛ぶ／戻ることがなくなり、ノーツが止まって見えない
+        {
+            double diff = driftTargetMs - clockDriftCorrectionMs;
+            if(std::abs(diff) > 50.0){
+                clockDriftCorrectionMs = driftTargetMs;   // 大きすぎるズレは一度で合わせる
+            }
+            else{
+                double maxStep = frameDtMs * 0.03;
+                clockDriftCorrectionMs += std::clamp(diff, -maxStep, maxStep);
+            }
+        }
+
+        double rawElapsedMs = (globalMs - musicStartTimeMs) + clockDriftCorrectionMs;
+        double musicTimeExact = rawElapsedMs - offsetMs;                            // 描画用（小数ms）
+        if(musicTimeExact < lastMusicTimeExact) musicTimeExact = lastMusicTimeExact; // 逆戻り防止
+        lastMusicTimeExact = musicTimeExact;
+        int32_t musicTime = static_cast<int32_t>(std::floor(musicTimeExact));       // 判定用は従来通り整数ms
 
         // タイムベース・スピードイベント処理システム
         updateNoteSpeed(musicTime, noteSpeed, currentNoteSpeed, speedEvents);
@@ -255,8 +334,14 @@ GameScene playGame(SDL_Window* window, SDL_Renderer* renderer, const std::string
             .endX = endX,
             .judgeY = judgeY,
             .laneWidth = laneWidth,
-            .laneActive = laneActive
+            .laneActive = laneActive,
+            .noteTextureNormal = noteTextureNormal,
+            .noteTextureDrag = noteTextureDrag,
+            .noteTextureLane = noteTextureLane,
+            .musicTimeExact = musicTimeExact,    // GameContext.h の最後に追加したメンバ
+            .digitFont = &digitFont
             };
+            ctx.tutorial = tutorial;
 
         if(isAutoplay){
             for(int i = 0; i < 6; i++) ctx.currentPressed[i] = false;
@@ -293,6 +378,10 @@ GameScene playGame(SDL_Window* window, SDL_Renderer* renderer, const std::string
             }
         }
 
+        #if PLAY_PROFILE
+        Uint64 prof1 = SDL_GetPerformanceCounter();
+        #endif
+
         //ノーツの判定処理 noteJudge.h    
         NoteJudge(ctx, tex, sq);
 
@@ -315,11 +404,37 @@ GameScene playGame(SDL_Window* window, SDL_Renderer* renderer, const std::string
         SDL_SetRenderDrawColor(ctx.renderer, 155, 155, 155, 255);
         SDL_RenderClear(ctx.renderer);
 
-        //スコア・コンボの描画・アニメーション処理
+        #if PLAY_PROFILE
+        Uint64 prof2 = SDL_GetPerformanceCounter();
+        #endif
+
+        //スコア・コンボの表示値とアニメーション計算
         updateAndRenderScoreTexture(ctx);
 
-        //ノーツの描画・アニメーション処理
+        //ノーツの描画・アニメーション処理（この中で SDL_RenderPresent している）
         renderGamePlayScreen(ctx, tex, sq, currentNoteSpeed, laneX);
+
+        #if PLAY_PROFILE
+        Uint64 prof3 = SDL_GetPerformanceCounter();
+        #endif
+
+        // フレーム間隔の調整とFPS計測（VSync OFF時はここでFPS上限を守る）
+        g_framePacer.endFrame(window);
+
+        #if PLAY_PROFILE
+        {
+            Uint64 prof4 = SDL_GetPerformanceCounter();
+            double frameMs = profMs(profPrevEnd, prof4);
+            // 120fps(8.3ms)の1.5倍を超えたフレームだけ内訳を表示
+            if(frameMs > 12.5 && musicTime > 0){
+                printf("[SPIKE] t=%dms frame=%.1fms | 前フレーム終了→開始 %.1f / 時刻・入力 %.1f / 判定 %.1f / 描画+Present %.1f / 待機 %.1f\n",
+                       musicTime, frameMs,
+                       profMs(profPrevEnd, prof0), profMs(prof0, prof1), profMs(prof1, prof2),
+                       profMs(prof2, prof3), profMs(prof3, prof4));
+            }
+            profPrevEnd = prof4;
+        }
+        #endif
 
         prevMusicTime = ctx.musicTime;
     }
@@ -334,12 +449,16 @@ GameScene playGame(SDL_Window* window, SDL_Renderer* renderer, const std::string
     outResult.missCount = scoreTracker.getMissCount();
 
     Mix_HaltMusic();
+    digitFont.destroy();
     TTF_CloseFont(font);
     TTF_CloseFont(font_init_waku);
     Mix_FreeMusic(bgm);
     Mix_FreeChunk(tap_sound);
     if(comboTexture) SDL_DestroyTexture(comboTexture);
     if(scoreTexture) SDL_DestroyTexture(scoreTexture);
+    if(noteTextureNormal) SDL_DestroyTexture(noteTextureNormal);
+    if(noteTextureDrag) SDL_DestroyTexture(noteTextureDrag);
+    if(noteTextureLane) SDL_DestroyTexture(noteTextureLane);
     SDL_DestroyTexture(tex.perfect);
     SDL_DestroyTexture(tex.good);
     SDL_DestroyTexture(tex.bad);

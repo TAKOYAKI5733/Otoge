@@ -1,4 +1,5 @@
 #include "GameCommon.h"
+#include "Play/tutorialOverlay.h"
 
 #define SCREEN_W 1920
 #define SCREEN_H 1080
@@ -26,15 +27,19 @@ int main(){
 
     #if defined(_WIN32)
         SDL_SetHint(SDL_HINT_WINDOWS_DPI_AWARENESS, "permonitorv2");
+        SDL_SetHint(SDL_HINT_RENDER_DRIVER, "opengl");   // D3D9のバッファリング遅延を回避
     #endif
 
-    #if defined(_WIN32)
-        SDL_SetHint(SDL_HINT_WINDOWS_DPI_AWARENESS, "permonitorv2");
-        SDL_SetHint(SDL_HINT_RENDER_DRIVER, "opengl");   // ← 追加:D3D9のバッファリング遅延を回避
-    #endif
+    // ドライバを明示指定するとSDL2はバッチ描画を既定でOFFにするため、明示的にONにする
+    SDL_SetHint(SDL_HINT_RENDER_BATCHING, "1");
 
     if(SDL_Init(SDL_INIT_VIDEO | SDL_INIT_AUDIO) < 0){
         std::cout << "SDL初期化失敗\n";
+        return -1;
+    }
+
+    if(!(IMG_Init(IMG_INIT_PNG) & IMG_INIT_PNG)){
+        std::cout << "SDL_image初期化失敗: " << IMG_GetError() << "\n";
         return -1;
     }
 
@@ -66,6 +71,15 @@ int main(){
     PlayerSettings playerSettings;
     loadPlayerSettings(playerSettings);
 
+    // 設定ファイルの値でVSyncとFPS上限を反映
+    SDL_RenderSetVSync(renderer, playerSettings.vsync ? 1 : 0);
+    g_framePacer.setCap(playerSettings.fpsCap);
+
+    SDL_DisplayMode dm;
+    if(SDL_GetWindowDisplayMode(window, &dm) == 0){
+        std::cout << "モニターのリフレッシュレート: " << dm.refresh_rate << "Hz\n";
+    }
+
     SDL_Texture* prev = SDL_CreateTexture(renderer, SDL_PIXELFORMAT_BGRA8888, SDL_TEXTUREACCESS_TARGET, SCREEN_W, SCREEN_H);
     SDL_Texture* nex = SDL_CreateTexture(renderer, SDL_PIXELFORMAT_BGRA8888, SDL_TEXTUREACCESS_TARGET, SCREEN_W, SCREEN_H);
 
@@ -87,15 +101,15 @@ int main(){
 
                     SDL_SetRenderTarget(renderer, NULL);
 
+                    // 経過時間からprogressを求めるので、fpsに関係なく常に480msで遷移する
                     double progress = 0.0;
-                    bool transitionRunning = true;
+                    const double transitionMs = 480.0;
+                    const Uint64 tStart = SDL_GetPerformanceCounter();
+                    const double freq = static_cast<double>(SDL_GetPerformanceFrequency());
 
-                    while(transitionRunning && progress < 1.0){
-                        progress += 0.035;
-                        if(progress >= 1.0){
-                            progress = 1.0;
-                            transitionRunning = false;
-                        }
+                    while(progress < 1.0){
+                        double elapsedMs = (SDL_GetPerformanceCounter() - tStart) * 1000.0 / freq;
+                        progress = std::min(elapsedMs / transitionMs, 1.0);
 
                         SDL_Event ev;
                         while(SDL_PollEvent(&ev)){
@@ -108,7 +122,7 @@ int main(){
                         if(currentScene == GameScene::Shutdown) break;
 
                         renderTransition(renderer, prev, nex, progress);
-                        SDL_Delay(16);
+                        g_framePacer.endFrame(window);
                     }
                 }
 
@@ -147,6 +161,21 @@ int main(){
                 break;
             }
 
+            case GameScene::Tutorial:{
+                TutorialOverlay overlay;
+                if(!overlay.load(renderer, selectedScore)){
+                    std::cout << "[チュートリアル] 開始できませんでした\n";
+                    currentScene = GameScene::Select;
+                    break;
+                }
+                ResultData tutorialResult;
+                GameScene next = playGame(window, renderer, overlay.chartPath(), overlay.chartDifficulty(),
+                                        tutorialResult, playerSettings, false, nullptr, &overlay);
+                overlay.release();
+                currentScene = (next == GameScene::Shutdown) ? GameScene::Shutdown : GameScene::Select;
+                break;
+            }
+
             default:{
                 currentScene = GameScene::Shutdown;
                 break;
@@ -154,6 +183,8 @@ int main(){
         }
     }
 
+    // テクスチャはレンダラーより先に破棄する
+    releaseGraphicsCache();
     SDL_DestroyTexture(prev);
     SDL_DestroyTexture(nex);
     SDL_DestroyRenderer(renderer);
