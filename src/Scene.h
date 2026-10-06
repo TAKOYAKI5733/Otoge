@@ -34,6 +34,7 @@ struct PlayerSettings{
     int seVolume = 100;
     bool vsync = true;
     int fpsCap = 0;
+    int windowMode = 0;
 };
 
 void loadPlayerSettings(PlayerSettings& settings);

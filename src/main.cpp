@@ -1,5 +1,6 @@
 #include "GameCommon.h"
 #include "Play/tutorialOverlay.h"
+#include "Displaymode.h"
 
 #define SCREEN_W 1920
 #define SCREEN_H 1080
@@ -70,6 +71,7 @@ int main(){
 
     PlayerSettings playerSettings;
     loadPlayerSettings(playerSettings);
+    applyWindowMode(window, playerSettings.windowMode);
 
     // 設定ファイルの値でVSyncとFPS上限を反映
     SDL_RenderSetVSync(renderer, playerSettings.vsync ? 1 : 0);

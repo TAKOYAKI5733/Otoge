@@ -3,6 +3,7 @@
 #include "imgui.h"
 #include "imgui_impl_sdl2.h"
 #include "imgui_impl_sdlrenderer2.h"
+#include "Displaymode.h"
 
 using json = nlohmann::json;
 
@@ -28,6 +29,7 @@ void loadPlayerSettings(PlayerSettings& settings){
     settings.seVolume = j.value("seVolume", 100);
     settings.vsync  = j.value("vsync", true);
     settings.fpsCap = j.value("fpsCap", 0);
+    settings.windowMode = std::clamp(j.value("windowMode", 0), 0, 2);
 }
 
 void savePlayerSettings(const PlayerSettings& settings){
@@ -37,6 +39,7 @@ void savePlayerSettings(const PlayerSettings& settings){
     j["seVolume"] = settings.seVolume;
     j["vsync"]  = settings.vsync;
     j["fpsCap"] = settings.fpsCap;
+    j["windowMode"] = settings.windowMode;
 
     std::ofstream out(SETTING_PATH);
     if(out.is_open()){
@@ -115,6 +118,13 @@ GameScene settingScene(SDL_Window* window, SDL_Renderer* renderer, PlayerSetting
 
         ImGui::Separator();
 
+        ImGui::Text("Display");
+        const char* modeNames[] = {"Windowed", "Borderless", "Exclusive Fullscreen"};
+        ImGui::Combo("Window Mode", &edit.windowMode, modeNames, IM_ARRAYSIZE(modeNames));
+        ImGui::TextDisabled("Exclusive: uses your monitor's highest refresh rate");
+
+        ImGui::Separator();
+
         ImGui::Text("Volume");
         if(ImGui::SliderInt("BGM Volume", &edit.bgmVolume, 0, 100)){
             Mix_VolumeMusic(static_cast<int>(edit.bgmVolume * MIX_MAX_VOLUME / 100.0));
@@ -132,10 +142,10 @@ GameScene settingScene(SDL_Window* window, SDL_Renderer* renderer, PlayerSetting
         ImGui::Separator();
 
         if(ImGui::Button("SAVE")){
+            bool modeChanged = (edit.windowMode != playerSettings.windowMode);
             playerSettings = edit;
             savePlayerSettings(playerSettings);
-            SDL_RenderSetVSync(renderer, playerSettings.vsync ? 1 : 0);
-            g_framePacer.setCap(playerSettings.fpsCap); 
+            if(modeChanged) applyWindowMode(window, playerSettings.windowMode);
         }
         ImGui::SameLine();
         if(ImGui::Button("BACK")){
