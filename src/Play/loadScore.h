@@ -9,6 +9,8 @@ using json = nlohmann::json;
 struct DifficultyInfo{
     std::string name;
     std::string level;
+    std::string chartCreator;
+    int fileIndex = 0; 
 
     double currentScale = 1.0;
     double currentX = 0.0;
@@ -35,6 +37,8 @@ inline std::vector<DifficultyInfo> listDifficulties(const std::string& filename)
             DifficultyInfo info;
             info.name = d.value("name", std::string("DEFAULT"));
             info.level = d.value("level", std::string("0"));
+            info.chartCreator = d.value("chartCreator", std::string(""));
+            info.fileIndex = static_cast<int>(result.size());
             result.push_back(info);
         }
     }
@@ -108,6 +112,8 @@ inline bool loadScore(const std::string& filename, std::string& bgmName, std::ve
 
             if(noteType == 3)   newNote.type = NoteType::Drag;
             else if(noteType == 4)  newNote.type = NoteType::Lane;
+            else if(noteType == 5)  newNote.type = NoteType::Normal_c;
+            else if(noteType == 6) newNote.isCyan;
             else newNote.type = NoteType::Normal;
 
             if(item.contains("duration")){
@@ -124,7 +130,8 @@ inline bool loadScore(const std::string& filename, std::string& bgmName, std::ve
                 for(const auto& kf : item.at("path")){
                     PathKeyframe k;
                     k.time = kf.at("time").get<int32_t>();
-                    k.y = kf.value("easing", 1);
+                    k.y = kf.value("y", 1);
+                    k.easing = kf.value("easing", 1);
                     newNote.path.push_back(k);
                 }
 

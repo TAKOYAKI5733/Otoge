@@ -27,7 +27,7 @@
         }
       ],
       "chartCreator": "TKYK.env",
-      "level": "15",
+      "level": "14",
       "name": "MASTER【4LINE】",
       "notes": [
         {
@@ -247,12 +247,6 @@
         {
           "duration": 417,
           "lane": 2,
-          "time": 6666,
-          "type": 0
-        },
-        {
-          "duration": 417,
-          "lane": 3,
           "time": 6666,
           "type": 0
         },
@@ -9011,6 +9005,12 @@
           "lane": 4,
           "time": 178167,
           "type": 3
+        },
+        {
+          "duration": 416,
+          "lane": 3,
+          "time": 6667,
+          "type": 5
         }
       ],
       "speedEvents": [

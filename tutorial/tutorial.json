@@ -48,7 +48,7 @@
 
     { "type": "text", "start": 69692, "end": 71538, "text": "最高！", "x": 960, "y": 480, "size": 60, "anim": "pop", "in": 500, "out": 500, "wrap": 1200, "panel": false },
 
-    { "type": "text", "start": 71538, "end": 77077, "text": "レーンが閉じているときは\n半透明なノーツになるよ！", "x": 300, "y": 740, "size": 32, "anim": "pop", "wrap": 480 },
+    { "type": "text", "start": 71538, "end": 77077, "text": "レーンが閉じているときは\nどんなノーツか分からなくなるよ！", "x": 300, "y": 740, "size": 32, "anim": "pop", "wrap": 480 },
     { "type": "text", "start": 71738, "end": 77077, "text": "これも普通に叩こう！", "x": 300, "y": 840, "size": 32, "anim": "pop", "wrap": 480 },
 
     { "type": "text", "start": 77077, "end": 80769, "text": "これで説明は終わり！", "x": 960, "y": 380, "size": 42, "anim": "slideUp", "in": 500, "out": 500, "wrap": 1200, "panel": false },

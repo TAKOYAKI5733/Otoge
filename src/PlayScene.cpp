@@ -122,11 +122,13 @@ GameScene playGame(SDL_Window* window, SDL_Renderer* renderer, const std::string
     Mix_VolumeMusic(static_cast<int>(playerSettings.bgmVolume * MIX_MAX_VOLUME / 100.0));
     
     Mix_Chunk* tap_sound = Mix_LoadWAV("sounds/tapsound_2.wav");
-    if(!tap_sound){
+    Mix_Chunk* tap_sound_c = Mix_LoadWAV("sounds/tapsound_2.wav");
+    if(!tap_sound && !tap_sound_c){
         printf("効果音読込失敗\n");
     }
     else{
         Mix_VolumeChunk(tap_sound, static_cast<int>(playerSettings.seVolume * MIX_MAX_VOLUME / 100.0));
+        Mix_VolumeChunk(tap_sound_c, static_cast<int>(playerSettings.seVolume * MIX_MAX_VOLUME / 100.0));
     }
 
     //SDL系統処理
@@ -332,6 +334,7 @@ GameScene playGame(SDL_Window* window, SDL_Renderer* renderer, const std::string
             .effects = effects,
             .keyBeams = keyBeams,
             .tap_sound = tap_sound,
+            .tap_sound_c = tap_sound_c,
             .comboCount = comboCount,
             .startX = startX,
             .endX = endX,
@@ -462,6 +465,7 @@ GameScene playGame(SDL_Window* window, SDL_Renderer* renderer, const std::string
     TTF_CloseFont(font_init_waku);
     Mix_FreeMusic(bgm);
     Mix_FreeChunk(tap_sound);
+    Mix_FreeChunk(tap_sound_c);
     if(comboTexture) SDL_DestroyTexture(comboTexture);
     if(scoreTexture) SDL_DestroyTexture(scoreTexture);
     if(noteTextureNormal) SDL_DestroyTexture(noteTextureNormal);

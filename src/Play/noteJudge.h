@@ -4,6 +4,23 @@
 #include "Play/GameContext.h"
 #include "Play/type.h"
 
+inline constexpr int32_t LONG_RELEASE_GRACE_MS = 200;
+
+// ロングノーツを失敗状態にする。cutTime より上（後ろ）の部分を暗い芯で流す
+inline void markLongFailed(Note& note, int32_t cutTime){
+    if(note.type != NoteType::Long) return;
+    note.isFailed = true;
+    note.failCutTime = std::max(cutTime, note.targetTime);
+}
+
+inline void playHitSound(const GameContext& ctx, const Note& note){
+    Mix_Chunk* se = ctx.tap_sound;
+    if((note.type == NoteType::Normal_c || note.isCyan) && ctx.tap_sound_c){
+        se = ctx.tap_sound_c;
+    }
+    if(se) Mix_PlayChannel(-1, se, 0);
+}
+
 inline void toggleLaneActive(GameContext& ctx, const Note& note){
     int startLane = note.lane;
     int endLane = note.lane + note.widthLanes - 1;
@@ -58,9 +75,7 @@ inline void NoteJudge(GameContext& ctx, Tex& tex, Sq& sq){
                             ctx.scorePop.startTime = ctx.musicTime;
                             ctx.comboPop.startTime = ctx.musicTime;
 
-                            if(ctx.tap_sound){
-                                Mix_PlayChannel(-1, ctx.tap_sound, 0);
-                            }
+                            playHitSound(ctx, note);
 
                             if(note.type == NoteType::Long){
                                 note.isHolding = true;
@@ -83,9 +98,7 @@ inline void NoteJudge(GameContext& ctx, Tex& tex, Sq& sq){
                             ctx.scorePop.startTime = ctx.musicTime;
                             ctx.comboPop.startTime = ctx.musicTime;
 
-                            if(ctx.tap_sound){
-                                Mix_PlayChannel(-1, ctx.tap_sound, 0);
-                            }
+                            playHitSound(ctx, note);
 
                             if(note.type == NoteType::Long){
                                 note.isHolding = true;
@@ -98,6 +111,7 @@ inline void NoteJudge(GameContext& ctx, Tex& tex, Sq& sq){
                         else if(timeDiff <= 90){
                             ctx.laneJudge[i] = {tex.bad, sq.bad, ctx.musicTime};
                             note.isHit = true;
+                            markLongFailed(note, note.targetTime);
                             newEffect.judgeType = 3;
                             newEffect.lane = note.lane;
                             newEffect.widthLanes = note.widthLanes;
@@ -174,6 +188,7 @@ inline void NoteJudge(GameContext& ctx, Tex& tex, Sq& sq){
             if(ctx.musicTime > note.targetTime && (ctx.musicTime - note.targetTime > 200)){
                 ctx.laneJudge[note.lane]  = {tex.miss, sq.miss, ctx.musicTime};
                 note.isHit = true;
+                markLongFailed(note, note.targetTime);
                 ctx.scoreTracker.registerJudge("MISS");
                 
                 ctx.isAP = ctx.isFC = false;
@@ -204,24 +219,24 @@ inline void NoteJudge(GameContext& ctx, Tex& tex, Sq& sq){
             }
 
             // 途中で指を離した場合
-            if(!isHoldingArea){
-                ln.isHolding = false;
-                ln.isHit = true;
-                if(endTime - ctx.musicTime <= 200){
-                    ctx.laneJudge[i] = {tex.perfect, sq.perfect, ctx.musicTime};
-                    Mix_PlayChannel(-1, ctx.tap_sound, 0);
-                    ctx.scoreTracker.registerJudge("PERFECT");
-                    ctx.scorePop.startTime = ctx.musicTime;
-                    ctx.comboPop.startTime = ctx.musicTime;
+            if(!isHoldingArea && !ln.releaseGrace){
+                if(endTime - ctx.musicTime <= LONG_RELEASE_GRACE_MS){
+                    // 終点直前：失敗にせず、ホールドしている扱いのまま終点まで流す
+                    // 判定と音は下の「終点に無事到達した場合」で、終点の時刻に出す
+                    ln.releaseGrace = true;
                 }
                 else{
+                    // 早すぎる：MISS
+                    ln.isHolding = false;
+                    ln.isHit = true;
                     ctx.laneJudge[i] = {tex.miss, sq.miss, ctx.musicTime};
                     Mix_PlayChannel(-1, ctx.tap_sound, 0);
                     ctx.scoreTracker.registerJudge("MISS");
+                    markLongFailed(ln, ctx.musicTime);
 
                     ctx.isAP = ctx.isFC = false;
+                    continue;
                 }
-                continue;
             }
 
             // 終点に無事到達した場合

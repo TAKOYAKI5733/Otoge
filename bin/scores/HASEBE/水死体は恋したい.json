@@ -1,14 +1,20 @@
 {
-  "bgm": "",
+  "bgm": "水死体は恋したい - LonePi feat.初音ミク.mp3",
   "composer": "LonePi",
   "difficulties": [
     {
-      "bpm": 120.0,
+      "bpm": 127.0,
       "bpmEvents": [],
       "chartCreator": "Unknown",
       "level": "0",
-      "name": "EAZY",
-      "notes": [],
+      "name": "EASY",
+      "notes": [
+        {
+          "lane": 4,
+          "time": 472,
+          "type": 0
+        }
+      ],
       "speedEvents": []
     }
   ],

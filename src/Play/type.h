@@ -6,8 +6,10 @@
 
 enum class NoteType{
     Normal,
+    Normal_c,
     Lane,
     Long,
+    Long_c,
     Drag
 };
   
@@ -34,7 +36,12 @@ struct Note{
     int32_t lastTickTime = 0;
     bool isHolding = false;
 
+    bool isFailed = false;
+    int32_t failCutTime = 0;
+    bool releaseGrace = false;
+
     bool movesLane = false;
+    bool isCyan = false;
 
     bool hasCustomSpeed = false;
     double customSpeed = 1.0;

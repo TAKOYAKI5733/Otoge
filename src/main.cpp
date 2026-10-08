@@ -39,9 +39,14 @@ int main(){
         return -1;
     }
 
-    if(!(IMG_Init(IMG_INIT_PNG) & IMG_INIT_PNG)){
+    int imgFlags = IMG_INIT_PNG | IMG_INIT_JPG;
+    int imgInited = IMG_Init(imgFlags);
+    if(!(imgInited & IMG_INIT_PNG)){                 // PNG は必須
         std::cout << "SDL_image初期化失敗: " << IMG_GetError() << "\n";
         return -1;
+    }
+    if(!(imgInited & IMG_INIT_JPG)){                 // JPG は無くても続行
+        std::cout << "[警告]JPG非対応のため、ジャケットはPNGのみ使用できます\n";
     }
 
     if(TTF_Init() < 0){
@@ -192,6 +197,7 @@ int main(){
     SDL_DestroyRenderer(renderer);
     SDL_DestroyWindow(window);
     Mix_CloseAudio();
+    IMG_Quit();
     TTF_Quit();
     SDL_Quit();
 

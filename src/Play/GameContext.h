@@ -33,6 +33,7 @@ struct GameContext{
     std::vector<KeyBeam>& keyBeams;
     
     Mix_Chunk* tap_sound;
+    Mix_Chunk* tap_sound_c;
 
     int& comboCount;
 

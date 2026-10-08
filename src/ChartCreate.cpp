@@ -30,6 +30,16 @@ struct EditorNote{
     bool isLong() const {return duration > 0;}
 };
 
+static const char* kNoteTypeNames[]  = {"Normal(0)", "Drag(3)", "Lane(4)", "Normal_c(5)"};
+static const int   kNoteTypeValues[] = {0, 3, 4, 5};
+static constexpr int kNoteTypeCount  = 4;
+
+inline int noteTypeToComboIndex(int typeValue){
+    for(int i = 0; i < kNoteTypeCount; i++){
+        if(kNoteTypeValues[i] == typeValue) return i;
+    }
+    return 0;
+}
 struct EditorSpeedEvent{
     int32_t time = 0;
     double target = 1.0;
@@ -47,7 +57,7 @@ struct EditorBpmEvent{
 };
 
 struct EditorDifficulty{
-    std::string name = "EAZY";
+    std::string name = "EASY";
     std::string level = "0";
     std::string chartCreator = "Unknown";
     double bpm = 120.0;
@@ -144,7 +154,7 @@ inline void saveChart(const std::string& path, const ChartMeta& meta, const std:
 
 inline EditorDifficulty parseOneDifficulty(const json& src){
     EditorDifficulty d;
-    d.name = src.value("name", std::string("EAZY"));
+    d.name = src.value("name", std::string("EASY"));
     d.level = src.value("level", std::string("0"));
     d.chartCreator = src.value("chartCreator", std::string("Unknown"));
     d.bpm = src.value("bpm", 120.0);
@@ -335,7 +345,8 @@ GameScene chartCreateScene(SDL_Window* window, SDL_Renderer* renderer, std::stri
     bool musicNeedsStart = true;
 
     Mix_Chunk* tap_sound = Mix_LoadWAV("sounds/tapsound_2.wav");
-    if(!tap_sound){
+    Mix_Chunk* tap_sound_c = Mix_LoadWAV("sounds/tapsound_2.wav");
+    if(!tap_sound && !tap_sound_c){
         printf("効果音読込失敗\n");
     }
 
@@ -444,8 +455,6 @@ GameScene chartCreateScene(SDL_Window* window, SDL_Renderer* renderer, std::stri
     bool running = true;
     SDL_Event e;
     GameScene nextScene = GameScene::Select;
-
-    const char* typenames[] = {"Normal(0)", "Drag(3)", "Lane(4)"};
 
     while(running){
         uint32_t nowTicks = SDL_GetTicks();
@@ -748,7 +757,8 @@ GameScene chartCreateScene(SDL_Window* window, SDL_Renderer* renderer, std::stri
                     fx.lane = n.lane;
                     fx.spawnTime = nowTicks;
                     flashEffects.push_back(fx);
-                    Mix_PlayChannel(-1, tap_sound, 0);
+                    Mix_Chunk* se = (n.noteTypeInt == 5 && !n.isLong() && tap_sound_c) ? tap_sound_c : tap_sound;
+                    Mix_PlayChannel(-1, se, 0);
                 }
             }
         }
@@ -992,9 +1002,9 @@ GameScene chartCreateScene(SDL_Window* window, SDL_Renderer* renderer, std::stri
 
         //ツールバー
         ImGui::Begin("Tool");
-        int typeComboIndex = (toolNotetype == 3) ? 1 : (toolNotetype == 4) ? 2 : 0;
-        if(ImGui::Combo("SEPARATE TYPE", &typeComboIndex, typenames, 3)){
-            toolNotetype = (typeComboIndex == 1) ? 3 : (typeComboIndex == 2) ? 4 : 0;
+        int typeComboIndex = noteTypeToComboIndex(toolNotetype);
+        if(ImGui::Combo("SEPARATE TYPE", &typeComboIndex, kNoteTypeNames, kNoteTypeCount)){
+            toolNotetype = kNoteTypeValues[typeComboIndex];
         }
 
         ImGui::SliderInt("WidthLanes", &toolWidth, 1, 6);
@@ -1024,9 +1034,9 @@ GameScene chartCreateScene(SDL_Window* window, SDL_Renderer* renderer, std::stri
             EditorNote& n = currentDiff().notes[selectedNoteIndex];
             ImGui::Begin("Note Inspector");
 
-            int nTypeComboIndex = (n.noteTypeInt == 3) ? 1 : (n.noteTypeInt == 4) ? 2 : 0;
-            if(ImGui::Combo("SEPARATE TYPE##inspector", &nTypeComboIndex, typenames, 3)){
-                n.noteTypeInt = (nTypeComboIndex == 1) ? 3 : (nTypeComboIndex == 2) ? 4 : 0;
+            int nTypeComboIndex = noteTypeToComboIndex(n.noteTypeInt);
+            if(ImGui::Combo("SEPARATE TYPE##inspector", &nTypeComboIndex, kNoteTypeNames, kNoteTypeCount)){
+                n.noteTypeInt = kNoteTypeValues[nTypeComboIndex];
             }
 
             ImGui::SliderInt("レーン", &n.lane, 0, 5);
@@ -1317,6 +1327,7 @@ GameScene chartCreateScene(SDL_Window* window, SDL_Renderer* renderer, std::stri
 
         if(n.noteTypeInt == 3) SDL_SetRenderDrawColor(renderer, 250, 250, 150, 255);
         else if(n.noteTypeInt == 4) SDL_SetRenderDrawColor(renderer, 255, 50, 50, 255);
+        else if(n.noteTypeInt == 5) SDL_SetRenderDrawColor(renderer, 80, 220, 255, 255);
         else SDL_SetRenderDrawColor(renderer, 255, 255, 255, 255);
 
         SDL_RenderFillRect(renderer, &noteRect);
@@ -1400,6 +1411,7 @@ ImGui_ImplSDLRenderer2_Shutdown();
 ImGui_ImplSDL2_Shutdown();
 ImGui::DestroyContext();
 Mix_FreeChunk(tap_sound);
+Mix_FreeChunk(tap_sound_c);
 
 return nextScene;
 }

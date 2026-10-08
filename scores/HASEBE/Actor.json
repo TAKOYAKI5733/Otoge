@@ -1,13 +1,13 @@
 {
   "bgm": "Actor_初音ミク.mp3",
-  "composer": "六か",
+  "composer": "6ckka(ろっか)",
   "difficulties": [
     {
       "bpm": 120.0,
       "bpmEvents": [],
       "chartCreator": "Unknown",
       "level": "0",
-      "name": "EAZY",
+      "name": "EASY",
       "notes": [],
       "speedEvents": []
     }

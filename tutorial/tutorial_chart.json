@@ -7,7 +7,7 @@
       "bpmEvents": [],
       "chartCreator": "Unknown",
       "level": "0",
-      "name": "EAZY",
+      "name": "EASY",
       "notes": [
         {
           "lane": 1,
@@ -135,33 +135,23 @@
         },
         {
           "lane": 1,
-          "time": 73385,
+          "time": 74308,
           "type": 0
         },
         {
-          "lane": 2,
-          "time": 74308,
+          "lane": 1,
+          "time": 73385,
           "type": 4
         },
         {
-          "lane": 3,
+          "lane": 4,
           "time": 75231,
           "type": 4
         },
         {
           "lane": 4,
           "time": 76154,
-          "type": 0
-        },
-        {
-          "lane": 1,
-          "time": 77077,
-          "type": 4
-        },
-        {
-          "lane": 4,
-          "time": 77077,
-          "type": 4
+          "type": 3
         },
         {
           "lane": 1,
@@ -264,13 +254,33 @@
           "speed": 1000.0,
           "time": 91269,
           "type": 3
+        },
+        {
+          "lane": 3,
+          "time": 74769,
+          "type": 4
+        },
+        {
+          "lane": 3,
+          "time": 73846,
+          "type": 0
+        },
+        {
+          "lane": 2,
+          "time": 75692,
+          "type": 3
+        },
+        {
+          "lane": 2,
+          "time": 76615,
+          "type": 4
         }
       ],
       "speedEvents": [
         {
           "duration": 0,
           "easing": 1,
-          "target": 1.2000000000000002,
+          "target": 1.0,
           "time": 462
         }
       ]

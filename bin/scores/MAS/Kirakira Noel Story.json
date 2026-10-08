@@ -1,0 +1,16 @@
+{
+  "bgm": "Kirakira Noel Story!! _ Reku Mochizuki.mp3",
+  "composer": "Unknown",
+  "difficulties": [
+    {
+      "bpm": 180.0,
+      "bpmEvents": [],
+      "chartCreator": "Unknown",
+      "level": "0",
+      "name": "EASY",
+      "notes": [],
+      "speedEvents": []
+    }
+  ],
+  "offset": 0.0
+}
