@@ -1,0 +1,49 @@
+{
+  "bgm": "ソノリティ_R Sound Design feat.初音ミク-Sonority.mp3",
+  "composer": "Unknown",
+  "difficulties": [
+    {
+      "bpm": 148.0,
+      "bpmEvents": [],
+      "chartCreator": "TKYK.env",
+      "level": "14",
+      "name": "MASTER(4LINE)",
+      "notes": [
+        {
+          "lane": 4,
+          "time": 1622,
+          "type": 0
+        }
+      ],
+      "speedEvents": []
+    },
+    {
+      "bpm": 148.0,
+      "bpmEvents": [],
+      "chartCreator": "TKYK.env",
+      "level": "0",
+      "name": "HARD",
+      "notes": [],
+      "speedEvents": []
+    },
+    {
+      "bpm": 148.0,
+      "bpmEvents": [],
+      "chartCreator": "TKYK.env",
+      "level": "0",
+      "name": "NORMAL",
+      "notes": [],
+      "speedEvents": []
+    },
+    {
+      "bpm": 148.0,
+      "bpmEvents": [],
+      "chartCreator": "TKYK.env",
+      "level": "0",
+      "name": "EASY",
+      "notes": [],
+      "speedEvents": []
+    }
+  ],
+  "offset": 0.0
+}

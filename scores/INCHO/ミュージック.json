@@ -5,9 +5,9 @@
     {
       "bpm": 136.01138835082037,
       "bpmEvents": [],
-      "chartCreator": "Unknown",
+      "chartCreator": "TKYK.env",
       "level": "0",
-      "name": "LONG MASTER(4LINE)",
+      "name": "MASTER(4LINE)",
       "notes": [
         {
           "lane": 1,
@@ -25,6 +25,33 @@
           "type": 0
         }
       ],
+      "speedEvents": []
+    },
+    {
+      "bpm": 136.01138835082037,
+      "bpmEvents": [],
+      "chartCreator": "TKYK.env",
+      "level": "0",
+      "name": "HARD",
+      "notes": [],
+      "speedEvents": []
+    },
+    {
+      "bpm": 136.01138835082037,
+      "bpmEvents": [],
+      "chartCreator": "TKYK.env",
+      "level": "0",
+      "name": "NORMAL",
+      "notes": [],
+      "speedEvents": []
+    },
+    {
+      "bpm": 136.01138835082037,
+      "bpmEvents": [],
+      "chartCreator": "TKYK.env",
+      "level": "0",
+      "name": "EASY",
+      "notes": [],
       "speedEvents": []
     }
   ],

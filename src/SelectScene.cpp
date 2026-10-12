@@ -2,6 +2,7 @@
 #include <nlohmann/json.hpp>
 #include "Play/PlaySceneManager.h"
 #include "JacketSpectrum.h"
+#include "Settingspanel.h"
 #include <algorithm>
 #include <unordered_map>
 #include <cmath>
@@ -43,11 +44,18 @@ struct GenreInfo{
     double currentX = -1.0;
     bool positionInittailized = false;
     bool isTutorial = false;
+    bool isAll = false;
 };
 
 enum class SelectMode{
     SelectGenre,
     SelectSong
+};
+
+// ALL の並べ替えの基準
+enum class SortKey{
+    Title,   // 曲名
+    Level    // 表示中の難易度のレベル
 };
 struct JacketManager{
     std::unordered_map<std::string, SDL_Texture*> cache;  // 譜面パス → テクスチャ（読込失敗は nullptr）
@@ -80,6 +88,7 @@ void draw_Jacket(SDL_Renderer* renderer, TTF_Font* labelFont, JacketManager& jm,
 void destroyJackets(JacketManager& jm);
 void draw_DifficultyBadge(SDL_Renderer* renderer, TTF_Font* font, TTF_Font* labelFont, const std::vector<DifficultyInfo>& diffs, int index, double animation, double slide);
 void draw_JacketVisualizer(SDL_Renderer* renderer, const JacketManager& jm, const JacketSpectrum& viz);
+void sortAllSongs(GenreInfo& all, SortKey key, bool descending, int difficultyCursor, int& songCursor);
 
 //メイン関数
 GameScene selectSongScene(SDL_Window* window, SDL_Renderer* renderer, std::string& outSelectedScorePath, int& outSelectedDifficulty, PlayerSettings& playerSettings, bool& outAutoplay, SDL_Texture* targetTex){
@@ -87,6 +96,18 @@ GameScene selectSongScene(SDL_Window* window, SDL_Renderer* renderer, std::strin
     if(categories.empty()){
         std::cout << "[エラー]曲がねぇ\n";
         return GameScene::Shutdown;
+    }
+
+    {
+        GenreInfo all;
+        all.genreName = "ALL";
+        all.isAll = true;
+        for(const auto& genre : categories){
+            all.songList.insert(all.songList.end(), genre.songList.begin(), genre.songList.end());
+        }
+        int unusedCursor = 0;
+        sortAllSongs(all, SortKey::Title, false, 0, unusedCursor);
+        categories.insert(categories.begin(), all);
     }
 
     {
@@ -106,6 +127,8 @@ GameScene selectSongScene(SDL_Window* window, SDL_Renderer* renderer, std::strin
     int genreCursor = 0;
     int songCursor = 0;
     int difficultyCursor = 0;   // プレイヤーが選んだ難易度の「順番」（曲を移っても維持する）
+    SortKey sortKey = SortKey::Title;   // ALL の並べ替えの基準
+    bool sortDescending = false;        // true で降順
 
     TTF_Font* font = TTF_OpenFont("fonts/prac.ttf", 40);
     TTF_Font* sub_font = TTF_OpenFont("fonts/prac.ttf", 35);
@@ -123,7 +146,7 @@ GameScene selectSongScene(SDL_Window* window, SDL_Renderer* renderer, std::strin
     Mix_Music* bgm = nullptr;
     std::string currentPlayPath = "";
     std::string dafaultBgmPath = "sounds/十番街、雨【シティ探索BGM】.mp3";
-    Mix_VolumeMusic(70);
+        Mix_VolumeMusic(static_cast<int>(playerSettings.bgmVolume * MIX_MAX_VOLUME / 100.0));
 
     double detailAnimation = 0.0;
     double chartAnimation = 0.0;   // 譜面製作者の行の表示量 (0.0〜1.0)
@@ -155,6 +178,8 @@ GameScene selectSongScene(SDL_Window* window, SDL_Renderer* renderer, std::strin
 
     JacketSpectrum visualizer(12);   // バーの本数（少ないほど1本が太くなる）
     visualizer.start();
+    SettingsPanel settings;
+    settings.init();
 
     while(running){
         std::string targetMusicPath = dafaultBgmPath;
@@ -211,6 +236,11 @@ GameScene selectSongScene(SDL_Window* window, SDL_Renderer* renderer, std::strin
             }
 
             if(e.type == SDL_KEYDOWN){
+                if(settings.isOpen()){
+                    settings.handleKey(e.key, window, renderer, playerSettings);
+                    continue;
+                }
+
                 bool cursorMoved = false;
 
                 switch(e.key.keysym.sym){
@@ -264,6 +294,9 @@ GameScene selectSongScene(SDL_Window* window, SDL_Renderer* renderer, std::strin
 
                         difficultyCursor = next;
                         diffSlide = toRight ? 1.0 : -1.0;   // 押した方向から次の難易度が入ってくる
+                        if(sortKey == SortKey::Level && categories[genreCursor].isAll){
+                            sortAllSongs(categories[genreCursor], sortKey, sortDescending, difficultyCursor, songCursor);
+                        }
                         break;
                     }
 
@@ -314,8 +347,22 @@ GameScene selectSongScene(SDL_Window* window, SDL_Renderer* renderer, std::strin
                     }
 
                     case SDLK_F2:{
-                        nextScene = GameScene::Setting;
-                        running = false;
+                        if(!e.key.repeat) settings.open(playerSettings);   // 別画面に行かずに開く
+                        break;
+                    }
+
+                                        case SDLK_F3:
+                    case SDLK_F4:{
+                        // ALL の曲選択中だけ有効
+                        if(currentMode != SelectMode::SelectSong || !categories[genreCursor].isAll) break;
+
+                        if(e.key.keysym.sym == SDLK_F3){
+                            sortKey = (sortKey == SortKey::Title) ? SortKey::Level : SortKey::Title;
+                        }
+                        else{
+                            sortDescending = !sortDescending;
+                        }
+                        sortAllSongs(categories[genreCursor], sortKey, sortDescending, difficultyCursor, songCursor);
                         break;
                     }
                 }
@@ -328,6 +375,16 @@ GameScene selectSongScene(SDL_Window* window, SDL_Renderer* renderer, std::strin
 
         SDL_SetRenderDrawColor(renderer, 15, 15, 25, 255);
         SDL_RenderClear(renderer);
+
+        if(currentMode == SelectMode::SelectSong && categories[genreCursor].isAll){
+            songPanel.title = std::string("MUSIC / ")
+                            + (sortKey == SortKey::Title ? "TITLE" : "LEVEL")
+                            + (sortDescending ? " DESC" : " ASC")
+                            + "  [F3/F4]";
+        }
+        else{
+            songPanel.title = "MUSIC";
+        }
 
         draw_ListsInPanels(renderer, font, label_font, categories, genreCursor, songCursor,
                            currentMode, genrePanel, songPanel);
@@ -345,10 +402,17 @@ GameScene selectSongScene(SDL_Window* window, SDL_Renderer* renderer, std::strin
             draw_songDetail(renderer, font, label_font, song, detailAnimation, diff, chartAnimation);
         }
 
+        settings.update();
+        settings.draw(renderer, font, label_font, playerSettings);   // 一番手前に描く
+
+
         SDL_RenderPresent(renderer);
 
         SDL_Delay(8);
     }
+
+    if(settings.isOpen()) settings.close(window, playerSettings);
+    settings.destroy();
 
     visualizer.stop();   // BGM を止める前に音声の受け取りを止める
     if(bgm){
@@ -1120,5 +1184,115 @@ void draw_JacketVisualizer(SDL_Renderer* renderer, const JacketManager& jm, cons
         SDL_Rect cap = {body.x, body.y, barW, 3};
         SDL_SetRenderDrawColor(renderer, VIS_CAP.r, VIS_CAP.g, VIS_CAP.b, capA);
         SDL_RenderFillRect(renderer, &cap);
+    }
+}
+
+// ===== ALL の並べ替え =====
+
+// UTF-8 の文字列を1文字ずつ Unicode の番号（コードポイント）に分解する
+static std::vector<char32_t> decodeUtf8(const std::string& s){
+    std::vector<char32_t> out;
+    size_t i = 0;
+    while(i < s.size()){
+        unsigned char c = static_cast<unsigned char>(s[i]);
+        char32_t cp;
+        int len;
+        if(c < 0x80)             { cp = c;        len = 1; }   // 1バイト（ASCII）
+        else if((c >> 5) == 0x6) { cp = c & 0x1F; len = 2; }   // 2バイト
+        else if((c >> 4) == 0xE) { cp = c & 0x0F; len = 3; }   // 3バイト（かな・漢字）
+        else if((c >> 3) == 0x1E){ cp = c & 0x07; len = 4; }   // 4バイト（絵文字など）
+        else { i++; continue; }                                 // 壊れたバイトは飛ばす
+
+        if(i + len > s.size()) break;
+        for(int k = 1; k < len; k++){
+            cp = (cp << 6) | (static_cast<unsigned char>(s[i + k]) & 0x3F);
+        }
+        out.push_back(cp);
+        i += len;
+    }
+    return out;
+}
+
+// 1文字を「グループ（0:英数字 1:かな 2:その他）」と「比較用の番号」に変換する
+struct CollateChar{
+    int group;
+    char32_t key;
+};
+
+static CollateChar collateKey(char32_t c){
+    if(c >= 0xFF01 && c <= 0xFF5E) c -= 0xFEE0;            // 全角英数記号 → 半角
+    if(c >= 'a' && c <= 'z') c -= 32;                      // 小文字 → 大文字
+    if(c < 0x80) return {0, c};                            // 英数字・記号
+
+    if(c >= 0x30A1 && c <= 0x30F6) c -= 0x60;              // カタカナ → ひらがな
+    if((c >= 0x3041 && c <= 0x3096) || c == 0x30FC){       // ひらがな・長音「ー」
+        return {1, c};
+    }
+    return {2, c};                                         // 漢字など
+}
+
+// 曲名の比較：a が b より前なら true
+static bool titleLess(const std::string& a, const std::string& b){
+    std::vector<char32_t> ca = decodeUtf8(a);
+    std::vector<char32_t> cb = decodeUtf8(b);
+    size_t n = std::min(ca.size(), cb.size());
+
+    for(size_t i = 0; i < n; i++){
+        CollateChar ka = collateKey(ca[i]);
+        CollateChar kb = collateKey(cb[i]);
+        if(ka.group != kb.group) return ka.group < kb.group;
+        if(ka.key != kb.key)     return ka.key < kb.key;
+    }
+    return ca.size() < cb.size();   // 途中まで同じなら短いほうが前
+}
+
+// レベルの文字列を数値にする（"12" → 12、"12+" → 12.5、数字で始まらない → -1）
+static double parseLevel(const std::string& s){
+    size_t i = 0;
+    int value = 0;
+    bool hasDigit = false;
+    while(i < s.size() && std::isdigit(static_cast<unsigned char>(s[i]))){
+        value = value * 10 + (s[i] - '0');
+        hasDigit = true;
+        i++;
+    }
+    if(!hasDigit) return -1.0;
+    return (s.find('+') != std::string::npos) ? value + 0.5 : static_cast<double>(value);
+}
+
+void sortAllSongs(GenreInfo& all, SortKey key, bool descending, int difficultyCursor, int& songCursor){
+    if(all.songList.empty()) return;
+
+    // 並べ替え後もカーソルを同じ曲に付けるため、今の曲の譜面パスを覚えておく
+    int cur = std::clamp(songCursor, 0, static_cast<int>(all.songList.size()) - 1);
+    std::string currentPath = all.songList[cur].scorePath;
+
+    // 表示中の難易度のレベル（←→ で選んでいる順番を、その曲の範囲に収めて使う）
+    auto levelOf = [difficultyCursor](const SongInfo& s){
+        if(s.difficulties.empty()) return parseLevel(s.level);
+        int idx = clampDifficulty(difficultyCursor, s.difficulties.size());
+        return parseLevel(s.difficulties[idx].level);
+    };
+
+    std::stable_sort(all.songList.begin(), all.songList.end(),
+        [&](const SongInfo& a, const SongInfo& b){
+            if(key == SortKey::Level){
+                double la = levelOf(a);
+                double lb = levelOf(b);
+                bool unknownA = (la < 0);
+                bool unknownB = (lb < 0);
+                if(unknownA != unknownB) return unknownB;               // レベル不明は常に最後
+                if(la != lb) return descending ? (la > lb) : (la < lb);
+                return titleLess(a.title, b.title);                     // 同じレベルは曲名の昇順
+            }
+            return descending ? titleLess(b.title, a.title) : titleLess(a.title, b.title);
+        });
+
+    // 覚えておいた曲を探して、カーソルをそこへ移す
+    for(size_t i = 0; i < all.songList.size(); i++){
+        if(all.songList[i].scorePath == currentPath){
+            songCursor = static_cast<int>(i);
+            break;
+        }
     }
 }

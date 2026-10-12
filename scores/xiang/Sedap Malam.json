@@ -5,7 +5,34 @@
     {
       "bpm": 120.0,
       "bpmEvents": [],
-      "chartCreator": "Unknown",
+      "chartCreator": "TKYK.env",
+      "level": "11",
+      "name": "MASTER(6LINE)",
+      "notes": [],
+      "speedEvents": []
+    },
+    {
+      "bpm": 120.0,
+      "bpmEvents": [],
+      "chartCreator": "TKYK.env",
+      "level": "0",
+      "name": "HARD",
+      "notes": [],
+      "speedEvents": []
+    },
+    {
+      "bpm": 120.0,
+      "bpmEvents": [],
+      "chartCreator": "TKYK.env",
+      "level": "0",
+      "name": "NORMAL",
+      "notes": [],
+      "speedEvents": []
+    },
+    {
+      "bpm": 120.0,
+      "bpmEvents": [],
+      "chartCreator": "TKYK.env",
       "level": "0",
       "name": "EASY",
       "notes": [],

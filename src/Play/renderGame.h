@@ -38,6 +38,12 @@ inline double evaluatNotePathY(const Note& note, double musicTime){
 // ===== 同時押しの補助線 =====
 inline constexpr float     SYNC_LINE_THICKNESS = 6.0f;                 // 線の太さ(px)
 inline constexpr SDL_Color SYNC_LINE_COLOR     = {255, 255, 255, 160};  // 線の色（半透明の白）
+inline constexpr float NOTE_SIDE_MARGIN = 8.0f;   // ノーツの左右それぞれの、レーンとの隙間(px)
+
+inline constexpr float     SYNC_FRAME_WIDTH = 5.0f;                    // 枠の太さ（隙間込み）
+inline constexpr float     SYNC_FRAME_GAP   = 2.0f;                    // ヘッドと枠の間の暗い隙間
+inline constexpr SDL_Color SYNC_FRAME_COLOR = {255, 190, 30, 0};     // 濃い金色
+inline constexpr SDL_Color SYNC_FRAME_GAP_COLOR = {20, 20, 30, 0};   // 隙間の色    // ← 追加：Drag より淡い黄色
 
 // ノーツの中心の y 座標を求める（ノーツ本体の描画と補助線で共通に使う）
 inline int computeNoteY(const GameContext& ctx, const Note& note, double currentNoteSpeed){
@@ -72,12 +78,15 @@ inline void drawThickLine(SDL_Renderer* renderer, float x1, float y1, float x2, 
 }
 
 // 同じ時刻・別レーンのノーツどうしを線でつなぐ
-inline void drawSyncLines(GameContext& ctx, double currentNoteSpeed, int laneX[6]){
-    struct Point{ float x; float y; };
+// outIsSync には、線でつないだノーツの番号（ctx.notes の添字）に 1 が入る
+inline void drawSyncLines(GameContext& ctx, double currentNoteSpeed, int laneX[6], std::vector<char>& outIsSync){
+    struct Point{ float x; float y; size_t index; };
     std::vector<Point> group;
     group.reserve(6);
 
     const size_t n = ctx.notes.size();
+    outIsSync.assign(n, 0);
+
     size_t i = 0;
     while(i < n){
         // 1. targetTime が同じ連続部分 [i, j) をひとまとまりにする
@@ -94,10 +103,10 @@ inline void drawSyncLines(GameContext& ctx, double currentNoteSpeed, int laneX[6
             if(y < -50 || y > SCREEN_H + 50) continue;       // 画面外は描かない
 
             float cx = laneX[note.lane] + ctx.laneWidth * note.widthLanes / 2.0f;
-            group.push_back({cx, static_cast<float>(y)});
+            group.push_back({cx, static_cast<float>(y), j});
         }
 
-        // 2. 2つ以上残っていれば、左から順に隣どうしを結ぶ
+        // 2. 2つ以上残っていれば、左から順に隣どうしを結び、結んだノーツに印を付ける
         if(group.size() >= 2){
             std::sort(group.begin(), group.end(),
                       [](const Point& a, const Point& b){ return a.x < b.x; });
@@ -106,6 +115,8 @@ inline void drawSyncLines(GameContext& ctx, double currentNoteSpeed, int laneX[6
                 if(group[k + 1].x - group[k].x < 1.0f) continue;   // 同じレーンどうしは結ばない
                 drawThickLine(ctx.renderer, group[k].x, group[k].y, group[k + 1].x, group[k + 1].y,
                               SYNC_LINE_THICKNESS, SYNC_LINE_COLOR);
+                outIsSync[group[k].index]     = 1;
+                outIsSync[group[k + 1].index] = 1;
             }
         }
 
@@ -113,22 +124,24 @@ inline void drawSyncLines(GameContext& ctx, double currentNoteSpeed, int laneX[6
     }
 }
 
-inline void renderGamePlayScreen(GameContext& ctx, Tex& tex, Sq& sq, double currentNoteSpeed, int laneX[6]){
+inline void renderGamePlayScreen(GameContext& ctx, Tex& tex, Sq& sq, double currentNoteSpeed, int laneX[6], bool present = true){
     GradientBackground(ctx.renderer, SCREEN_W, SCREEN_H, ctx.musicTime);
     draw_waku_init(ctx.renderer, tex, sq, ctx.laneActive);
     if(ctx.visualizer) ctx.visualizer->render(ctx.renderer);
 
     SDL_SetRenderDrawBlendMode(ctx.renderer, SDL_BLENDMODE_BLEND);
 
-    drawSyncLines(ctx, currentNoteSpeed, laneX);
+    std::vector<char> isSync;
+    drawSyncLines(ctx, currentNoteSpeed, laneX, isSync);
 
     SDL_SetRenderDrawColor(ctx.renderer, 255, 255, 255, 255);
     SDL_Texture* lastModTexture = nullptr;
     
-    RoundedRectBatch shadowBatch;  // 影（一番奥）
-    RoundedRectBatch bodyBatch;    // ロングノーツの帯（一番奥）
-    RoundedRectBatch innerBatch;   // 帯の中の芯（帯の手前）
-    RoundedRectBatch noteBatch;    // ノーツのヘッド（一番手前）
+    RoundedRectBatch shadowBatch;  // 影
+    RoundedRectBatch bodyBatch;    // ロングノーツの帯
+    RoundedRectBatch innerBatch;   // 帯の中の芯
+    RoundedRectBatch noteBatch;    // ノーツのヘッド
+    RoundedRectBatch syncFrameBatch;    //同時押しの枠
 
     for(const auto& note : ctx.notes){
         if(note.lane < 0 || note.lane >= 6) continue;
@@ -150,10 +163,15 @@ inline void renderGamePlayScreen(GameContext& ctx, Tex& tex, Sq& sq, double curr
         else if(note.type == NoteType::Normal_c || note.isCyan)  col = {80, 220, 255, 255};
         else                                                 col = {255, 255, 255, 255};
 
-        const float noteX  = static_cast<float>(laneX[note.lane]);
-        const float noteW  = static_cast<float>(ctx.laneWidth * note.widthLanes);
+                // レーンの範囲（複数レーン幅のノーツは、またいでいるレーン全体）
+        const float laneLeft = static_cast<float>(laneX[note.lane]);
+        const float laneSpan = static_cast<float>(ctx.laneWidth * note.widthLanes);
+
+        // ノーツはレーンの左右に NOTE_SIDE_MARGIN ずつ隙間を空けて、中央に置く
+        const float noteX  = laneLeft + NOTE_SIDE_MARGIN;
+        const float noteW  = std::max(4.0f, laneSpan - NOTE_SIDE_MARGIN * 2.0f);
         const float noteH  = 30.0f;   // ヘッドの高さ
-        const float radius = 8.0f;    // 角の丸み（ヘッドと帯で共通）
+        const float radius = 5.0f;    // 角の丸み（ヘッドと帯で共通）
 
         // ホールド中はヘッドを判定ラインに固定する
         const int headY = note.isHolding ? ctx.judgeY : noteY;
@@ -209,6 +227,18 @@ inline void renderGamePlayScreen(GameContext& ctx, Tex& tex, Sq& sq, double curr
         if(!note.isHit || note.isHolding){
             const float headTop = static_cast<float>(headY) - noteH * 0.5f;
 
+            const size_t noteIndex = static_cast<size_t>(&note - ctx.notes.data());
+            if(isSync[noteIndex]){
+                const float f = SYNC_FRAME_WIDTH;
+                const float g = SYNC_FRAME_GAP;
+                // 外側：金色の縁
+                syncFrameBatch.add(noteX - f, headTop - f, noteW + f * 2.0f, noteH + f * 2.0f,
+                                   radius + f, SYNC_FRAME_COLOR);
+                // 内側：ヘッドとの間に暗い隙間を作る（この上にヘッドが乗る）
+                syncFrameBatch.add(noteX - g, headTop - g, noteW + g * 2.0f, noteH + g * 2.0f,
+                                   radius + g, SYNC_FRAME_GAP_COLOR);
+            }
+
             // ロングノーツの影は②で全体ぶん付けたので、ここでは単発系だけ
             if(note.type != NoteType::Long){
                 shadowBatch.addInnerShadow(noteX, headTop, noteW, noteH, radius, kShadowSpread, kShadowColor);
@@ -220,6 +250,7 @@ inline void renderGamePlayScreen(GameContext& ctx, Tex& tex, Sq& sq, double curr
     // 帯 → ヘッドの順にまとめて描く（ヘッドが必ず帯の手前に来る）
     bodyBatch.flush(ctx.renderer);
     innerBatch.flush(ctx.renderer);
+    syncFrameBatch.flush(ctx.renderer);
     noteBatch.flush(ctx.renderer);
     shadowBatch.flush(ctx.renderer);
 
@@ -308,7 +339,7 @@ inline void renderGamePlayScreen(GameContext& ctx, Tex& tex, Sq& sq, double curr
     }
 
     if(ctx.tutorial) ctx.tutorial->draw(ctx.renderer, ctx.musicTime);
-    SDL_RenderPresent(ctx.renderer);
+    if(present) SDL_RenderPresent(ctx.renderer);
 }
 
 inline void erase_some(GameContext& ctx){

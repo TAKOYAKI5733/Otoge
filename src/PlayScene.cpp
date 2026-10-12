@@ -1,6 +1,8 @@
 /*g++ -std=c++20 main.cpp PlayScene.cpp -o otoge -lSDL2 -lSDL2_ttf -lSDL2_mixerでコンパイル可*/
 #include "GameCommon.h"
+#include "Play/PauseMenu.h"
 #include "Play/PlaySceneManager.h"
+#include "Play/Autoplay.h"
 
 //グローバル変数
 double bpm = 120;
@@ -229,6 +231,21 @@ GameScene playGame(SDL_Window* window, SDL_Renderer* renderer, const std::string
     SpectrumVisualizer visualizer;
     visualizer.attach();
 
+    // ===== ポーズ =====
+    TTF_Font* menuFont  = TTF_OpenFont("fonts/prac.ttf", 44);
+    TTF_Font* labelFont = TTF_OpenFont("fonts/prac.ttf", 24);
+    PauseMenu pauseMenu(tutorial == nullptr);   // チュートリアルではリトライを出さない
+    double pauseStartMs  = 0.0;                 // ポーズした瞬間の実時間
+    double pausedTotalMs = 0.0;                 // これまでにポーズしていた時間の合計
+
+    // ポーズを始める（ESC と、ウィンドウのフォーカスが外れたときに呼ぶ）
+    auto beginPause = [&](double realMs){
+        if(pauseMenu.isActive()) return;
+        pauseMenu.open(realMs);
+        pauseStartMs = realMs;
+        if(bgmStarted) Mix_PauseMusic();
+    };
+
     //描画処理
     bool running = true;
     SDL_Event e;
@@ -242,7 +259,8 @@ GameScene playGame(SDL_Window* window, SDL_Renderer* renderer, const std::string
         Uint64 prof0 = SDL_GetPerformanceCounter();
         #endif
 
-        double globalMs = nowMs();
+        double realMs = nowMs();
+        double globalMs = pauseMenu.isActive() ? (pauseStartMs - pausedTotalMs) : (realMs - pausedTotalMs);
         double frameDtMs = globalMs - prevGlobalMs;
         prevGlobalMs = globalMs;
 
@@ -293,7 +311,33 @@ GameScene playGame(SDL_Window* window, SDL_Renderer* renderer, const std::string
                 running = false;
                 nextScene = GameScene::Shutdown;
             }
+            else if(e.type == SDL_WINDOWEVENT && e.window.event == SDL_WINDOWEVENT_FOCUS_LOST){
+                beginPause(realMs);   // 別のウィンドウに切り替えたら自動でポーズ
+            }
+            else if(e.type == SDL_KEYDOWN){
+                if(!pauseMenu.isActive()){
+                    if(e.key.keysym.sym == SDLK_ESCAPE && !e.key.repeat) beginPause(realMs);
+                }
+                else{
+                    PauseAction action = pauseMenu.handleKey(e.key, realMs);
+                    if(action == PauseAction::Retry){
+                        running = false;
+                        nextScene = GameScene::Play;     // main.cpp が同じ曲・難易度で playGame を呼び直す
+                    }
+                    else if(action == PauseAction::Retire){
+                        running = false;
+                        nextScene = GameScene::Select;
+                    }
+                }
+            }
         }
+
+        // カウントダウンが終わったフレームで、ゲーム内時間と曲を再開する
+        if(pauseMenu.updateCountdown(realMs)){
+            pausedTotalMs += realMs - pauseStartMs;
+            if(bgmStarted) Mix_ResumeMusic();
+        }
+        bool paused = pauseMenu.isActive();
 
         const Uint8* currentKeyState = SDL_GetKeyboardState(NULL);
             bool currentPressed[7] = {
@@ -305,10 +349,6 @@ GameScene playGame(SDL_Window* window, SDL_Renderer* renderer, const std::string
                 (currentKeyState[SDL_SCANCODE_O] != 0),
                 (currentKeyState[SDL_SCANCODE_ESCAPE] != 0)
             };
-            if(currentKeyState[SDL_SCANCODE_ESCAPE] != 0){
-                running = false;
-                nextScene = GameScene::Select;
-            }
 
             //GameContextの初期化
             GameContext ctx = {
@@ -350,60 +390,42 @@ GameScene playGame(SDL_Window* window, SDL_Renderer* renderer, const std::string
             .visualizer = &visualizer
             };
 
-        if(isAutoplay){
-            for(int i = 0; i < 6; i++) ctx.currentPressed[i] = false;
-
-            for(const auto& note : ctx.notes){
-                if(note.lane < 0 || note.lane >= 6) continue;
-
-                if(note.type == NoteType::Long && note.isHolding){
-                    ctx.currentPressed[note.lane] = true;
-                    continue;
-                }
-
-                if(note.isHit) continue;
-
-                if(note.type == NoteType::Drag){
-                    if(ctx.musicTime >= note.targetTime && ctx.musicTime <= note.targetTime + 60){
-                        ctx.currentPressed[note.lane] = true;
-                    }
-                }
-                else{
-                    if(prevMusicTime < note.targetTime && ctx.musicTime >= note.targetTime){
-                        ctx.currentPressed[note.lane] = true;
-                    }
-                }
-            }
-        }
-
-        for(int i = 0; i < 6; i++){
-            if(ctx.currentPressed[i] && !ctx.prevPressed[i]){
-                KeyBeam beam;
-                beam.lane = i;
-                beam.spawnTime = ctx.musicTime;
-                ctx.keyBeams.push_back(beam);
-            }
+        if(paused){
+            for(int i = 0; i < 6; i++) prevPressed[i] = currentPressed[i];
         }
 
         #if PLAY_PROFILE
         Uint64 prof1 = SDL_GetPerformanceCounter();
         #endif
 
-        //ノーツの判定処理 noteJudge.h    
-        NoteJudge(ctx, tex, sq);
+        if(!paused){
+            if(isAutoplay) applyAutoplay(ctx, prevMusicTime);
 
-        //ノーツの消去処理 renderGame.h
-        erase_some(ctx);
+            for(int i = 0; i < 6; i++){
+                if(ctx.currentPressed[i] && !ctx.prevPressed[i]){
+                    KeyBeam beam;
+                    beam.lane = i;
+                    beam.spawnTime = ctx.musicTime;
+                    ctx.keyBeams.push_back(beam);
+                }
+            }
 
-        if(!Mix_PlayingMusic() && notes.empty() && nextScene != GameScene::Shutdown){
-            running = false;
-            nextScene = GameScene::Result;
-        }
+            //ノーツの判定処理 noteJudge.h    
+            NoteJudge(ctx, tex, sq);
 
-        for(int i = 0; i < 6; i++){
-            if(laneJudge[i].texture != nullptr){
-                if((musicTime - laneJudge[i].spawnTime) >= static_cast<int32_t>(laneJudge[i].duration)){
-                    laneJudge[i].texture = nullptr;
+            //ノーツの消去処理 renderGame.h
+            erase_some(ctx);
+
+            if(!Mix_PlayingMusic() && notes.empty() && nextScene != GameScene::Shutdown){
+                running = false;
+                nextScene = GameScene::Result;
+            }
+
+            for(int i = 0; i < 6; i++){
+                if(laneJudge[i].texture != nullptr){
+                    if((musicTime - laneJudge[i].spawnTime) >= static_cast<int32_t>(laneJudge[i].duration)){
+                        laneJudge[i].texture = nullptr;
+                    }
                 }
             }
         }
@@ -421,7 +443,9 @@ GameScene playGame(SDL_Window* window, SDL_Renderer* renderer, const std::string
         updateAndRenderScoreTexture(ctx);
 
         //ノーツの描画・アニメーション処理（この中で SDL_RenderPresent している）
-        renderGamePlayScreen(ctx, tex, sq, currentNoteSpeed, laneX);
+        renderGamePlayScreen(ctx, tex, sq, currentNoteSpeed, laneX, false);
+        pauseMenu.draw(renderer, menuFont, font, labelFont, realMs);
+        SDL_RenderPresent(renderer);
 
         #if PLAY_PROFILE
         Uint64 prof3 = SDL_GetPerformanceCounter();
@@ -463,6 +487,8 @@ GameScene playGame(SDL_Window* window, SDL_Renderer* renderer, const std::string
     digitFont.destroy();
     TTF_CloseFont(font);
     TTF_CloseFont(font_init_waku);
+    TTF_CloseFont(menuFont);
+    TTF_CloseFont(labelFont);
     Mix_FreeMusic(bgm);
     Mix_FreeChunk(tap_sound);
     Mix_FreeChunk(tap_sound_c);

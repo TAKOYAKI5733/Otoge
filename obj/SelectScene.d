@@ -5,7 +5,8 @@ obj/SelectScene.o: src/SelectScene.cpp src/GameCommon.h src/Scene.h \
  src/Play/updateAndRenderTexture.h src/Play/renderGame.h \
  src/Play/roundedRect.h src/Play/tutorialOverlay.h \
  src/Play/tutorialAnim.h src/Play/visualizer.h src/Play/updateSpeed.h \
- src/Play/noteJudge.h src/JacketSpectrum.h
+ src/Play/noteJudge.h src/JacketSpectrum.h src/Settingspanel.h \
+ src/Displaymode.h
 src/GameCommon.h:
 src/Scene.h:
 src/Graphics.h:
@@ -26,3 +27,5 @@ src/Play/visualizer.h:
 src/Play/updateSpeed.h:
 src/Play/noteJudge.h:
 src/JacketSpectrum.h:
+src/Settingspanel.h:
+src/Displaymode.h:

@@ -1,8 +1,8 @@
 {
-  "bgmVolume": 25,
-  "fpsCap": 0,
+  "bgmVolume": 15,
+  "fpsCap": 240,
   "offsetMs": 0.0,
-  "seVolume": 50,
-  "vsync": true,
+  "seVolume": 25,
+  "vsync": false,
   "windowMode": 2
 }

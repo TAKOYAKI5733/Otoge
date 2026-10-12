@@ -32,28 +32,18 @@ inline void toggleLaneActive(GameContext& ctx, const Note& note){
 }
 
 inline void NoteJudge(GameContext& ctx, Tex& tex, Sq& sq){
+    bool consumedThisFrame[6] = {false, false, false, false, false, false};
+
     for(int i = 0; i < 6; i++){
-            if(ctx.currentPressed[i] && !ctx.prevPressed[i]){
+            if(ctx.currentPressed[i] && !ctx.prevPressed[i] && !consumedThisFrame[i]){
                 bool isNoteHit = false;
 
                 for(auto& note : ctx.notes){
                     if(note.lane < 0 || note.isHit || note.type == NoteType::Drag) continue;
                     
-                    bool isAreaPressed = false;
-                    if(note.widthLanes > 1){
-                        int startLane = note.lane;
-                        int endLane = note.lane + note.widthLanes - 1;
-                        
-                        for(int l = startLane; l <= endLane; l++){
-                            if(ctx.currentPressed[l]){
-                                isAreaPressed = true;
-                                break;
-                            }
-                        }
-                    }
-                    else{
-                        isAreaPressed = (note.lane == i);
-                    }
+                    int startLane = note.lane;
+                    int endLane   = note.lane + note.widthLanes - 1;
+                    bool isAreaPressed = (i >= startLane && i <= endLane);
 
                     if(isAreaPressed){
                         int timeDiff = std::abs(static_cast<int>(ctx.musicTime - note.targetTime));
@@ -122,6 +112,11 @@ inline void NoteJudge(GameContext& ctx, Tex& tex, Sq& sq){
                             if(note.type == NoteType::Lane) toggleLaneActive(ctx, note);
                         }
                         isNoteHit = true;
+
+                        for(int l = std::max(0, startLane); l <= std::min(5, endLane); l++){
+                            consumedThisFrame[l] = true;
+                        }
+
                         break;
                     }
                 }

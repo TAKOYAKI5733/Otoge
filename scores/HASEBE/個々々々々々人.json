@@ -28,7 +28,7 @@
       ],
       "chartCreator": "TKYK.env",
       "level": "14",
-      "name": "MASTER【4LINE】",
+      "name": "MASTER(4LINE)",
       "notes": [
         {
           "duration": 1250,
@@ -9207,6 +9207,33 @@
           "time": 163177
         }
       ]
+    },
+    {
+      "bpm": 144.0,
+      "bpmEvents": [],
+      "chartCreator": "TKYK.env",
+      "level": "0",
+      "name": "HARD",
+      "notes": [],
+      "speedEvents": []
+    },
+    {
+      "bpm": 144.0,
+      "bpmEvents": [],
+      "chartCreator": "TKYK.env",
+      "level": "0",
+      "name": "NORMAL",
+      "notes": [],
+      "speedEvents": []
+    },
+    {
+      "bpm": 144.0,
+      "bpmEvents": [],
+      "chartCreator": "TKYK.env",
+      "level": "0",
+      "name": "EASY",
+      "notes": [],
+      "speedEvents": []
     }
   ],
   "offset": -10.0

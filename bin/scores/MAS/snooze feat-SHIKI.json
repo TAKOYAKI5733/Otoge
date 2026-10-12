@@ -1651,54 +1651,6 @@
           "width": 4
         },
         {
-          "lane": 2,
-          "time": 34810,
-          "type": 3,
-          "width": 2
-        },
-        {
-          "lane": 2,
-          "time": 34912,
-          "type": 3,
-          "width": 2
-        },
-        {
-          "lane": 2,
-          "time": 35012,
-          "type": 3,
-          "width": 2
-        },
-        {
-          "lane": 2,
-          "time": 35112,
-          "type": 3,
-          "width": 2
-        },
-        {
-          "lane": 2,
-          "time": 35211,
-          "type": 3,
-          "width": 2
-        },
-        {
-          "lane": 2,
-          "time": 35311,
-          "type": 3,
-          "width": 2
-        },
-        {
-          "lane": 2,
-          "time": 35411,
-          "type": 3,
-          "width": 2
-        },
-        {
-          "lane": 2,
-          "time": 35511,
-          "type": 3,
-          "width": 2
-        },
-        {
           "lane": 4,
           "time": 34810,
           "type": 4
@@ -2034,50 +1986,29 @@
         {
           "lane": 2,
           "speed": 1.4999999999999998,
-          "time": 34012,
-          "type": 3,
-          "width": 2
-        },
-        {
-          "lane": 2,
-          "speed": 1.4999999999999998,
           "time": 34213,
-          "type": 3,
+          "type": 0,
           "width": 2
         },
         {
           "lane": 2,
           "speed": 1.4999999999999998,
-          "time": 34313,
-          "type": 3,
+          "time": 34311,
+          "type": 0,
           "width": 2
         },
         {
           "lane": 2,
           "speed": 1.4999999999999998,
           "time": 34413,
-          "type": 3,
+          "type": 0,
           "width": 2
         },
         {
           "lane": 2,
           "speed": 1.4999999999999998,
           "time": 34510,
-          "type": 3,
-          "width": 2
-        },
-        {
-          "lane": 2,
-          "speed": 1.4999999999999998,
-          "time": 34610,
-          "type": 3,
-          "width": 2
-        },
-        {
-          "lane": 2,
-          "speed": 1.4999999999999998,
-          "time": 34710,
-          "type": 3,
+          "type": 0,
           "width": 2
         },
         {
@@ -2101,7 +2032,7 @@
         {
           "lane": 1,
           "speed": 1.4999999999999998,
-          "time": 34313,
+          "time": 34311,
           "type": 4
         },
         {
@@ -8844,6 +8775,76 @@
           "lane": 3,
           "time": 121541,
           "type": 0
+        },
+        {
+          "lane": 2,
+          "speed": 1.4999999999999998,
+          "time": 34612,
+          "type": 0,
+          "width": 2
+        },
+        {
+          "lane": 2,
+          "speed": 1.4999999999999998,
+          "time": 34712,
+          "type": 0,
+          "width": 2
+        },
+        {
+          "lane": 2,
+          "speed": 1.4999999999999998,
+          "time": 34812,
+          "type": 0,
+          "width": 2
+        },
+        {
+          "lane": 2,
+          "time": 34912,
+          "type": 0,
+          "width": 2
+        },
+        {
+          "lane": 2,
+          "time": 35012,
+          "type": 0,
+          "width": 2
+        },
+        {
+          "lane": 2,
+          "time": 35112,
+          "type": 0,
+          "width": 2
+        },
+        {
+          "lane": 2,
+          "time": 35212,
+          "type": 0,
+          "width": 2
+        },
+        {
+          "lane": 2,
+          "time": 35312,
+          "type": 0,
+          "width": 2
+        },
+        {
+          "lane": 2,
+          "time": 35412,
+          "type": 0,
+          "width": 2
+        },
+        {
+          "lane": 2,
+          "time": 35512,
+          "type": 0,
+          "width": 2
+        },
+        {
+          "lane": 2,
+          "speed": 1.4999999999999998,
+          "time": 34011,
+          "type": 0,
+          "width": 2
         }
       ],
       "speedEvents": [
@@ -9060,7 +9061,7 @@
         {
           "duration": 4802,
           "easing": 1,
-          "target": 0.4999999999999998,
+          "target": 0.19999999999999982,
           "time": 144448
         },
         {
