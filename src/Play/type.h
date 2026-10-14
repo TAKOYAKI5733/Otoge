@@ -48,6 +48,9 @@ struct Note{
 
     std::vector<PathKeyframe> path;
     bool hasCustomPath() const { return !path.empty(); }
+
+    NoteType headType = NoteType::Normal;
+    bool isDragLong() const { return type == NoteType::Long && headType == NoteType::Drag; }
 };
 
 struct JudgeEffect{

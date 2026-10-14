@@ -202,12 +202,15 @@ inline void renderGamePlayScreen(GameContext& ctx, Tex& tex, Sq& sq, double curr
         bool laneIsInactive = !ctx.laneActive[note.lane];
 
         // ① 色を先に決める（ヘッドと帯で同じ色を使うため）
+        // ロングは「ロングになる前の種類」で色を決める（エディタと同じ：DRAG 黄、通常C 水色）
+        const NoteType colorType = (note.type == NoteType::Long) ? note.headType : note.type;
+
         SDL_Color col;
-        if(laneIsInactive && !(note.type == NoteType::Lane)) col = {20, 20, 20, 255};
-        else if(note.type == NoteType::Drag)                 col = {250, 250, 150, 255};
-        else if(note.type == NoteType::Lane)                 col = {255, 50, 50, 255};
-        else if(note.type == NoteType::Normal_c || note.isCyan)  col = {80, 220, 255, 255};
-        else                                                 col = {255, 255, 255, 255};
+        if(laneIsInactive && colorType != NoteType::Lane)          col = {20, 20, 20, 255};
+        else if(colorType == NoteType::Drag)                       col = {250, 250, 150, 255};
+        else if(colorType == NoteType::Lane)                       col = {255, 50, 50, 255};
+        else if(colorType == NoteType::Normal_c || note.isCyan)    col = {80, 220, 255, 255};
+        else                                                       col = {255, 255, 255, 255};
 
                 // レーンの範囲（複数レーン幅のノーツは、またいでいるレーン全体）
         const float laneLeft = static_cast<float>(laneX[note.lane]);

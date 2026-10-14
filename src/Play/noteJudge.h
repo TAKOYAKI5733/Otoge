@@ -47,7 +47,8 @@ inline void NoteJudge(GameContext& ctx, Tex& tex, Sq& sq){
                 bool isNoteHit = false;
 
                 for(auto& note : ctx.notes){
-                    if(note.lane < 0 || note.isHit || note.type == NoteType::Drag) continue;
+                    // ドラッグと、ドラッグロング（始点がドラッグ判定）は叩いて判定しない → 下の「ドラッグの自動判定」で扱う
+                    if(note.lane < 0 || note.isHit || note.type == NoteType::Drag || note.isDragLong()) continue;
                     
                     int startLane = note.lane;
                     int endLane   = note.lane + note.widthLanes - 1;
@@ -136,8 +137,9 @@ inline void NoteJudge(GameContext& ctx, Tex& tex, Sq& sq){
         }
 
         //トレースノーツ(ドラッグ)の自動判定 (毎フレーム監視)
+        //   ドラッグロングの始点もここで判定する（押しっぱなしで通過すれば PERFECT → そのままホールドへ）
         for(auto& note : ctx.notes){
-            if(note.lane < 0 || note.isHit || !(note.type == NoteType::Drag)) continue;
+            if(note.lane < 0 || note.isHit || !(note.type == NoteType::Drag || note.isDragLong())) continue;
 
             int i = note.lane;
             int32_t timeDiff = ctx.musicTime - note.targetTime;
@@ -174,6 +176,12 @@ inline void NoteJudge(GameContext& ctx, Tex& tex, Sq& sq){
                     ctx.effects.push_back(dragEffect);
 
                     Mix_PlayChannel(-1, ctx.tap_sound, 0);
+
+                    // ドラッグロング：始点を取れたら、ここからは普通のロングと同じホールド判定（下の 4.）に渡す
+                    if(note.isDragLong()){
+                        note.isHolding = true;
+                        note.lastTickTime = ctx.musicTime;
+                    }
                 }
             }
         }

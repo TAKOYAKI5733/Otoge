@@ -117,6 +117,7 @@ inline bool loadScore(const std::string& filename, std::string& bgmName, std::ve
             else newNote.type = NoteType::Normal;
 
             if(item.contains("duration")){
+                newNote.headType = newNote.type;
                 newNote.type = NoteType::Long;
                 newNote.durationMs = item.at("duration").get<int32_t>();
             }

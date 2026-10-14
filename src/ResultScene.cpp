@@ -196,7 +196,7 @@ GameScene resultScene(SDL_Window* window, SDL_Renderer* renderer, const ResultDa
         SDL_SetRenderDrawColor(renderer, 10, 10, 20, 255);
         SDL_RenderClear(renderer);
 
-        // ===== 1. RANK（左上） =====
+        // ===== 1. RANK =====
         {
             double ap = appearOf(0, elapsedMs);
             Uint8 a = static_cast<Uint8>(255 * ap);
@@ -219,7 +219,7 @@ GameScene resultScene(SDL_Window* window, SDL_Renderer* renderer, const ResultDa
             }
         }
 
-        // ===== 2. SCORE（左） =====
+        // ===== 2. SCORE =====
         {
             double ap = appearOf(1, elapsedMs);
             Uint8 a = static_cast<Uint8>(255 * ap);
@@ -262,7 +262,7 @@ GameScene resultScene(SDL_Window* window, SDL_Renderer* renderer, const ResultDa
             }
         }
 
-        // ===== 3. TIMING（右） =====
+        // ===== 3. TIMING =====
         {
             double ap = appearOf(2, elapsedMs);
             Uint8 a = static_cast<Uint8>(255 * ap);
