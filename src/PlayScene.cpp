@@ -31,7 +31,7 @@ private:
 };
 
 //playGame関数の制作
-GameScene playGame(SDL_Window* window, SDL_Renderer* renderer, const std::string& selectedScorePath, int selectedDifficulty, ResultData& outResult, PlayerSettings& playerSettings, bool isAutoplay, SDL_Texture* targetTex, TutorialOverlay* tutorial){
+GameScene playGame(SDL_Window* window, SDL_Renderer* renderer, const std::string& selectedScorePath, int selectedDifficulty, ResultData& outResult, PlayerSettings& playerSettings, bool isAutoplay, SDL_Texture* targetTex, TutorialOverlay* tutorial, const PlayTestOptions* test){
     PlayInputGuard inputGuard;
 
     SDL_Texture* noteTextureNormal = IMG_LoadTexture(renderer, "images/normal.png");
@@ -96,6 +96,20 @@ GameScene playGame(SDL_Window* window, SDL_Renderer* renderer, const std::string
     }
 
     offsetMs += playerSettings.offsetMs;
+
+        // ===== テストプレイ：途中から始める =====
+    const int32_t testStartMs = (test != nullptr) ? std::max<int32_t>(0, test->startMs) : 0;
+    if(testStartMs > 0){
+        // 開始位置より前のレーンノーツの開閉を、先に済ませておく（W/O の開閉が途中から正しくなる）
+        for(const auto& n : notes){
+            if(n.targetTime >= testStartMs || n.type != NoteType::Lane) continue;
+            for(int l = n.lane; l < n.lane + n.widthLanes; l++){
+                if(l >= 0 && l < 6) laneActive[l] = !laneActive[l];
+            }
+        }
+        // 開始位置より前のノーツは消す（コンボ・スコアの満点もこの後で数え直される）
+        std::erase_if(notes, [&](const Note& n){ return n.targetTime < testStartMs; });
+    }
 
     int theoreticaMaxCombo = 0;
     for(const auto& note : notes){
@@ -213,6 +227,13 @@ GameScene playGame(SDL_Window* window, SDL_Renderer* renderer, const std::string
 
     const double delayTimeMs = 1500.0;
     double musicStartTimeMs = nowMs() + delayTimeMs;
+
+    double testSeekMs = 0.0;
+    if(testStartMs > 0){
+        testSeekMs = std::max(0.0, testStartMs + offsetMs - 1500.0);
+        musicStartTimeMs -= testSeekMs;
+    }
+
     bool bgmStarted = false;
 
     double lastDriftCheckMs = 0.0;
@@ -294,8 +315,9 @@ GameScene playGame(SDL_Window* window, SDL_Renderer* renderer, const std::string
         double frameDtMs = globalMs - prevGlobalMs;
         prevGlobalMs = globalMs;
 
-        if(!bgmStarted && globalMs >= musicStartTimeMs){
+        if(!bgmStarted && globalMs >= musicStartTimeMs + testSeekMs){
             Mix_PlayMusic(bgm, 1);
+            if(testSeekMs > 0.0) Mix_SetMusicPosition(testSeekMs / 1000.0);   // 途中から鳴らす
             bgmStarted = true;
         }
 

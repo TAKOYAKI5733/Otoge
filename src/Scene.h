@@ -49,10 +49,14 @@ struct PlayerSettings{
     bool showTimingMs = false;   // ±ms 表示
 };
 
+struct PlayTestOptions{
+    int32_t startMs = 0;   // 譜面のこの時刻から始める（0 = 最初から）
+};
+
 void loadPlayerSettings(PlayerSettings& settings);
 void savePlayerSettings(const PlayerSettings& settings);
 
-GameScene playGame(SDL_Window* window, SDL_Renderer* renderer, const std::string& selectedScorePath, int selectedDifficulty, ResultData& outResult, PlayerSettings& playerSettings, bool isAutoplay ,SDL_Texture* targetTex = nullptr, TutorialOverlay* tutorial = nullptr);
+GameScene playGame(SDL_Window* window, SDL_Renderer* renderer, const std::string& selectedScorePath, int selectedDifficulty, ResultData& outResult, PlayerSettings& playerSettings, bool isAutoplay, SDL_Texture* targetTex = nullptr, TutorialOverlay* tutorial = nullptr, const PlayTestOptions* test = nullptr);
 GameScene selectSongScene(SDL_Window* window, SDL_Renderer* renderer, std::string& selectedScorePath, int& selectedDifficulty, PlayerSettings& playerSettings, bool& outAutoplay, SDL_Texture* targetTex = nullptr);
 GameScene loadScene(SDL_Window* window, SDL_Renderer* renderer, std::string& selectedScorePath, SDL_Texture* targetTex = nullptr);
 GameScene chartCreateScene(SDL_Window* window, SDL_Renderer* renderer, std::string& scorePath, SDL_Texture* targetTex = nullptr);

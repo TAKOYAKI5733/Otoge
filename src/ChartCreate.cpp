@@ -679,6 +679,23 @@ GameScene chartCreateScene(SDL_Window* window, SDL_Renderer* renderer, std::stri
     int paletteIndex = 0;                 // パレットで選んでいるマス（editorui::PALETTE の番号）
     bool paletteScrollToSelected = false; // キーで選んだとき、そのマスが見える位置までパレットを送る
 
+    // 右クリックメニュー（SPEED / BPM イベントの追加）
+    bool    eventMenuRequest = false;       // 次の ImGui フレームで開く
+    bool    eventMenuOpen = false;          // 今開いているか（Esc の扱いに使う）
+    bool    eventMenuCloseRequest = false;  // Esc で閉じる
+    int32_t eventMenuTime = 0;              // 追加する時刻（右クリックした位置に一番近いグリッド線）
+    ImVec2  eventMenuPos(0.0f, 0.0f);       // メニューを出す位置（マウスの位置）
+    double  eventMenuSpeed = 1.0;           // SPEED の目標値
+    int     eventMenuSpeedEasing = 1;       // SPEED のイージング
+    int     eventMenuSpeedDuration = 500;   // SPEED の変化にかける時間
+    double  eventMenuBpm = 120.0;           // BPM の値
+
+    // テストプレイ（右クリックメニューから）
+    int     testPlayFrom = 0;               // 0 = 右クリックした位置から、1 = 最初から
+    bool    testPlayAutoplay = false;       // オートプレイで確認する
+    bool    testPlayRequest = false;        // このフレームの描画が終わったら開始する
+    int32_t testPlayStartMs = 0;            // 開始する譜面上の時刻
+
     // 保存したときの通知（画面上部に少しの間「保存しました」を出す）
     uint32_t saveToastTicks = 0;          // 保存した時刻（0 = まだ保存していない）
     bool saveToastOk = false;             // 保存できたか
@@ -757,8 +774,13 @@ GameScene chartCreateScene(SDL_Window* window, SDL_Renderer* renderer, std::stri
             }
 
             if(e.type == SDL_KEYDOWN && e.key.keysym.sym == SDLK_ESCAPE){
-                running = false;
-                nextScene = GameScene::Select;
+                if(eventMenuOpen){
+                    eventMenuCloseRequest = true;   // メニューが開いているときは、メニューを閉じるだけ
+                }
+                else{
+                    running = false;
+                    nextScene = GameScene::Select;
+                }
             }
 
             // 「文字を入力している最中」だけキーを ImGui に譲る。
@@ -927,13 +949,26 @@ GameScene chartCreateScene(SDL_Window* window, SDL_Renderer* renderer, std::stri
                             }
                         }
                         else if(e.button.button == SDL_BUTTON_RIGHT){
+                            bool erasedNote = false;
                             for(size_t idx = 0; idx < currentDiff().notes.size(); idx++){
                                 const auto& n = currentDiff().notes[idx];
                                 if(clickedLane >= n.lane && clickedLane <= n.lane + n.width - 1 && std::abs(n.time - snappedTime) < gridMs / 2){
                                     currentDiff().notes.erase(currentDiff().notes.begin() + idx);
                                     if(selectedNoteIndex == static_cast<int>(idx)) selectedNoteIndex = -1;
+                                    else if(selectedNoteIndex > static_cast<int>(idx)) selectedNoteIndex--;   // 前が消えたら番号を詰める
+                                    erasedNote = true;
                                     break;
                                 }
+                            }
+
+                            // ノーツがない場所の右クリック → 一番近いグリッド線にイベントを追加するメニューを開く
+                            //   ここ（SDL のイベント処理）は ImGui のフレームの外なので、開くのは「予約」だけにして、
+                            //   実際の OpenPopup は ImGui のフレームの中で行う
+                            if(!erasedNote){
+                                eventMenuRequest = true;
+                                eventMenuTime = snappedTime;
+                                eventMenuPos = ImVec2(static_cast<float>(mx), static_cast<float>(my));
+                                eventMenuBpm = getCurrentBpm(snappedTime);   // 入力欄の初期値：その位置の今の BPM
                             }
                         }
                     }
@@ -1045,6 +1080,105 @@ GameScene chartCreateScene(SDL_Window* window, SDL_Renderer* renderer, std::stri
         ImGui_ImplSDLRenderer2_NewFrame();
         ImGui_ImplSDL2_NewFrame();
         ImGui::NewFrame();
+
+        // =================================================================
+        //  右クリックメニュー：SPEED / BPM イベントを追加する
+        // =================================================================
+        if(eventMenuRequest){
+            ImGui::OpenPopup("##eventmenu");
+            ImGui::SetNextWindowPos(eventMenuPos, ImGuiCond_Always);   // 右クリックした場所に出す
+            eventMenuRequest = false;
+        }
+        ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, ImVec2(16.0f, 14.0f));
+        eventMenuOpen = ImGui::BeginPopup("##eventmenu");
+        ImGui::PopStyleVar();
+        if(eventMenuOpen){
+            // 選曲画面と同じシアンの枠
+            {
+                ImDrawList* dl = ImGui::GetWindowDrawList();
+                const ImVec2 wp = ImGui::GetWindowPos();
+                const ImVec2 ws = ImGui::GetWindowSize();
+                dl->PushClipRectFullScreen();
+                dl->AddRect(ImVec2(wp.x + 1.5f, wp.y + 1.5f), ImVec2(wp.x + ws.x - 1.5f, wp.y + ws.y - 1.5f),
+                            editorui::COL_ACCENT, 0.0f, 0, 3.0f);
+                dl->PopClipRect();
+            }
+
+            if(eventMenuCloseRequest){
+                ImGui::CloseCurrentPopup();
+            }
+
+            ImGui::Text("%d ms に追加", eventMenuTime);
+            ImGui::Separator();
+            ImGui::PushItemWidth(200.0f);
+
+            // ----- SPEED -----
+            ImGui::TextColored(ImVec4(1.0f, 0.86f, 0.31f, 1.0f), "SPEED");
+            ImGui::InputDouble("目標の速度##ctx", &eventMenuSpeed, 0.1, 1.0, "%.2f");
+            const char* easeNames[] = {"Straight(1)", "easeOutCubic(2)", "easeInCubic(3)"};
+            int easeIdx = std::clamp(eventMenuSpeedEasing - 1, 0, 2);
+            if(ImGui::Combo("イージング##ctx", &easeIdx, easeNames, 3)) eventMenuSpeedEasing = easeIdx + 1;
+            ImGui::InputInt("変化にかける時間(ms)##ctx", &eventMenuSpeedDuration, 10, 100);
+            if(eventMenuSpeedDuration < 0) eventMenuSpeedDuration = 0;
+
+            if(ImGui::Button("SPEED を追加", ImVec2(200.0f, 0.0f))){
+                auto& evs = currentDiff().speedEvents;
+                // 同じ時刻にもうあれば、新しく作らずに上書きする（重なって見えなくなるのを防ぐ）
+                auto it = std::find_if(evs.begin(), evs.end(), [&](const EditorSpeedEvent& s){ return s.time == eventMenuTime; });
+                EditorSpeedEvent ev;
+                ev.time = eventMenuTime;
+                ev.target = eventMenuSpeed;
+                ev.easing = eventMenuSpeedEasing;
+                ev.duration = eventMenuSpeedDuration;
+                if(it != evs.end()) *it = ev;
+                else evs.push_back(ev);
+                std::sort(evs.begin(), evs.end(), [](const EditorSpeedEvent& a, const EditorSpeedEvent& b){ return a.time < b.time; });
+                ImGui::CloseCurrentPopup();
+            }
+
+            ImGui::Separator();
+
+            // ----- BPM -----
+            ImGui::TextColored(ImVec4(0.31f, 0.86f, 1.0f, 1.0f), "BPM");
+            ImGui::InputDouble("BPM##ctx", &eventMenuBpm, 1.0, 10.0, "%.3f");
+            if(eventMenuBpm <= 0.0) eventMenuBpm = 1.0;
+
+            if(ImGui::Button("BPM を追加", ImVec2(200.0f, 0.0f))){
+                auto& evs = currentDiff().bpmEvents;
+                auto it = std::find_if(evs.begin(), evs.end(), [&](const EditorBpmEvent& b){ return b.time == eventMenuTime; });
+                if(it != evs.end()){
+                    it->bpm = eventMenuBpm;
+                }
+                else{
+                    EditorBpmEvent b;
+                    b.time = eventMenuTime;
+                    b.bpm = eventMenuBpm;
+                    evs.push_back(b);
+                }
+                std::sort(evs.begin(), evs.end(), [](const EditorBpmEvent& a, const EditorBpmEvent& b){ return a.time < b.time; });
+                ImGui::CloseCurrentPopup();
+            }
+
+            ImGui::Separator();
+
+            // ----- TEST PLAY -----
+            ImGui::TextColored(ImVec4(0.55f, 1.0f, 0.55f, 1.0f), "TEST PLAY");
+            ImGui::RadioButton("ここから##test", &testPlayFrom, 0);
+            ImGui::SameLine();
+            ImGui::RadioButton("最初から##test", &testPlayFrom, 1);
+            ImGui::Checkbox("オートプレイ##test", &testPlayAutoplay);
+
+            if(ImGui::Button("テストプレイ (編集中の難易度)", ImVec2(-1.0f, 0.0f))){
+                testPlayRequest = true;
+                testPlayStartMs = (testPlayFrom == 0) ? eventMenuTime : 0;
+                ImGui::CloseCurrentPopup();
+            }
+            ImGui::TextDisabled("Esc → リタイアでエディタに戻ります");
+
+            ImGui::PopItemWidth();
+            ImGui::EndPopup();
+        }
+        eventMenuCloseRequest = false;
 
         // =================================================================
         //  左上：TOOL（新しく置くノーツの設定）
@@ -1780,6 +1914,16 @@ GameScene chartCreateScene(SDL_Window* window, SDL_Renderer* renderer, std::stri
             }
         }
 
+        // ----- 右クリックメニューが開いている間、追加先の線を光らせる -----
+        if(eventMenuOpen){
+            const int my = judgeY - static_cast<int>((eventMenuTime - scrollTimeMs) * effectivePixelsPerMs);
+            if(my > -10 && my < SCREEN_H + 10){
+                SDL_SetRenderDrawColor(renderer, 0, 255, 255, 230);
+                SDL_Rect mark = {startX, my - 2, lanesRight - startX, 4};
+                SDL_RenderFillRect(renderer, &mark);
+            }
+        }
+
         // ----- 判定ボックス（プレイ画面と同じ形）＋ 再生中に叩かれたときの塗りつぶし -----
         {
             const float jy = static_cast<float>(judgeY);
@@ -1943,6 +2087,54 @@ GameScene chartCreateScene(SDL_Window* window, SDL_Renderer* renderer, std::stri
         ImGui_ImplSDLRenderer2_RenderDrawData(ImGui::GetDrawData(), renderer);
 
         SDL_RenderPresent(renderer);
+
+        // =================================================================
+        //  テストプレイ
+        //    ImGui のフレームを描き終えた「後」で始める。
+        //    playGame は自分で描画ループを回すので、ImGui のフレームの途中で呼ぶと描画が混ざってしまう。
+        // =================================================================
+        if(testPlayRequest && running){
+            testPlayRequest = false;
+
+            // 1. エディタ側の再生を止める
+            isPlaying = false;
+            if(bgm) Mix_HaltMusic();
+            musicNeedsStart = true;
+            flashEffects.clear();
+
+            // 2. 今の譜面を一時ファイルに保存する（本来の保存先は書き換えない）
+            //    playGame はファイルから譜面を読むので、編集中の内容をいったんファイルにする
+            const std::string testPath = "editor_testplay.json";   // scores/ に置くと選曲画面に出てしまうので外に置く
+            if(saveChart(testPath, meta, difficulties)){
+                PlayerSettings testSettings;
+                loadPlayerSettings(testSettings);   // オフセット・音量・タップ音はプレイと同じ設定を使う
+
+                PlayTestOptions opt;
+                opt.startMs = testPlayStartMs;
+
+                // 3. プレイ。ポーズメニューの「リトライ」は Play が返ってくるので、同じ条件でやり直す
+                GameScene r;
+                do{
+                    ResultData testResult;
+                    r = playGame(window, renderer, testPath, currentDiffIndex, testResult, testSettings,
+                                 testPlayAutoplay, nullptr, nullptr, &opt);
+                }while(r == GameScene::Play);
+
+                if(r == GameScene::Shutdown){
+                    running = false;
+                    nextScene = GameScene::Shutdown;
+                }
+            }
+            else{
+                saveToastOk = false;            // 一時ファイルが作れなかった → 失敗の通知を出す
+                saveToastTicks = SDL_GetTicks();
+            }
+
+            // 4. エディタに戻る準備
+            //    プレイ中の時間が「1フレームの経過時間」として足されないように、時計を今に合わせる
+            lastFrameticks = SDL_GetTicks();
+            SDL_ShowCursor(SDL_ENABLE);
+        }
     }
 
     if(bgm){
