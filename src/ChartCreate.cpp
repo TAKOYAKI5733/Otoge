@@ -74,6 +74,7 @@ struct ChartMeta{
     std::string bgm;
     std::string composer = "Unknown";
     double offsetMs = 0.0;
+    double visualOffsetMs = 0.0;
 };
 
 //JSON保存・読込

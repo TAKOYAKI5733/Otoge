@@ -13,6 +13,14 @@ inline void markLongFailed(Note& note, int32_t cutTime){
     note.failCutTime = std::max(cutTime, note.targetTime);
 }
 
+// 判定文字と一緒に出す「ズレ」を記録する
+inline void recordTiming(JudgeEffect& je, const GameContext& ctx, const Note& note, int judgeType){
+    je.hasTiming = true;
+    je.diffMs = ctx.musicTime - note.targetTime;   // - = 早い、+ = 遅い
+    je.judgeType = judgeType;
+    if(ctx.timingLog) ctx.timingLog->push_back({je.diffMs, judgeType});
+}
+
 inline void playHitSound(const GameContext& ctx, const Note& note){
     Mix_Chunk* se = ctx.tap_sound;
     if((note.type == NoteType::Normal_c || note.isCyan) && ctx.tap_sound_c){
@@ -56,6 +64,7 @@ inline void NoteJudge(GameContext& ctx, Tex& tex, Sq& sq){
 
                         if(timeDiff <= 60){
                             ctx.laneJudge[i] = {tex.perfect, sq.perfect, ctx.musicTime};
+                            recordTiming(ctx.laneJudge[i], ctx, note, 1);
                             note.isHit = true;
                             newEffect.lane = note.lane;
                             newEffect.widthLanes = note.widthLanes;
@@ -77,6 +86,7 @@ inline void NoteJudge(GameContext& ctx, Tex& tex, Sq& sq){
 
                         else if(timeDiff <= 80){
                             ctx.laneJudge[i] = {tex.good, sq.good, ctx.musicTime};
+                            recordTiming(ctx.laneJudge[i], ctx, note, 2);
                             note.isHit = true;
                             newEffect.judgeType = 2;
                             newEffect.lane = note.lane;
@@ -100,6 +110,7 @@ inline void NoteJudge(GameContext& ctx, Tex& tex, Sq& sq){
                         
                         else if(timeDiff <= 90){
                             ctx.laneJudge[i] = {tex.bad, sq.bad, ctx.musicTime};
+                            recordTiming(ctx.laneJudge[i], ctx, note, 3);
                             note.isHit = true;
                             markLongFailed(note, note.targetTime);
                             newEffect.judgeType = 3;
@@ -119,13 +130,6 @@ inline void NoteJudge(GameContext& ctx, Tex& tex, Sq& sq){
 
                         break;
                     }
-                }
-                if(!isNoteHit){
-                    Effect blankEffect;
-                    blankEffect.lane = i;
-                    blankEffect.spawnTime = ctx.musicTime;
-                    blankEffect.judgeType = 0;
-                    ctx.effects.push_back(blankEffect);
                 }
             }
             ctx.prevPressed[i] = ctx.currentPressed[i];

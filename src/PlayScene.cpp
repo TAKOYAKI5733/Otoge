@@ -3,6 +3,7 @@
 #include "Play/PauseMenu.h"
 #include "Play/PlaySceneManager.h"
 #include "Play/Autoplay.h"
+#include "TapSound.h"
 
 //グローバル変数
 double bpm = 120;
@@ -123,13 +124,13 @@ GameScene playGame(SDL_Window* window, SDL_Renderer* renderer, const std::string
 
     Mix_VolumeMusic(static_cast<int>(playerSettings.bgmVolume * MIX_MAX_VOLUME / 100.0));
     
-    Mix_Chunk* tap_sound = Mix_LoadWAV("sounds/tapsound_2.wav");
-    Mix_Chunk* tap_sound_c = Mix_LoadWAV("sounds/tapsound_2.wav");
-    if(!tap_sound && !tap_sound_c){
+    Mix_Chunk* tap_sound   = loadTapSound(playerSettings.tapSound);
+    Mix_Chunk* tap_sound_c = loadTapSound(playerSettings.tapSound);
+    if(!tap_sound || !tap_sound_c){
         printf("効果音読込失敗\n");
     }
     else{
-        Mix_VolumeChunk(tap_sound, static_cast<int>(playerSettings.seVolume * MIX_MAX_VOLUME / 100.0));
+        Mix_VolumeChunk(tap_sound,   static_cast<int>(playerSettings.seVolume * MIX_MAX_VOLUME / 100.0));
         Mix_VolumeChunk(tap_sound_c, static_cast<int>(playerSettings.seVolume * MIX_MAX_VOLUME / 100.0));
     }
 
@@ -142,12 +143,30 @@ GameScene playGame(SDL_Window* window, SDL_Renderer* renderer, const std::string
         return GameScene::Select;
     }
 
+    const int JUDGE_FONT_SIZE = 48;
+    TTF_Font* judgeFont = TTF_OpenFont("fonts/prac.ttf", JUDGE_FONT_SIZE);
+    if(!judgeFont) judgeFont = font;   // 開けなかったときは従来のフォントで代用
+
     SDL_Surface *perfect, *good, *bad, *miss, *waku_init;
-    perfect = TTF_RenderUTF8_Solid(font, "PERFECT!!", {255, 215, 0, 255});
-    good = TTF_RenderUTF8_Solid(font, "GOOD!", {0, 255, 255, 255});
-    bad = TTF_RenderUTF8_Solid(font, "BAD", {90, 255, 25, 255});
-    miss = TTF_RenderUTF8_Solid(font, "MISS...", {100, 100, 100, 255});
-    waku_init = TTF_RenderUTF8_Solid(font_init_waku, "E   R   U   I", {255, 255, 255, 255});
+    perfect = TTF_RenderUTF8_Blended(judgeFont, "PERFECT!!", {255, 215, 0, 255});
+    good    = TTF_RenderUTF8_Blended(judgeFont, "GOOD!",     {0, 255, 255, 255});
+    bad     = TTF_RenderUTF8_Blended(judgeFont, "BAD",       {90, 255, 25, 255});
+    miss    = TTF_RenderUTF8_Blended(judgeFont, "MISS...",   {100, 100, 100, 255});
+
+    {
+        const char* keyLabels[6] = {"W", "E", "R", "U", "I", "O"};
+        waku_init = SDL_CreateRGBSurfaceWithFormat(0, laneWidth * 6, TTF_FontHeight(font_init_waku),
+                                                   32, SDL_PIXELFORMAT_RGBA32);
+        for(int i = 0; i < 6; i++){
+            SDL_Surface* letter = TTF_RenderUTF8_Blended(font_init_waku, keyLabels[i], {255, 255, 255, 255});
+            if(!letter) continue;
+            SDL_Rect dst = {laneWidth * i + laneWidth / 2 - letter->w / 2, 0, letter->w, letter->h};
+            SDL_BlitSurface(letter, NULL, waku_init, &dst);
+            SDL_FreeSurface(letter);
+        }
+    }
+
+    if(judgeFont != font) TTF_CloseFont(judgeFont);   // 画像にしたらフォントは不要
     
     SDL_Texture *comboTexture, *scoreTexture;
     Tex tex;
@@ -164,12 +183,18 @@ GameScene playGame(SDL_Window* window, SDL_Renderer* renderer, const std::string
     SDL_Rect comboRect = {(int)(SCREEN_W * (6.0 / 8.0) - 50), (int)SCREEN_H / 3, 0, 0};
 
     Sq sq;
-    sq.perfect = {(int)(SCREEN_W * (3.0 / 4.0) + 50), (int)(SCREEN_H * (3.0 / 4.0) + 75), perfect->w, perfect->h};
-    sq.good = {(int)(SCREEN_W * (3.0 / 4.0) + 50), (int)(SCREEN_H * (3.0 / 4.0) + 75), good->w, good->h};
-    sq.bad = {(int)(SCREEN_W * (3.0 / 4.0) + 50), (int)(SCREEN_H * (3.0 / 4.0) + 75), bad->w, bad->h};
-    sq.miss = {(int)(SCREEN_W * (3.0 / 4.0) + 50), (int)(SCREEN_H * (3.0 / 4.0) + 75), miss->w, miss->h};
+    // 判定文字：画面の横中央、縦も中央あたりに置く
+    const int JUDGE_TEXT_CENTER_Y = SCREEN_H / 2;
+    auto centered = [&](SDL_Surface* s){
+        return SDL_Rect{SCREEN_W / 2 - s->w / 2, JUDGE_TEXT_CENTER_Y - s->h / 2, s->w, s->h};
+    };
+    sq.perfect = centered(perfect);
+    sq.good    = centered(good);
+    sq.bad     = centered(bad);
+    sq.miss    = centered(miss);
 
-    sq.waku_init = {(int)(SCREEN_W * (13.0 / 32.0) - 10), (int)(SCREEN_H * (3.0 / 4.0) + 100), waku_init->w, waku_init->h};
+        // 画像の左端を一番左のレーン（W）の左端にそろえる
+    sq.waku_init = {startX, (int)(SCREEN_H * (3.0 / 4.0) + 100), waku_init->w, waku_init->h};
 
     SDL_FreeSurface(perfect);
     SDL_FreeSurface(good);
@@ -250,8 +275,13 @@ GameScene playGame(SDL_Window* window, SDL_Renderer* renderer, const std::string
     bool running = true;
     SDL_Event e;
     GameScene nextScene = GameScene::Select;
-
     int32_t prevMusicTime = 0;
+    JudgeBoxFx boxFx;
+
+    TTF_Font* timingFont = TTF_OpenFont("fonts/prac.ttf", 36);
+    TimingDisplay timingDisplay;
+    std::vector<TimingSample> timingLog;
+    timingDisplay.init(renderer, timingFont, playerSettings);
 
     while(running){
 
@@ -387,7 +417,10 @@ GameScene playGame(SDL_Window* window, SDL_Renderer* renderer, const std::string
             .musicTimeExact = musicTimeExact,    // GameContext.h の最後に追加したメンバ
             .digitFont = &digitFont,
             .tutorial = tutorial,
-            .visualizer = &visualizer
+            .visualizer = &visualizer,
+            .visualOffsetMs = playerSettings.visualOffsetMs,
+            .timing = &timingDisplay,
+            .timingLog = &timingLog
             };
 
         if(paused){
@@ -420,14 +453,6 @@ GameScene playGame(SDL_Window* window, SDL_Renderer* renderer, const std::string
                 running = false;
                 nextScene = GameScene::Result;
             }
-
-            for(int i = 0; i < 6; i++){
-                if(laneJudge[i].texture != nullptr){
-                    if((musicTime - laneJudge[i].spawnTime) >= static_cast<int32_t>(laneJudge[i].duration)){
-                        laneJudge[i].texture = nullptr;
-                    }
-                }
-            }
         }
 
         visualizer.update();
@@ -443,7 +468,7 @@ GameScene playGame(SDL_Window* window, SDL_Renderer* renderer, const std::string
         updateAndRenderScoreTexture(ctx);
 
         //ノーツの描画・アニメーション処理（この中で SDL_RenderPresent している）
-        renderGamePlayScreen(ctx, tex, sq, currentNoteSpeed, laneX, false);
+                renderGamePlayScreen(ctx, tex, sq, currentNoteSpeed, laneX, false, &boxFx);
         pauseMenu.draw(renderer, menuFont, font, labelFont, realMs);
         SDL_RenderPresent(renderer);
 
@@ -480,6 +505,8 @@ GameScene playGame(SDL_Window* window, SDL_Renderer* renderer, const std::string
     outResult.goodCount = scoreTracker.getGoodCount();
     outResult.badCount = scoreTracker.getBadCount();
     outResult.missCount = scoreTracker.getMissCount();
+    outResult.timings = timingLog;
+    outResult.isAutoplay = isAutoplay;
 
     visualizer.detach();
 
@@ -489,6 +516,8 @@ GameScene playGame(SDL_Window* window, SDL_Renderer* renderer, const std::string
     TTF_CloseFont(font_init_waku);
     TTF_CloseFont(menuFont);
     TTF_CloseFont(labelFont);
+    timingDisplay.destroy();
+    if(timingFont) TTF_CloseFont(timingFont);
     Mix_FreeMusic(bgm);
     Mix_FreeChunk(tap_sound);
     Mix_FreeChunk(tap_sound_c);

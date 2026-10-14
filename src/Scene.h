@@ -14,7 +14,13 @@ enum class GameScene{
     Setting,
     Load,
     ChartCreate,
-    Tutorial
+    Tutorial,
+    Calibration
+};
+
+struct TimingSample{
+    int32_t diffMs = 0;     // 叩いた時刻 − 正しい時刻（- = 早い、+ = 遅い）
+    int judgeType = 0;      // 1 = PERFECT、2 = GOOD、3 = BAD
 };
 
 struct ResultData{
@@ -26,6 +32,8 @@ struct ResultData{
     int goodCount = 0;
     int badCount = 0;
     int missCount = 0;
+    std::vector<TimingSample> timings;
+    bool isAutoplay = false;
 };
 
 struct PlayerSettings{
@@ -35,6 +43,10 @@ struct PlayerSettings{
     bool vsync = true;
     int fpsCap = 0;
     int windowMode = 0;
+    std::string tapSound = "";
+    double visualOffsetMs = 0.0;
+    bool showFastLate = true;    // FAST/LATE 表示
+    bool showTimingMs = false;   // ±ms 表示
 };
 
 void loadPlayerSettings(PlayerSettings& settings);
@@ -46,5 +58,6 @@ GameScene loadScene(SDL_Window* window, SDL_Renderer* renderer, std::string& sel
 GameScene chartCreateScene(SDL_Window* window, SDL_Renderer* renderer, std::string& scorePath, SDL_Texture* targetTex = nullptr);
 GameScene resultScene(SDL_Window* window, SDL_Renderer* renderer, const ResultData& result, SDL_Texture* targettex = nullptr);
 GameScene settingScene(SDL_Window* window, SDL_Renderer* renderer, PlayerSettings& playerSettings, SDL_Texture* targetTex = nullptr);
+GameScene calibrationScene(SDL_Window* window, SDL_Renderer* renderer, PlayerSettings& settings);
 
 #endif

@@ -6,6 +6,7 @@
 #include "Play/roundedRect.h"
 #include "Play/tutorialOverlay.h"
 #include "Play/visualizer.h"
+#include "Play/drawFrame.h"
 
 constexpr SDL_Color kPerfectColor = {250, 250, 150, 255};
 constexpr SDL_Color kShadowColor  = {0, 0, 0, 0};
@@ -35,10 +36,21 @@ inline double evaluatNotePathY(const Note& note, double musicTime){
     return path.back().y;
 }
 
+// ===== 判定文字のポップ =====
+inline constexpr double JUDGE_POP_MS    = 120.0;   // 出てから元の大きさに収まるまで
+inline constexpr double JUDGE_POP_AMOUNT = 0.35;    // 出た瞬間の大きさ（元の何倍か）
+
+// 終わりで少し行き過ぎてから戻るイージング（1.0 を一度超えて 1.0 に収まる）
+inline double easeOutBack(double t){
+    const double c1 = 1.70158;
+    const double c3 = c1 + 1.0;
+    return 1.0 + c3 * std::pow(t - 1.0, 3.0) + c1 * std::pow(t - 1.0, 2.0);
+}
+
 // ===== 同時押しの補助線 =====
 inline constexpr float     SYNC_LINE_THICKNESS = 6.0f;                 // 線の太さ(px)
 inline constexpr SDL_Color SYNC_LINE_COLOR     = {255, 255, 255, 160};  // 線の色（半透明の白）
-inline constexpr float NOTE_SIDE_MARGIN = 8.0f;   // ノーツの左右それぞれの、レーンとの隙間(px)
+
 
 inline constexpr float     SYNC_FRAME_WIDTH = 5.0f;                    // 枠の太さ（隙間込み）
 inline constexpr float     SYNC_FRAME_GAP   = 2.0f;                    // ヘッドと枠の間の暗い隙間
@@ -47,12 +59,13 @@ inline constexpr SDL_Color SYNC_FRAME_GAP_COLOR = {20, 20, 30, 0};   // 隙間�
 
 // ノーツの中心の y 座標を求める（ノーツ本体の描画と補助線で共通に使う）
 inline int computeNoteY(const GameContext& ctx, const Note& note, double currentNoteSpeed){
+    const double t = ctx.musicTimeExact + ctx.visualOffsetMs;   // 表示用の時刻（判定には使わない）
     if(note.hasCustomPath()){
-        double distFromLine = evaluatNotePathY(note, ctx.musicTime);
+        double distFromLine = evaluatNotePathY(note, t);
         return ctx.judgeY - static_cast<int>(distFromLine);
     }
     double effectiveSpeed = note.hasCustomSpeed ? note.customSpeed : currentNoteSpeed;
-    return ctx.judgeY - static_cast<int>((static_cast<double>(note.targetTime) - ctx.musicTime) * effectiveSpeed);
+    return ctx.judgeY - static_cast<int>((static_cast<double>(note.targetTime) - t) * effectiveSpeed);
 }
 
 // 太さのある線を描く（2点を結ぶ細長い四角形を三角形2枚で描く）
@@ -124,10 +137,43 @@ inline void drawSyncLines(GameContext& ctx, double currentNoteSpeed, int laneX[6
     }
 }
 
-inline void renderGamePlayScreen(GameContext& ctx, Tex& tex, Sq& sq, double currentNoteSpeed, int laneX[6], bool present = true){
+// 押したレーンの判定ボックスを埋める（長押し中は埋まったまま）
+inline void drawJudgeBoxFx(GameContext& ctx, int laneX[6], JudgeBoxFx& fx){
+    const double now = ctx.musicTimeExact;
+    fx.update(ctx.currentPressed, now);
+
+    const float judgeY = static_cast<float>(ctx.judgeY);
+    const float pad    = JUDGE_BOX_BORDER;
+
+    RoundedRectBatch fillBatch;
+    for(int i = 0; i < 6; i++){
+
+        double lv = fx.level(i, now);
+        if(lv <= 0.001) continue;
+
+        const float noteX = static_cast<float>(laneX[i]) + JUDGE_BOX_SIDE_MARGIN;
+        const float noteW = static_cast<float>(ctx.laneWidth) - JUDGE_BOX_SIDE_MARGIN * 2.0f;
+        const float noteY = judgeY - NOTE_HEAD_H * 0.5f;
+
+        // 長押し中は枠線もシアンにして「押さえている」ことを示す
+        if(fx.held[i]){
+            fillBatch.addOutline(noteX, noteY, noteW, NOTE_HEAD_H, NOTE_RADIUS, JUDGE_BOX_BORDER, JUDGE_FILL_COLOR);
+        }
+
+        // 枠の内側を埋める
+        const float b = JUDGE_BOX_BORDER;
+        SDL_Color c = JUDGE_FILL_COLOR;
+        c.a = static_cast<Uint8>(std::clamp(lv, 0.0, 1.0) * 230);
+        fillBatch.add(noteX + b, noteY + b, noteW - b * 2.0f, NOTE_HEAD_H - b * 2.0f, std::max(0.0f, NOTE_RADIUS - b), c);
+    }
+    fillBatch.flush(ctx.renderer);
+}
+
+inline void renderGamePlayScreen(GameContext& ctx, Tex& tex, Sq& sq, double currentNoteSpeed, int laneX[6], bool present = true, JudgeBoxFx* boxFx = nullptr){
     GradientBackground(ctx.renderer, SCREEN_W, SCREEN_H, ctx.musicTime);
     draw_waku_init(ctx.renderer, tex, sq, ctx.laneActive);
     if(ctx.visualizer) ctx.visualizer->render(ctx.renderer);
+    if(boxFx) drawJudgeBoxFx(ctx, laneX, *boxFx);
 
     SDL_SetRenderDrawBlendMode(ctx.renderer, SDL_BLENDMODE_BLEND);
 
@@ -170,8 +216,8 @@ inline void renderGamePlayScreen(GameContext& ctx, Tex& tex, Sq& sq, double curr
         // ノーツはレーンの左右に NOTE_SIDE_MARGIN ずつ隙間を空けて、中央に置く
         const float noteX  = laneLeft + NOTE_SIDE_MARGIN;
         const float noteW  = std::max(4.0f, laneSpan - NOTE_SIDE_MARGIN * 2.0f);
-        const float noteH  = 30.0f;   // ヘッドの高さ
-        const float radius = 5.0f;    // 角の丸み（ヘッドと帯で共通）
+        const float noteH  = NOTE_HEAD_H;
+        const float radius = NOTE_RADIUS;
 
         // ホールド中はヘッドを判定ラインに固定する
         const int headY = note.isHolding ? ctx.judgeY : noteY;
@@ -257,35 +303,42 @@ inline void renderGamePlayScreen(GameContext& ctx, Tex& tex, Sq& sq, double curr
     SDL_SetRenderDrawBlendMode(ctx.renderer, SDL_BLENDMODE_BLEND);
     for(const auto &fx : ctx.effects){
         if(fx.lane < 0 || fx.lane >= 6) continue;
+        if(fx.judgeType == 0) continue;   // 判定のないエフェクト（空打ち）は出さない
 
-        double progress = static_cast<double>(ctx.musicTime - fx.spawnTime) / fx.duration;
-        if(progress > 1.0) progress = 1.0;
+        double p = static_cast<double>(ctx.musicTime - fx.spawnTime) / fx.duration;
+        if(p < 0.0 || p >= 1.0) continue;
+        double ease = 1.0 - (1.0 - p) * (1.0 - p);   // 最初に速く広がる
 
-        int alpha = static_cast<int>((1.0 - progress) * 200);
+        // ノーツの外形（判定ボックスと同じ計算）
+        const float laneLeft = static_cast<float>(laneX[fx.lane]);
+        const float laneSpan = static_cast<float>(ctx.laneWidth * fx.widthLanes);
+        const float noteW    = laneSpan - NOTE_SIDE_MARGIN * 2.0f;
+        const float cx       = laneLeft + laneSpan * 0.5f;
+        const float cy       = static_cast<float>(ctx.judgeY);
 
-        int baseWidth = ctx.laneWidth * fx.widthLanes;
+        // 判定ごとの色
+        SDL_Color c;
+        if(fx.judgeType == 1)      c = kPerfectColor;               // PERFECT：淡い黄色
+        else if(fx.judgeType == 2) c = SDL_Color{0, 255, 255, 255}; // GOOD：シアン
+        else                       c = SDL_Color{230, 70, 70, 255}; // BAD：赤
 
-        int currentWidth = static_cast<int>(baseWidth * (1.0 + progress * 0.5));
+        // ① 破裂の一瞬だけ、ノーツの周り（レーン幅 × 80px）を白く光らせる
+        if(p < 0.15){
+            Uint8 fa = static_cast<Uint8>(200 * (1.0 - p / 0.15));
+            SDL_SetRenderDrawColor(ctx.renderer, 255, 255, 255, fa);
+            SDL_Rect flash = {static_cast<int>(laneLeft), static_cast<int>(cy) - 40, static_cast<int>(laneSpan), 80};
+            SDL_RenderFillRect(ctx.renderer, &flash);
+        }
 
-        SDL_Rect fxRect;
-            if(fx.judgeType == 1){
-                SDL_SetRenderDrawColor(ctx.renderer, 250, 250, 150, alpha);
-            }
-            else if(fx.judgeType == 2){
-                SDL_SetRenderDrawColor(ctx.renderer, 0, 255, 255, alpha);
-            }
-            else if(fx.judgeType == 3){
-                SDL_SetRenderDrawColor(ctx.renderer, 180, 50, 50, alpha);
-            }
-            else{
-                SDL_SetRenderDrawColor(ctx.renderer, 255, 255, 255, alpha);
-            }
-
-            fxRect.w = currentWidth;
-            fxRect.h = 40;
-            fxRect.x = laneX[fx.lane] + (baseWidth / 2) - (fxRect.w / 2);
-            fxRect.y = ctx.judgeY - (fxRect.h / 2);
-        SDL_RenderFillRect(ctx.renderer, &fxRect);
+        // ② 広がる枠（太さ 4px）
+        Uint8 a = static_cast<Uint8>(255 * (1.0 - p));
+        int w = static_cast<int>(noteW * (1.0 + ease * 0.8));
+        int h = static_cast<int>(NOTE_HEAD_H + ease * 80.0);
+        SDL_SetRenderDrawColor(ctx.renderer, c.r, c.g, c.b, a);
+        for(int t = 0; t < 4; t++){
+            SDL_Rect ring = {static_cast<int>(cx) - w / 2 + t, static_cast<int>(cy) - h / 2 + t, w - t * 2, h - t * 2};
+            SDL_RenderDrawRect(ctx.renderer, &ring);
+        }
     }
 
     // キービーム：焼き込みテクスチャ1枚を貼る（1本あたり40回 → 1回）
@@ -304,15 +357,42 @@ inline void renderGamePlayScreen(GameContext& ctx, Tex& tex, Sq& sq, double curr
                 double timeFade = 1.0 - easeOutCubic(timeProgress);
 
                 SDL_SetTextureAlphaMod(beamTex, static_cast<Uint8>(255 * timeFade));
-                SDL_Rect beamRect = {laneX[beam.lane], ctx.judgeY - beamHeight, ctx.laneWidth, beamHeight};
+                const int beamX = laneX[beam.lane] + static_cast<int>(JUDGE_BOX_SIDE_MARGIN);
+                const int beamW = ctx.laneWidth - static_cast<int>(JUDGE_BOX_SIDE_MARGIN * 2.0f);
+                SDL_Rect beamRect = {beamX, ctx.judgeY - beamHeight, beamW, beamHeight};
                 SDL_RenderCopy(ctx.renderer, beamTex, NULL, &beamRect);
             }
         }
     }
 
-    for(int i = 0; i < 6; i++){
-        if(ctx.laneJudge[i].texture != nullptr){
-            SDL_RenderCopy(ctx.renderer, ctx.laneJudge[i].texture, NULL, &ctx.laneJudge[i].rect);
+    {
+        int latest = -1;
+        for(int i = 0; i < 6; i++){
+            if(ctx.laneJudge[i].texture == nullptr) continue;
+            if(latest < 0 || ctx.laneJudge[i].spawnTime >= ctx.laneJudge[latest].spawnTime) latest = i;
+        }
+
+        if(latest >= 0){
+            const JudgeEffect& je = ctx.laneJudge[latest];
+
+            // 出てからの進み具合 0→1。大きさは JUDGE_POP_START → 少し行き過ぎて → 1.0
+            double t = std::clamp((ctx.musicTimeExact - je.spawnTime) / JUDGE_POP_MS, 0.0, 1.0);
+            double scale = 1.0 + JUDGE_POP_AMOUNT * (1.0 - easeOutCubic(t));
+
+            // 元の位置の中心を保ったまま拡大・縮小する
+            int w  = static_cast<int>(je.rect.w * scale);
+            int h  = static_cast<int>(je.rect.h * scale);
+            int cx = je.rect.x + je.rect.w / 2;
+            int cy = je.rect.y + je.rect.h / 2;
+            SDL_Rect dst = {cx - w / 2, cy - h / 2, w, h};
+
+            SDL_SetTextureAlphaMod(je.texture, 255);
+            SDL_RenderCopy(ctx.renderer, je.texture, NULL, &dst);
+
+            // FAST/LATE・±ms は元の大きさの位置に出す（ポップに合わせて揺れないように）
+            if(ctx.timing && je.hasTiming){
+                ctx.timing->draw(je.rect, je.judgeType, je.diffMs);
+            }
         }
     }
 

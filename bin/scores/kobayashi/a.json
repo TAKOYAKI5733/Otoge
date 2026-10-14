@@ -1,0 +1,16 @@
+{
+  "bgm": "Transformers_ Victory Opening _Creditless_ [4K 60FPS Remastered]_part1_2.mp3",
+  "composer": "Unknown",
+  "difficulties": [
+    {
+      "bpm": 120.0,
+      "bpmEvents": [],
+      "chartCreator": "Unknown",
+      "level": "0",
+      "name": "EASY",
+      "notes": [],
+      "speedEvents": []
+    }
+  ],
+  "offset": 0.0
+}

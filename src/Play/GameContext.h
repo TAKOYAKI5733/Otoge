@@ -4,6 +4,7 @@
 #include "Play/type.h"
 #include "Play/scoreTracker.h"
 #include "Play/DigitRenderer.h"
+#include "Play/Timingdisplay.h"
 
 struct SpectrumVisualizer;
 struct GameContext{
@@ -59,4 +60,9 @@ struct GameContext{
     TutorialOverlay* tutorial = nullptr;
 
     SpectrumVisualizer* visualizer = nullptr;
+    double visualOffsetMs = 0.0;
+
+    TimingDisplay* timing = nullptr;   // FAST/LATE・±ms の表示
+    
+    std::vector<TimingSample>* timingLog = nullptr;
 };

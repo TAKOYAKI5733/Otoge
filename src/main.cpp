@@ -183,6 +183,11 @@ int main(){
                 break;
             }
 
+            case GameScene::Calibration:{
+                currentScene = calibrationScene(window, renderer, playerSettings);
+                break;
+            }
+
             default:{
                 currentScene = GameScene::Shutdown;
                 break;

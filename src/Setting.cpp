@@ -30,6 +30,9 @@ void loadPlayerSettings(PlayerSettings& settings){
     settings.vsync  = j.value("vsync", true);
     settings.fpsCap = j.value("fpsCap", 0);
     settings.windowMode = std::clamp(j.value("windowMode", 0), 0, 2);
+    settings.tapSound = j.value("tapSound", std::string(""));
+    settings.showFastLate = j.value("showFastLate", true);
+    settings.showTimingMs = j.value("showTimingMs", false);
 }
 
 void savePlayerSettings(const PlayerSettings& settings){
@@ -40,6 +43,9 @@ void savePlayerSettings(const PlayerSettings& settings){
     j["vsync"]  = settings.vsync;
     j["fpsCap"] = settings.fpsCap;
     j["windowMode"] = settings.windowMode;
+    j["tapSound"] = settings.tapSound;
+    j["showFastLate"] = settings.showFastLate;
+    j["showTimingMs"] = settings.showTimingMs;
 
     std::ofstream out(SETTING_PATH);
     if(out.is_open()){
@@ -79,6 +85,9 @@ GameScene settingScene(SDL_Window* window, SDL_Renderer* renderer, PlayerSetting
     PlayerSettings edit = playerSettings;
 
     Mix_Chunk* previewTap = Mix_LoadWAV("sounds/tapsound_2.wav");
+
+    bool showFastLate = true;    // FAST/LATE 表示
+    bool showTimingMs = false;   // ±ms 表示
 
     bool running = true;
     SDL_Event e;

@@ -1,8 +1,11 @@
 {
-  "bgmVolume": 15,
-  "fpsCap": 240,
+  "bgmVolume": 45,
+  "fpsCap": 165,
   "offsetMs": 0.0,
-  "seVolume": 25,
-  "vsync": false,
+  "seVolume": 100,
+  "showFastLate": true,
+  "showTimingMs": false,
+  "tapSound": "",
+  "vsync": true,
   "windowMode": 2
 }

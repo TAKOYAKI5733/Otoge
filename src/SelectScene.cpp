@@ -3,6 +3,7 @@
 #include "Play/PlaySceneManager.h"
 #include "JacketSpectrum.h"
 #include "Settingspanel.h"
+#include "TapSound.h"
 #include <algorithm>
 #include <unordered_map>
 #include <cmath>
@@ -68,6 +69,14 @@ struct JacketManager{
     SDL_Rect lastPanel = {0, 0, 0, 0};
 };
 
+struct SelectMemory{
+    bool hasLast = false;
+    std::string genreName;
+    std::string scorePath;
+    int difficultyCursor = 0;
+};
+static SelectMemory g_selectMemory;
+
 // 「プレイヤーが選んだ順番」を、その曲に存在する範囲に収める
 inline int clampDifficulty(int preferred, size_t count){
     if(count == 0) return 0;
@@ -127,6 +136,24 @@ GameScene selectSongScene(SDL_Window* window, SDL_Renderer* renderer, std::strin
     int genreCursor = 0;
     int songCursor = 0;
     int difficultyCursor = 0;   // プレイヤーが選んだ難易度の「順番」（曲を移っても維持する）
+
+    if(g_selectMemory.hasLast){
+        for(size_t gi = 0; gi < categories.size(); gi++){
+            if(categories[gi].isTutorial) continue;
+            if(categories[gi].genreName != g_selectMemory.genreName) continue;
+
+            for(size_t si = 0; si < categories[gi].songList.size(); si++){
+                if(categories[gi].songList[si].scorePath == g_selectMemory.scorePath){
+                    genreCursor = static_cast<int>(gi);
+                    songCursor = static_cast<int>(si);
+                    difficultyCursor = g_selectMemory.difficultyCursor;
+                    currentMode = SelectMode::SelectSong;
+                    break;
+                }
+            }
+        }
+    }
+
     SortKey sortKey = SortKey::Title;   // ALL の並べ替えの基準
     bool sortDescending = false;        // true で降順
 
@@ -151,6 +178,18 @@ GameScene selectSongScene(SDL_Window* window, SDL_Renderer* renderer, std::strin
     double detailAnimation = 0.0;
     double chartAnimation = 0.0;   // 譜面製作者の行の表示量 (0.0〜1.0)
     double diffSlide = 0.0;        // 難易度切替時のスライド量 (-1.0〜1.0、0で停止)
+
+    auto moveCursor = [&](int dir){
+        if(currentMode == SelectMode::SelectGenre){
+            int n = static_cast<int>(categories.size());
+            genreCursor = (genreCursor + dir + n) % n;
+        }
+        else if(currentMode == SelectMode::SelectSong){
+            int n = static_cast<int>(categories[genreCursor].songList.size());
+            songCursor = (songCursor + dir + n) % n;
+            detailAnimation = 0.2;   // 曲が変わったときの詳細パネルのアニメ
+        }
+    };
 
     bool running = true;
     SDL_Event e;
@@ -179,7 +218,7 @@ GameScene selectSongScene(SDL_Window* window, SDL_Renderer* renderer, std::strin
     JacketSpectrum visualizer(12);   // バーの本数（少ないほど1本が太くなる）
     visualizer.start();
     SettingsPanel settings;
-    settings.init();
+    settings.init(playerSettings);
 
     while(running){
         std::string targetMusicPath = dafaultBgmPath;
@@ -235,9 +274,21 @@ GameScene selectSongScene(SDL_Window* window, SDL_Renderer* renderer, std::strin
                 nextScene = GameScene::Shutdown;
             }
 
+            if(e.type == SDL_MOUSEWHEEL){
+                int wheelY = e.wheel.y;
+                if(e.wheel.direction == SDL_MOUSEWHEEL_FLIPPED) wheelY = -wheelY;   // ナチュラルスクロール対策
+
+                if(wheelY > 0)      moveCursor(-1);   // 奥に回す = 上へ
+                else if(wheelY < 0) moveCursor(+1);   // 手前に回す = 下へ
+            }
+
             if(e.type == SDL_KEYDOWN){
                 if(settings.isOpen()){
                     settings.handleKey(e.key, window, renderer, playerSettings);
+                    if(settings.consumeCalibrationRequest()){   // 「判定調整」で ENTER
+                        nextScene = GameScene::Calibration;
+                        running = false;
+                    }
                     continue;
                 }
 
@@ -257,26 +308,12 @@ GameScene selectSongScene(SDL_Window* window, SDL_Renderer* renderer, std::strin
                     }
                     
                     case SDLK_DOWN:{
-                        if(currentMode == SelectMode::SelectGenre){
-                            genreCursor = (genreCursor + 1 + categories.size()) % categories.size();
-                        }
-                        else if(currentMode == SelectMode::SelectSong){
-                            int songCount = categories[genreCursor].songList.size();
-                            songCursor = (songCursor + 1 + songCount) % songCount;
-                            cursorMoved = true;
-                        }
+                        moveCursor(+1);
                         break;
                     }
 
                     case SDLK_UP:{
-                        if(currentMode == SelectMode::SelectGenre){
-                            genreCursor = (genreCursor - 1 + categories.size()) % categories.size();
-                        }
-                        else if(currentMode == SelectMode::SelectSong){
-                            int songCount = categories[genreCursor].songList.size();
-                            songCursor = (songCursor - 1 + songCount) % songCount;
-                            cursorMoved = true;
-                        }
+                        moveCursor(-1);
                         break;
                     }
 
@@ -328,6 +365,10 @@ GameScene selectSongScene(SDL_Window* window, SDL_Renderer* renderer, std::strin
 
                             SDL_Keymod mod = SDL_GetModState();
                             outAutoplay = (mod & KMOD_CTRL) != 0;   // Ctrl+ENTER でオートプレイ
+                            g_selectMemory.hasLast = true;
+                            g_selectMemory.genreName = categories[genreCursor].genreName;
+                            g_selectMemory.scorePath = song.scorePath;
+                            g_selectMemory.difficultyCursor = difficultyCursor;
                             nextScene = GameScene::Load;
                             running = false;
                         }

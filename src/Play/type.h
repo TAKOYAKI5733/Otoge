@@ -55,6 +55,10 @@ struct JudgeEffect{
     SDL_Rect rect;
     int32_t spawnTime;
     uint32_t duration = 200;
+
+    bool hasTiming = false;   //タイミングのある判定か（MISS などは false）
+    int32_t diffMs = 0;       //叩いた時刻 − 正しい時刻
+    int judgeType = 0;        //1 = PERFECT、2 = GOOD、3 = BAD
 };
 
 struct SpeedEvent{

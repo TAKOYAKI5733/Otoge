@@ -1,0 +1,43 @@
+{
+  "bgm": "‘LEMON MELON COOKIE’ _ Covered by 猫汰つな.mp3",
+  "composer": "Unknown",
+  "difficulties": [
+    {
+      "bpm": 120.0,
+      "bpmEvents": [],
+      "chartCreator": "Unknown",
+      "level": "0",
+      "name": "MASTER",
+      "notes": [],
+      "speedEvents": []
+    },
+    {
+      "bpm": 120.0,
+      "bpmEvents": [],
+      "chartCreator": "Unknown",
+      "level": "0",
+      "name": "HARD",
+      "notes": [],
+      "speedEvents": []
+    },
+    {
+      "bpm": 120.0,
+      "bpmEvents": [],
+      "chartCreator": "Unknown",
+      "level": "0",
+      "name": "NORMAL",
+      "notes": [],
+      "speedEvents": []
+    },
+    {
+      "bpm": 120.0,
+      "bpmEvents": [],
+      "chartCreator": "Unknown",
+      "level": "0",
+      "name": "EASY",
+      "notes": [],
+      "speedEvents": []
+    }
+  ],
+  "offset": 0.0
+}

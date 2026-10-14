@@ -92,6 +92,34 @@ struct RoundedRectBatch{
         }
     }
 
+    void addOutline(float x, float y, float w, float h, float radius, float thickness, SDL_Color c, int cornerSegs = 6){
+        if(w <= 0.0f || h <= 0.0f || thickness <= 0.0f || c.a == 0) return;
+        const float r    = clampRadius(radius, w, h);
+        const int   segs = segsFor(r, cornerSegs);
+        const float t    = std::min(thickness, std::min(w, h) * 0.5f);
+
+        // 外周と、t だけ内側に縮めた外周を、同じ点数で作る
+        buildRing(ring_,      x,     y,     w,         h,         r,                     segs);
+        buildRing(innerRing_, x + t, y + t, w - 2 * t, h - 2 * t, std::max(0.0f, r - t), segs);
+        const int n = static_cast<int>(ring_.size());
+
+        const int outerBase = static_cast<int>(verts.size());
+        for(const P& p : ring_)      verts.push_back({ { p.x, p.y }, c, { 0.0f, 0.0f } });
+        const int innerBase = static_cast<int>(verts.size());
+        for(const P& p : innerRing_) verts.push_back({ { p.x, p.y }, c, { 0.0f, 0.0f } });
+
+        // 外周と内周の間（帯）を三角形で埋める
+        for(int i = 0; i < n; i++){
+            const int j = (i + 1) % n;
+            const int o0 = outerBase + i, o1 = outerBase + j;
+            const int i0 = innerBase + i, i1 = innerBase + j;
+            idx.push_back(o0); idx.push_back(o1); idx.push_back(i1);
+            idx.push_back(o0); idx.push_back(i1); idx.push_back(i0);
+        }
+
+        pushFeather(outerBase, n, c, 1.0f);   // 外側の縁を1pxぼかしてなめらかに
+    }
+
     void flush(SDL_Renderer* renderer){
         if(!idx.empty()){
             SDL_RenderGeometry(renderer, nullptr, verts.data(), static_cast<int>(verts.size()),
