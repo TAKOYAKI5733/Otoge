@@ -38,7 +38,7 @@ inline double evaluatNotePathY(const Note& note, double musicTime){
 
 // ===== 判定文字のポップ =====
 inline constexpr double JUDGE_POP_MS    = 120.0;   // 出てから元の大きさに収まるまで
-inline constexpr double JUDGE_POP_AMOUNT = 0.35;    // 出た瞬間の大きさ（元の何倍か）
+inline constexpr double JUDGE_POP_AMOUNT = 0.15;    // 出た瞬間の大きさ（元の何倍か）
 
 // 終わりで少し行き過ぎてから戻るイージング（1.0 を一度超えて 1.0 に収まる）
 inline double easeOutBack(double t){
@@ -56,6 +56,15 @@ inline constexpr float     SYNC_FRAME_WIDTH = 5.0f;                    // 枠の
 inline constexpr float     SYNC_FRAME_GAP   = 2.0f;                    // ヘッドと枠の間の暗い隙間
 inline constexpr SDL_Color SYNC_FRAME_COLOR = {255, 190, 30, 0};     // 濃い金色
 inline constexpr SDL_Color SYNC_FRAME_GAP_COLOR = {20, 20, 30, 0};   // 隙間の色    // ← 追加：Drag より淡い黄色
+
+// ===== 判定文字の上のコンボ数 =====
+inline constexpr double JUDGE_COMBO_SCALE      = 1.3;    // 大きさ（数字の元の大きさの何倍か。元は 80px）
+inline constexpr double JUDGE_COMBO_SLIDE_MS     = 120.0;   // 下から上がりきるまでの時間
+inline constexpr int    JUDGE_COMBO_SLIDE_PX     = 18;      // どれだけ下から上がってくるか(px)
+inline constexpr double JUDGE_COMBO_SLIDE_FADE   = 0.4;     // 上がり始めの濃さ（いつもの濃さの何倍か）
+inline constexpr Uint8  JUDGE_COMBO_ALPHA      = 110;    // 透明度（0 = 見えない、255 = はっきり）
+inline constexpr int    JUDGE_COMBO_Y          = 300;    // 縦の中心の位置(px)。判定文字は 540 あたり
+inline constexpr int    JUDGE_COMBO_LABEL_GAP  = 0;      // 「COMBO」とコンボ数の間(px)。離れて見えるときはマイナスに
 
 // ノーツの中心の y 座標を求める（ノーツ本体の描画と補助線で共通に使う）
 inline int computeNoteY(const GameContext& ctx, const Note& note, double currentNoteSpeed){
@@ -88,6 +97,41 @@ inline void drawThickLine(SDL_Renderer* renderer, float x1, float y1, float x2, 
     };
     int indices[6] = {0, 1, 2, 0, 2, 3};
     SDL_RenderGeometry(renderer, nullptr, v, 4, indices, 6);
+}
+
+// 回った正方形の枠（中継点のエフェクト用）
+inline void drawRotatedSquareFrame(SDL_Renderer* r, float cx, float cy, float size, float angle,
+                                   float thickness, SDL_Color c){
+    const float h = size * 0.5f;
+    const float cs = std::cos(angle), sn = std::sin(angle);
+    float px[4], py[4];
+    const float lx[4] = {-h,  h, h, -h};
+    const float ly[4] = {-h, -h, h,  h};
+    for(int k = 0; k < 4; k++){
+        px[k] = cx + lx[k] * cs - ly[k] * sn;
+        py[k] = cy + lx[k] * sn + ly[k] * cs;
+    }
+    for(int k = 0; k < 4; k++){
+        const int n = (k + 1) % 4;
+        drawThickLine(r, px[k], py[k], px[n], py[n], thickness, c);
+    }
+}
+
+// 回った正方形を塗りつぶす（中継点のエフェクト用）
+//   4つの角を求めて、三角形2枚で塗る
+inline void drawRotatedSquareFilled(SDL_Renderer* r, float cx, float cy, float size, float angle, SDL_Color c){
+    const float h = size * 0.5f;
+    const float cs = std::cos(angle), sn = std::sin(angle);
+    const float lx[4] = {-h,  h, h, -h};
+    const float ly[4] = {-h, -h, h,  h};
+    SDL_Vertex v[4];
+    for(int k = 0; k < 4; k++){
+        v[k].position  = {cx + lx[k] * cs - ly[k] * sn, cy + lx[k] * sn + ly[k] * cs};
+        v[k].color     = c;
+        v[k].tex_coord = {0.0f, 0.0f};
+    }
+    int idx[6] = {0, 1, 2, 0, 2, 3};
+    SDL_RenderGeometry(r, nullptr, v, 4, idx, 6);
 }
 
 // 同じ時刻・別レーンのノーツどうしを線でつなぐ
@@ -143,7 +187,6 @@ inline void drawJudgeBoxFx(GameContext& ctx, int laneX[6], JudgeBoxFx& fx){
     fx.update(ctx.currentPressed, now);
 
     const float judgeY = static_cast<float>(ctx.judgeY);
-    const float pad    = JUDGE_BOX_BORDER;
 
     RoundedRectBatch fillBatch;
     for(int i = 0; i < 6; i++){
@@ -181,7 +224,6 @@ inline void renderGamePlayScreen(GameContext& ctx, Tex& tex, Sq& sq, double curr
     drawSyncLines(ctx, currentNoteSpeed, laneX, isSync);
 
     SDL_SetRenderDrawColor(ctx.renderer, 255, 255, 255, 255);
-    SDL_Texture* lastModTexture = nullptr;
     
     RoundedRectBatch shadowBatch;  // 影
     RoundedRectBatch bodyBatch;    // ロングノーツの帯
@@ -192,82 +234,82 @@ inline void renderGamePlayScreen(GameContext& ctx, Tex& tex, Sq& sq, double curr
     for(const auto& note : ctx.notes){
         if(note.lane < 0 || note.lane >= 6) continue;
 
-                if(note.isHit && !note.isHolding && !note.isFailed && ctx.musicTime >= note.targetTime) continue;
+            if(note.isHit && !note.isHolding && !note.isFailed && ctx.musicTime >= note.targetTime) continue;
 
-        double effectiveSpeed = note.hasCustomSpeed ? note.customSpeed : currentNoteSpeed;
-        int noteY = computeNoteY(ctx, note, currentNoteSpeed);
+            double effectiveSpeed = note.hasCustomSpeed ? note.customSpeed : currentNoteSpeed;
+            int noteY = computeNoteY(ctx, note, currentNoteSpeed);
 
-        if(noteY < -50) continue;
+            if(noteY < -50) continue;
 
-        bool laneIsInactive = !ctx.laneActive[note.lane];
+            bool laneIsInactive = !ctx.laneActive[note.lane];
 
-        // ① 色を先に決める（ヘッドと帯で同じ色を使うため）
-        // ロングは「ロングになる前の種類」で色を決める（エディタと同じ：DRAG 黄、通常C 水色）
-        const NoteType colorType = (note.type == NoteType::Long) ? note.headType : note.type;
+            // ① 色を先に決める（ヘッドと帯で同じ色を使うため）
+            // ロングは「ロングになる前の種類」で色を決める（エディタと同じ：DRAG 黄、通常C 水色）
+            const NoteType colorType = (note.type == NoteType::Long) ? note.headType : note.type;
 
-        SDL_Color col;
-        if(laneIsInactive && colorType != NoteType::Lane)          col = {20, 20, 20, 255};
-        else if(colorType == NoteType::Drag)                       col = {250, 250, 150, 255};
-        else if(colorType == NoteType::Lane)                       col = {255, 50, 50, 255};
-        else if(colorType == NoteType::Normal_c || note.isCyan)    col = {80, 220, 255, 255};
-        else                                                       col = {255, 255, 255, 255};
+            SDL_Color col;
+            if(laneIsInactive && colorType != NoteType::Lane)          col = {20, 20, 20, 255};
+            else if(colorType == NoteType::Drag)                       col = {250, 250, 150, 255};
+            else if(colorType == NoteType::Lane)                       col = {255, 50, 50, 255};
+            else if(colorType == NoteType::Normal_c || note.isCyan)    col = {80, 220, 255, 255};
+            else                                                       col = {255, 255, 255, 255};
 
-                // レーンの範囲（複数レーン幅のノーツは、またいでいるレーン全体）
-        const float laneLeft = static_cast<float>(laneX[note.lane]);
-        const float laneSpan = static_cast<float>(ctx.laneWidth * note.widthLanes);
+                    // レーンの範囲（複数レーン幅のノーツは、またいでいるレーン全体）
+            const float laneLeft = static_cast<float>(laneX[note.lane]);
+            const float laneSpan = static_cast<float>(ctx.laneWidth * note.widthLanes);
 
-        // ノーツはレーンの左右に NOTE_SIDE_MARGIN ずつ隙間を空けて、中央に置く
-        const float noteX  = laneLeft + NOTE_SIDE_MARGIN;
-        const float noteW  = std::max(4.0f, laneSpan - NOTE_SIDE_MARGIN * 2.0f);
-        const float noteH  = NOTE_HEAD_H;
-        const float radius = NOTE_RADIUS;
+            // ノーツはレーンの左右に NOTE_SIDE_MARGIN ずつ隙間を空けて、中央に置く
+            const float noteX  = laneLeft + NOTE_SIDE_MARGIN;
+            const float noteW  = std::max(4.0f, laneSpan - NOTE_SIDE_MARGIN * 2.0f);
+            const float noteH  = NOTE_HEAD_H;
+            const float radius = NOTE_RADIUS;
 
-        // ホールド中はヘッドを判定ラインに固定する
-        const int headY = note.isHolding ? ctx.judgeY : noteY;
+            // ホールド中はヘッドを判定ラインに固定する
+            const int headY = note.isHolding ? ctx.judgeY : noteY;
 
-        // ② ロングノーツの帯：ヘッドと同じ形を縦に引き伸ばす
-                // ② ロングノーツの帯 ＋ 中央の芯
-                // ② ロングノーツの帯 ＋ 中央の芯
-        if(note.type == NoteType::Long){
-            int tailY = ctx.judgeY - static_cast<int>((static_cast<double>(note.targetTime + note.durationMs) - ctx.musicTimeExact) * effectiveSpeed);
+            // ② ロングノーツの帯：ヘッドと同じ形を縦に引き伸ばす
+                    // ② ロングノーツの帯 ＋ 中央の芯
+                    // ② ロングノーツの帯 ＋ 中央の芯
+            if(note.type == NoteType::Long){
+                int tailY = ctx.judgeY - static_cast<int>((static_cast<double>(note.targetTime + note.durationMs) - ctx.musicTimeExact) * effectiveSpeed);
 
-            // 帯の下端：通常はヘッドの位置。失敗したら「失敗した時刻」の位置にして、判定ラインを越えて流す
-            int bottomY = headY;
-            if(note.isFailed){
-                bottomY = ctx.judgeY - static_cast<int>((static_cast<double>(note.failCutTime) - ctx.musicTimeExact) * effectiveSpeed);
-            }
+                // 帯の下端：通常はヘッドの位置。失敗したら「失敗した時刻」の位置にして、判定ラインを越えて流す
+                int bottomY = headY;
+                if(note.isFailed){
+                    bottomY = ctx.judgeY - static_cast<int>((static_cast<double>(note.failCutTime) - ctx.musicTimeExact) * effectiveSpeed);
+                }
 
-            float top    = static_cast<float>(tailY) - noteH * 0.5f;
-            float bottom = static_cast<float>(bottomY);
+                float top    = static_cast<float>(tailY) - noteH * 0.5f;
+                float bottom = static_cast<float>(bottomY);
 
-            float shapeBottom = bottom + noteH * 0.5f;
-            shadowBatch.addInnerShadow(noteX, top, noteW, shapeBottom - top, radius, kShadowSpread, kShadowColor);
-            bodyBatch.add(noteX, top, noteW, bottom - top, radius, col);
+                float shapeBottom = bottom + noteH * 0.5f;
+                shadowBatch.addInnerShadow(noteX, top, noteW, shapeBottom - top, radius, kShadowSpread, kShadowColor);
+                bodyBatch.add(noteX, top, noteW, bottom - top, radius, col);
 
-            // --- 芯：帯の横幅の30%、左右中央に置く ---
-            const float innerRatio  = 0.3f;                              // 帯に対する芯の幅の割合
-            const float innerW      = noteW * innerRatio;
-            const float innerX      = noteX + (noteW - innerW) * 0.5f;   // 中央寄せ
-            const float innerMargin = 6.0f;                              // 終点側を帯より少し内側に
-            const float innerRadius = std::min(radius, innerW * 0.5f);
+                // --- 芯：帯の横幅の30%、左右中央に置く ---
+                const float innerRatio  = 0.3f;                              // 帯に対する芯の幅の割合
+                const float innerW      = noteW * innerRatio;
+                const float innerX      = noteX + (noteW - innerW) * 0.5f;   // 中央寄せ
+                const float innerMargin = 6.0f;                              // 終点側を帯より少し内側に
+                const float innerRadius = std::min(radius, innerW * 0.5f);
 
-            SDL_Color innerCol;
-            if(laneIsInactive){
-                innerCol = {col.r, col.g, col.b, 150};                   // 無効レーン：暗いまま
-            }
-            else if(note.isFailed){
-                innerCol = {static_cast<Uint8>(col.r * 0.15),            // 失敗：初期状態(0.6倍)より黒く
-                            static_cast<Uint8>(col.g * 0.15),
-                            static_cast<Uint8>(col.b * 0.15), 230};
-            }
-            else if(note.isHolding){
-                innerCol = {0, 255, 255, 255};
-            }
-            else{
-                innerCol = {static_cast<Uint8>(col.r * 0.6),             // 叩く前：ノーツ色を暗くした色
-                            static_cast<Uint8>(col.g * 0.6),
-                            static_cast<Uint8>(col.b * 0.6), 200};
-            }
+                SDL_Color innerCol;
+                if(laneIsInactive){
+                    innerCol = {col.r, col.g, col.b, 150};                   // 無効レーン：暗いまま
+                }
+                else if(note.isFailed){
+                    innerCol = {static_cast<Uint8>(col.r * 0.15),            // 失敗：初期状態(0.6倍)より黒く
+                                static_cast<Uint8>(col.g * 0.15),
+                                static_cast<Uint8>(col.b * 0.15), 230};
+                }
+                else if(note.isHolding){
+                    innerCol = {0, 255, 255, 255};
+                }
+                else{
+                    innerCol = {static_cast<Uint8>(col.r * 0.6),             // 叩く前：ノーツ色を暗くした色
+                                static_cast<Uint8>(col.g * 0.6),
+                                static_cast<Uint8>(col.b * 0.6), 200};
+                }
 
             innerBatch.add(innerX, top + innerMargin, innerW, bottom - (top + innerMargin), innerRadius, innerCol);
         }
@@ -344,6 +386,24 @@ inline void renderGamePlayScreen(GameContext& ctx, Tex& tex, Sq& sq, double curr
         }
     }
 
+    // ロングの中継点：正方形の枠が飛び散り、だんだん止まりながら消える
+    if(ctx.tickParticles){
+        for(const TickParticle& p : *ctx.tickParticles){
+            const double el = ctx.musicTimeExact - p.spawnTime;
+            const double t  = el / TICK_PARTICLE_LIFE_MS;
+            if(t < 0.0 || t >= 1.0) continue;
+
+            const double e = easeOutCubic(t);                                    // 最初は速く、だんだん止まる
+            const float  dist = static_cast<float>(e * TICK_PARTICLE_LIFE_MS);   // 速さ × 時間
+            const float  x = p.x + p.vx * dist;
+            const float  y = p.y + p.vy * dist;
+            const float  size = p.size * static_cast<float>(1.0 - 0.3 * t);      // 少し小さくなる
+            SDL_Color c = p.color;
+            c.a = static_cast<Uint8>(p.color.a * (1.0 - t));                          // だんだん消える
+            drawRotatedSquareFilled(ctx.renderer, x, y, size, 0.0f, c);
+        }
+    }
+
     // キービーム：焼き込みテクスチャ1枚を貼る（1本あたり40回 → 1回）
     {
         const int32_t beamDurationMs = 600;
@@ -399,6 +459,43 @@ inline void renderGamePlayScreen(GameContext& ctx, Tex& tex, Sq& sq, double curr
         }
     }
 
+        {
+        const int combo = ctx.scoreTracker.getCurrentCombo();
+        if(ctx.digitFont != nullptr && combo > 0){
+            // コンボが増えた時刻からの進み具合 0 → 1
+            const double ct = std::clamp((ctx.musicTimeExact - ctx.comboPop.startTime) / JUDGE_COMBO_SLIDE_MS, 0.0, 1.0);
+            const double e  = easeOutCubic(ct);   // 最初は速く、最後はゆっくり止まる
+
+            // スライドアップ：下にずれた位置から、本来の位置まで上がる
+            const int slideY = static_cast<int>(JUDGE_COMBO_SLIDE_PX * (1.0 - e));
+
+            // 上がりながら、薄い状態からいつもの濃さに戻る
+            const double fade = JUDGE_COMBO_SLIDE_FADE + (1.0 - JUDGE_COMBO_SLIDE_FADE) * e;
+
+            // 色は今までと同じ（AP 中は金、FC 中は水色、それ以外は白）で、半透明にする
+            const Uint8 alpha = static_cast<Uint8>(JUDGE_COMBO_ALPHA * fade);
+            SDL_Color cc = {255, 255, 255, alpha};
+            if(ctx.isAP)      cc = {255, 215, 0,   alpha};
+            else if(ctx.isFC) cc = {0,   255, 255, alpha};
+
+            // 「COMBO」は動かさない（いつもの濃さで、決まった位置に出す）
+            if(ctx.comboLabel){
+                const int numberH = static_cast<int>(ctx.digitFont->digitH * JUDGE_COMBO_SCALE);
+                SDL_Rect ld = {SCREEN_W / 2 - ctx.comboLabelW / 2,
+                               JUDGE_COMBO_Y - numberH / 2 - JUDGE_COMBO_LABEL_GAP - ctx.comboLabelH,
+                               ctx.comboLabelW, ctx.comboLabelH};
+                SDL_SetTextureColorMod(ctx.comboLabel, cc.r, cc.g, cc.b);
+                SDL_SetTextureAlphaMod(ctx.comboLabel, JUDGE_COMBO_ALPHA);
+                SDL_RenderCopy(ctx.renderer, ctx.comboLabel, NULL, &ld);
+            }
+
+            char cs[16];
+            snprintf(cs, sizeof(cs), "%d", combo);
+            ctx.digitFont->drawCentered(ctx.renderer, cs, false, SCREEN_W / 2, JUDGE_COMBO_Y + slideY,
+                                        JUDGE_COMBO_SCALE, cc);
+        }
+    }
+
     // スコア・コンボ：数字テクスチャを並べて貼るだけ（毎フレームの文字生成なし）
     if(ctx.digitFont != nullptr){
         char scoreStr[16];
@@ -406,19 +503,6 @@ inline void renderGamePlayScreen(GameContext& ctx, Tex& tex, Sq& sq, double curr
         ctx.digitFont->drawCentered(ctx.renderer, scoreStr, false,
                                     static_cast<int>(SCREEN_W * (7.0 / 8.0)), 80,
                                     ctx.scoreScale, SDL_Color{255, 255, 255, 255});
-
-        int currentCombo = ctx.scoreTracker.getCurrentCombo();
-        if(currentCombo > 0){
-            SDL_Color comboColor = {255, 255, 255, 255};
-            if(ctx.isAP) comboColor = {255, 215, 0, 255};
-            else if(ctx.isFC) comboColor = {0, 255, 255, 255};
-
-            char comboStr[16];
-            snprintf(comboStr, sizeof(comboStr), "%d", currentCombo);
-            ctx.digitFont->drawCentered(ctx.renderer, comboStr, true,
-                                        static_cast<int>(SCREEN_W * (7.0 / 8.0)), SCREEN_W / 3,
-                                        ctx.comboScale, comboColor);
-        }
     }
 
     if(ctx.tutorial) ctx.tutorial->draw(ctx.renderer, ctx.musicTime);
@@ -433,6 +517,13 @@ inline void erase_some(GameContext& ctx){
     std::erase_if(ctx.keyBeams, [&ctx](const KeyBeam& beam){
             return (ctx.musicTime - beam.spawnTime) >= 600;
         });
+
+    // 消えたロングの中継点のエフェクトを片付ける
+    if(ctx.tickParticles){
+        std::erase_if(*ctx.tickParticles, [&ctx](const TickParticle& p){
+            return ctx.musicTimeExact - p.spawnTime >= TICK_PARTICLE_LIFE_MS;
+        });
+    }
 
     std::erase_if(ctx.notes, [&ctx](const Note& note){
         if(note.isHolding){

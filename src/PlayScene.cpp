@@ -4,6 +4,7 @@
 #include "Play/PlaySceneManager.h"
 #include "Play/Autoplay.h"
 #include "TapSound.h"
+#include "Play/LongHoldSound.h"
 
 //グローバル変数
 double bpm = 120;
@@ -45,6 +46,7 @@ GameScene playGame(SDL_Window* window, SDL_Renderer* renderer, const std::string
     //変数定義
     std::vector<Effect> effects;
     std::vector<KeyBeam> keyBeams;
+    std::vector<TickParticle> tickParticles;
     JudgeEffect laneJudge[6] = {};
     std::vector<Note> notes;
     std::string bgmName;
@@ -125,6 +127,11 @@ GameScene playGame(SDL_Window* window, SDL_Renderer* renderer, const std::string
         }
     }
     scoreTracker.init(theoreticaMaxCombo);
+    int totalTicks = 0;
+    for(const auto& note : notes){
+        if(note.lane >= 0) totalTicks += static_cast<int>(note.tickTimes.size());
+    }
+    scoreTracker.setTotalCombo(theoreticaMaxCombo + totalTicks);
 
     double currentNoteSpeed = noteSpeed;
 
@@ -148,6 +155,9 @@ GameScene playGame(SDL_Window* window, SDL_Renderer* renderer, const std::string
         Mix_VolumeChunk(tap_sound_c, static_cast<int>(playerSettings.seVolume * MIX_MAX_VOLUME / 100.0));
     }
 
+    LongHoldSound holdSound;
+    holdSound.init("sounds/Long_effect.wav", playerSettings.seVolume);
+
     //SDL系統処理
     TTF_Font* font = TTF_OpenFont("fonts/prac.ttf", 80);
     TTF_Font* font_init_waku = TTF_OpenFont("fonts/prac.ttf", 60);
@@ -168,15 +178,19 @@ GameScene playGame(SDL_Window* window, SDL_Renderer* renderer, const std::string
     miss    = TTF_RenderUTF8_Blended(judgeFont, "MISS...",   {100, 100, 100, 255});
 
     {
-        const char* keyLabels[6] = {"W", "E", "R", "U", "I", "O"};
+        std::string keyLabels[6];
+        for(int i = 0; i < 6; i++) keyLabels[i] = bindingName(playerSettings.laneBindings[i]);
+        
         waku_init = SDL_CreateRGBSurfaceWithFormat(0, laneWidth * 6, TTF_FontHeight(font_init_waku),
                                                    32, SDL_PIXELFORMAT_RGBA32);
         for(int i = 0; i < 6; i++){
-            SDL_Surface* letter = TTF_RenderUTF8_Blended(font_init_waku, keyLabels[i], {255, 255, 255, 255});
+            SDL_Surface* letter = TTF_RenderUTF8_Blended(font_init_waku, keyLabels[i].c_str(), {255, 255, 255, 255});
             if(!letter) continue;
-            SDL_Rect dst = {laneWidth * i + laneWidth / 2 - letter->w / 2, 0, letter->w, letter->h};
-            SDL_BlitSurface(letter, NULL, waku_init, &dst);
-            SDL_FreeSurface(letter);
+            // 「Left Shift」のような長い名前はレーンの幅に縮める
+            const float s = std::min(1.0f, (laneWidth - 8.0f) / letter->w);
+            const int w = static_cast<int>(letter->w * s), h = static_cast<int>(letter->h * s);
+            SDL_Rect dst = {laneWidth * i + laneWidth / 2 - w / 2, 0, w, h};
+            SDL_BlitScaled(letter, NULL, waku_init, &dst);
         }
     }
 
@@ -189,6 +203,36 @@ GameScene playGame(SDL_Window* window, SDL_Renderer* renderer, const std::string
     tex.bad = SDL_CreateTextureFromSurface(renderer, bad);
     tex.miss = SDL_CreateTextureFromSurface(renderer, miss);
     tex.waku_init = SDL_CreateTextureFromSurface(renderer, waku_init);
+
+    SDL_Texture* comboLabelTex = nullptr;
+    int comboLabelW = 0, comboLabelH = 0;
+    if(TTF_Font* lf = TTF_OpenFont("fonts/prac.ttf", 30)){
+        const char* word = "COMBO";
+        const int spacing = 10;                         // 字の間(px)
+        std::vector<SDL_Surface*> glyphs;
+        for(const char* c = word; *c; c++){
+            char s[2] = {*c, '\0'};
+            if(SDL_Surface* g = TTF_RenderUTF8_Blended(lf, s, {255, 255, 255, 255})){
+                glyphs.push_back(g);
+                comboLabelW += g->w;
+                comboLabelH = std::max(comboLabelH, g->h);
+            }
+        }
+        comboLabelW += spacing * std::max(0, static_cast<int>(glyphs.size()) - 1);
+        if(SDL_Surface* surf = SDL_CreateRGBSurfaceWithFormat(0, comboLabelW, comboLabelH, 32, SDL_PIXELFORMAT_RGBA32)){
+            int x = 0;
+            for(SDL_Surface* g : glyphs){
+                SDL_SetSurfaceBlendMode(g, SDL_BLENDMODE_NONE);   // 透明のまま写す（ふちが黒くならないように）
+                SDL_Rect d = {x, 0, g->w, g->h};
+                SDL_BlitSurface(g, NULL, surf, &d);
+                x += g->w + spacing;
+            }
+            comboLabelTex = SDL_CreateTextureFromSurface(renderer, surf);
+            SDL_FreeSurface(surf);
+        }
+        for(SDL_Surface* g : glyphs) SDL_FreeSurface(g);
+        TTF_CloseFont(lf);
+    }
 
     comboTexture = nullptr;
     scoreTexture = nullptr;
@@ -390,17 +434,14 @@ GameScene playGame(SDL_Window* window, SDL_Renderer* renderer, const std::string
             if(bgmStarted) Mix_ResumeMusic();
         }
         bool paused = pauseMenu.isActive();
-
+        
+        InputDevices::get().refresh();   // コントローラーの抜き差しに合わせる
         const Uint8* currentKeyState = SDL_GetKeyboardState(NULL);
-            bool currentPressed[7] = {
-                (currentKeyState[SDL_SCANCODE_W] != 0),
-                (currentKeyState[SDL_SCANCODE_E] != 0),
-                (currentKeyState[SDL_SCANCODE_R] != 0),
-                (currentKeyState[SDL_SCANCODE_U] != 0),
-                (currentKeyState[SDL_SCANCODE_I] != 0),
-                (currentKeyState[SDL_SCANCODE_O] != 0),
-                (currentKeyState[SDL_SCANCODE_ESCAPE] != 0)
-            };
+        bool currentPressed[7] = {};
+        for(int i = 0; i < 6; i++){
+            currentPressed[i] = isBindingPressed(playerSettings.laneBindings[i], currentKeyState);
+        }
+        currentPressed[6] = (currentKeyState[SDL_SCANCODE_ESCAPE] != 0);
 
             //GameContextの初期化
             GameContext ctx = {
@@ -442,7 +483,11 @@ GameScene playGame(SDL_Window* window, SDL_Renderer* renderer, const std::string
             .visualizer = &visualizer,
             .visualOffsetMs = playerSettings.visualOffsetMs,
             .timing = &timingDisplay,
-            .timingLog = &timingLog
+            .timingLog = &timingLog,
+            .tickParticles = &tickParticles,
+            .comboLabel = comboLabelTex,
+            .comboLabelW = comboLabelW,
+            .comboLabelH = comboLabelH
             };
 
         if(paused){
@@ -476,6 +521,8 @@ GameScene playGame(SDL_Window* window, SDL_Renderer* renderer, const std::string
                 nextScene = GameScene::Result;
             }
         }
+
+        holdSound.update(notes, paused);
 
         visualizer.update();
 
@@ -543,11 +590,13 @@ GameScene playGame(SDL_Window* window, SDL_Renderer* renderer, const std::string
     Mix_FreeMusic(bgm);
     Mix_FreeChunk(tap_sound);
     Mix_FreeChunk(tap_sound_c);
+    holdSound.destroy();
     if(comboTexture) SDL_DestroyTexture(comboTexture);
     if(scoreTexture) SDL_DestroyTexture(scoreTexture);
     if(noteTextureNormal) SDL_DestroyTexture(noteTextureNormal);
     if(noteTextureDrag) SDL_DestroyTexture(noteTextureDrag);
     if(noteTextureLane) SDL_DestroyTexture(noteTextureLane);
+    if(comboLabelTex) SDL_DestroyTexture(comboLabelTex);
     SDL_DestroyTexture(tex.perfect);
     SDL_DestroyTexture(tex.good);
     SDL_DestroyTexture(tex.bad);

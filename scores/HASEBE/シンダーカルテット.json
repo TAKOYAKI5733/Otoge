@@ -6,7 +6,7 @@
       "bpm": 194.0,
       "bpmEvents": [],
       "chartCreator": "TKYK.env",
-      "level": "15",
+      "level": "14",
       "name": "MASTER(6LINE)",
       "notes": [
         {
@@ -8593,12 +8593,12 @@
         {
           "lane": 4,
           "time": 7732,
-          "type": 5
+          "type": 0
         },
         {
           "lane": 1,
           "time": 8505,
-          "type": 5
+          "type": 0
         }
       ],
       "speedEvents": [

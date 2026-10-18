@@ -1,6 +1,7 @@
 #include "GameCommon.h"
 #include "Play/tutorialOverlay.h"
 #include "Displaymode.h"
+#include "NameEntryScene.h"
 
 #define SCREEN_W 1920
 #define SCREEN_H 1080
@@ -33,8 +34,9 @@ int main(){
 
     // ドライバを明示指定するとSDL2はバッチ描画を既定でOFFにするため、明示的にONにする
     SDL_SetHint(SDL_HINT_RENDER_BATCHING, "1");
+    SDL_SetHint(SDL_HINT_IME_SHOW_UI, "1");
 
-    if(SDL_Init(SDL_INIT_VIDEO | SDL_INIT_AUDIO) < 0){
+    if(SDL_Init(SDL_INIT_VIDEO | SDL_INIT_AUDIO | SDL_INIT_JOYSTICK) < 0){
         std::cout << "SDL初期化失敗\n";
         return -1;
     }
@@ -67,7 +69,7 @@ int main(){
 
     SDL_RenderSetLogicalSize(renderer, SCREEN_W, SCREEN_H);
 
-    GameScene currentScene = GameScene::Select;
+    GameScene currentScene = GameScene::Title;
     GameScene nextScene = currentScene;
     std::string selectedScore = "";
     int selectedDifficulty = 0;
@@ -76,6 +78,7 @@ int main(){
 
     PlayerSettings playerSettings;
     loadPlayerSettings(playerSettings);
+        ScoreSync::instance().start("config/online.json", "save/pending_scores.json");
     applyWindowMode(window, playerSettings.windowMode);
 
     // 設定ファイルの値でVSyncとFPS上限を反映
@@ -148,6 +151,16 @@ int main(){
             
             case GameScene::Result:{
                 currentScene = resultScene(window, renderer, resultData);
+                // 自分のプレイで、オンライン設定があるときだけ名前入力へ
+                if(currentScene == GameScene::Select && !resultData.isAutoplay && ScoreSync::instance().enabled()){
+                    currentScene = GameScene::NameEntry;
+                }
+                break;
+            }
+
+            case GameScene::NameEntry:{
+                ScoreRecord rec = makeScoreRecord(selectedScore, selectedDifficulty, resultData);
+                currentScene = nameEntryScene(window, renderer, rec);
                 break;
             }
 
@@ -188,6 +201,16 @@ int main(){
                 break;
             }
 
+            case GameScene::Title:{
+                currentScene = titleScene(window, renderer);
+                break;
+            }
+
+            case GameScene::KeyConfig:{
+                currentScene = keyConfigScene(window, renderer, playerSettings);
+                break;
+            }
+
             default:{
                 currentScene = GameScene::Shutdown;
                 break;
@@ -195,12 +218,13 @@ int main(){
         }
     }
 
-    // テクスチャはレンダラーより先に破棄する
+    ScoreSync::instance().stop();
     releaseGraphicsCache();
     SDL_DestroyTexture(prev);
     SDL_DestroyTexture(nex);
     SDL_DestroyRenderer(renderer);
     SDL_DestroyWindow(window);
+    InputDevices::get().closeAll();
     Mix_CloseAudio();
     IMG_Quit();
     TTF_Quit();

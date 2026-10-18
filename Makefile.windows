@@ -1,65 +1,78 @@
-CXX      := g++
-CXXFLAGS := -std=c++20 -Wall -Wextra -MMD -MP
+# ====================================================================
+#  Otoge Project - Makefile for Windows (MSYS2 / UCRT64)
+#  使い方: MSYS2 UCRT64 のターミナルで  make -f Makefile.windows
+#
+#  事前に必要なパッケージ（初回だけ）:
+#    pacman -S mingw-w64-ucrt-x86_64-gcc mingw-w64-ucrt-x86_64-SDL2 \
+#              mingw-w64-ucrt-x86_64-SDL2_ttf mingw-w64-ucrt-x86_64-SDL2_mixer \
+#              mingw-w64-ucrt-x86_64-SDL2_image mingw-w64-ucrt-x86_64-nlohmann-json \
+#              mingw-w64-ucrt-x86_64-curl
+# ====================================================================
 
-# SDL2_image を追加(GameCommon.h が SDL2/SDL_image.h を include しているため)
-SDL_CFLAGS    := $(shell pkg-config --cflags sdl2 SDL2_image SDL2_ttf SDL2_mixer)
-SDL_LIBS      := $(shell pkg-config --libs sdl2 SDL2_image SDL2_ttf SDL2_mixer)
+CXX      := g++
+# sdl2-config --cflags で /ucrt64/include/SDL2 を検索場所に入れる（ImGui の <SDL.h> 用）
+CXXFLAGS := -std=c++20 -Wall -Wextra -MMD -MP $(shell sdl2-config --cflags)
+
+# SDL2main は「WinMain → SDL_main」の橋渡しをする。
+# main.cpp の extern "C" int SDL_main を見つけさせるため、オブジェクトより前に置く
 SDL_MAIN_LIBS := -lmingw32 -lSDL2main
 
-SRC_DIR  := src
+# -lcurl: ScoreSync.cpp がランキングサーバ(GAS)と通信するのに使う
+# -lwinmm: main.cpp の timeBeginPeriod / timeEndPeriod 用
+LIBS     := -lSDL2 -lSDL2_ttf -lSDL2_mixer -lSDL2_image -lcurl -lwinmm
 
-# 🌟 Windows専用ビルドはUbuntu用(obj/, bin/)と完全に分離する
+SRC_DIR  := src
 OBJ_DIR  := obj_w
 BIN_DIR  := bin_w
-DIST_DIR := dist/Otoge
 
 TARGET   := $(BIN_DIR)/otoge.exe
 
 SRCS     := $(wildcard $(SRC_DIR)/*.cpp) $(wildcard $(SRC_DIR)/imgui/*.cpp)
 OBJS     := $(patsubst $(SRC_DIR)/%.cpp,$(OBJ_DIR)/%.o,$(SRCS))
-
 DEPS     := $(OBJS:.o=.d)
 
-ASSET_DIRS := sounds scores fonts
+ASSET_DIRS := sounds scores fonts images config
 
+# ---------------------------------------------------
+# メインタスク
+# ---------------------------------------------------
 all: $(TARGET) copy_assets copy_dlls
 
+# 1. リンク
 $(TARGET): $(OBJS)
 	@mkdir -p $(BIN_DIR)
-	$(CXX) -std=c++20 $(SDL_MAIN_LIBS) $^ -o $@ $(SDL_LIBS) -lwinmm -mwindows
+	$(CXX) $(CXXFLAGS) $(SDL_MAIN_LIBS) $^ -o $@ $(LIBS)
 
+# 2. 素材フォルダのコピー
 copy_assets:
 	@mkdir -p $(BIN_DIR)
 	@for dir in $(ASSET_DIRS); do \
-	        if [ -d $$dir ]; then \
-	            echo "Copying $$dir to $(BIN_DIR)/..."; \
-	            cp -r $$dir $(BIN_DIR)/; \
-	        fi; \
-	    done
+	    if [ -d $$dir ]; then \
+	        echo "Copying $$dir to $(BIN_DIR)/..."; \
+	        cp -r $$dir $(BIN_DIR)/; \
+	    fi; \
+	done
 
+# 3. 必要な DLL を exe の隣に自動コピー
+# ldd で otoge.exe が読み込む DLL を調べ、MSYS2 (ucrt64) のものだけをコピーする。
+# libcurl を追加すると libcurl-4.dll・libssl・libcrypto・libnghttp2 などが増えるが、
+# これで手作業なしに全部そろう（Windows 標準の DLL は system32 にあるのでコピーしない）
 copy_dlls: $(TARGET)
-	@echo "Copying required DLLs to $(BIN_DIR)/..."
-	@ldd $(TARGET) | grep -i '/ucrt64/bin/' | awk '{print $$3}' | while read dll; do \
-	        cp -u "$$dll" $(BIN_DIR)/; \
-	    done
+	@echo "Copying DLLs to $(BIN_DIR)/..."
+	@ldd $(TARGET) | grep -i '/ucrt64/' | awk '{print $$3}' | sort -u | \
+	    while read dll; do cp -u "$$dll" $(BIN_DIR)/; done
 
-dist: all
-	@echo "Building clean distribution directory..."
-	@rm -rf $(DIST_DIR)
-	@mkdir -p $(DIST_DIR)
-	@cp -r $(BIN_DIR)/* $(DIST_DIR)/
-	@echo "Distribution ready at $(DIST_DIR)/"
-
+# 4. コンパイル
 $(OBJ_DIR)/%.o: $(SRC_DIR)/%.cpp
 	@mkdir -p $(dir $@)
-	$(CXX) $(CXXFLAGS) -I$(SRC_DIR) -I$(SRC_DIR)/imgui $(SDL_CFLAGS) -c $< -o $@
+	$(CXX) $(CXXFLAGS) -I$(SRC_DIR) -I$(SRC_DIR)/imgui -c $< -o $@
 
+# 5. 削除
+# ⚠ bin_w ごと消すので、bin_w/save/pending_scores.json（未送信のスコア）も消える。
+#    DLL は次の make で copy_dlls が入れ直す
 clean:
 	rm -rf $(OBJ_DIR) $(BIN_DIR)
 
-distclean: clean
-	rm -rf dist
-
 -include $(DEPS)
 
-.PHONY: all clean distclean copy_assets copy_dlls dist
+.PHONY: all clean copy_assets copy_dlls

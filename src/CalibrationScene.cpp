@@ -248,7 +248,7 @@ GameScene calibrationScene(SDL_Window* window, SDL_Renderer* renderer, PlayerSet
     if(!metro.create()){
         std::cout << "[警告]メトロノーム音の作成に失敗（音声調整は音なしになります）\n";
     }
-    const int seVolume = static_cast<int>(settings.seVolume * MIX_MAX_VOLUME / 100.0);
+    const int metroVolume = static_cast<int>(settings.bgmVolume * MIX_MAX_VOLUME / 100.0);
 
     // 高精度タイマー（PlayScene と同じ方式）
     const double perfFreq = static_cast<double>(SDL_GetPerformanceFrequency());
@@ -304,7 +304,7 @@ GameScene calibrationScene(SDL_Window* window, SDL_Renderer* renderer, PlayerSet
 
         // メトロノームを鳴らし始める。実際に鳴らした瞬間を拍の基準にする
         if(metroPending && frameMs >= beatOriginMs){
-            metro.start(seVolume);
+            metro.start(metroVolume);
             beatOriginMs = nowMs();
             metroPending = false;
         }
@@ -526,8 +526,8 @@ GameScene calibrationScene(SDL_Window* window, SDL_Renderer* renderer, PlayerSet
                          SDL_Color{180, 180, 200, 255}, cx, w.y + 270, Align::Center);
 
                 SDL_Color hint = {200, 200, 220, 255};
-                drawText(renderer, font, "破裂が音より 遅れて 見える → →", hint, cx, w.y + 380, Align::Center);
-                drawText(renderer, font, "破裂が音より 早く 見える   → ←", hint, cx, w.y + 450, Align::Center);
+                drawText(renderer, font, "破裂が音より 遅れて 見える →", hint, cx, w.y + 380, Align::Center);
+                drawText(renderer, font, "破裂が音より 早く 見える   ←", hint, cx, w.y + 450, Align::Center);
 
                 drawText(renderer, smallFont, "ぴったり重なって見えたら ENTER", SDL_Color{150, 150, 170, 255},
                          cx, w.y + w.h - 50, Align::Center);

@@ -3,6 +3,7 @@
 #include "GameCommon.h"
 #include "type.h"
 #include <nlohmann/json.hpp>
+#include <utility>
 
 using json = nlohmann::json;
 
@@ -10,7 +11,7 @@ struct DifficultyInfo{
     std::string name;
     std::string level;
     std::string chartCreator;
-    int fileIndex = 0; 
+    int fileIndex = 0;
 
     double currentScale = 1.0;
     double currentX = 0.0;
@@ -49,6 +50,40 @@ inline std::vector<DifficultyInfo> listDifficulties(const std::string& filename)
         result.push_back(info);
     }
     return result;
+}
+
+// =====================================================================
+//  ロングの中継点
+//    ・BPM の2倍の細かさ（= 8分音符、半拍）ごとに、ロングの始点から数えて置く
+//    ・時刻は「譜面の時刻」で決めるので、いつ押し始めても数は変わらない
+//      → 全部つなげたときのコンボ数が、押すタイミングに関係なく一定になる
+//    ・BPM が途中で変わる譜面でも、その時点の BPM で次の間隔を決める
+// =====================================================================
+inline constexpr double LONG_TICKS_PER_BEAT = 4.0;   // 1拍に何回（2 = BPM の2倍）
+
+inline void buildLongTicks(Note& n, double baseBpm, const std::vector<std::pair<int32_t, double>>& bpmEvents){
+    n.tickTimes.clear();
+    n.nextTick = 0;
+    if(n.type != NoteType::Long || n.durationMs <= 0) return;
+
+    auto bpmAt = [&](double t){
+        double b = baseBpm;
+        for(const auto& e : bpmEvents){
+            if(e.first <= t) b = e.second;
+            else break;
+        }
+        return (b > 0.0) ? b : 120.0;
+    };
+
+    const double end = static_cast<double>(n.targetTime) + n.durationMs;
+    double t = n.targetTime;
+    for(int guard = 0; guard < 100000; guard++){
+        const double step = 60000.0 / (bpmAt(t) * LONG_TICKS_PER_BEAT);
+        t += step;
+        // 終点に近すぎる中継点は作らない（終点の判定と、ほぼ同時に重ならないように）
+        if(t > end - step * 0.5) break;
+        n.tickTimes.push_back(static_cast<int32_t>(std::lround(t)));
+    }
 }
 
 inline bool loadScore(const std::string& filename, std::string& bgmName, std::vector<Note>& notes, std::vector<SpeedEvent>& speedEvents, double bpm, double& offsetMs, int difficultyIndex){
@@ -94,6 +129,17 @@ inline bool loadScore(const std::string& filename, std::string& bgmName, std::ve
 
     (void)chartRoot->value("bpm", bpm);
 
+    // 中継点の計算用に、この難易度の BPM と BPM の変化を読む
+    double chartBpm = j.value("bpm", 120.0);
+    chartBpm = chartRoot->value("bpm", chartBpm);
+    std::vector<std::pair<int32_t, double>> bpmEvents;
+    if(chartRoot->contains("bpmEvents") && chartRoot->at("bpmEvents").is_array()){
+        for(const auto& b : chartRoot->at("bpmEvents")){
+            bpmEvents.push_back({b.value("time", 0), b.value("bpm", chartBpm)});
+        }
+        std::sort(bpmEvents.begin(), bpmEvents.end());
+    }
+
     if(!chartRoot->contains("notes") || !chartRoot->at("notes").is_array()){
         printf("JSON / notes error\n");
         return false;
@@ -113,7 +159,7 @@ inline bool loadScore(const std::string& filename, std::string& bgmName, std::ve
             if(noteType == 3)   newNote.type = NoteType::Drag;
             else if(noteType == 4)  newNote.type = NoteType::Lane;
             else if(noteType == 5)  newNote.type = NoteType::Normal_c;
-            else if(noteType == 6) newNote.isCyan;
+            else if(noteType == 6) newNote.isCyan = true;
             else newNote.type = NoteType::Normal;
 
             if(item.contains("duration")){
@@ -140,6 +186,8 @@ inline bool loadScore(const std::string& filename, std::string& bgmName, std::ve
                     return a.time < b.time;
                 });
             }
+
+            buildLongTicks(newNote, chartBpm, bpmEvents);   // ロングなら中継点を置く
 
             notes.push_back(newNote);
         }

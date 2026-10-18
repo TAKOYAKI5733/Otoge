@@ -42,6 +42,13 @@ public:
         return requested;
     }
 
+    // 「キー設定」で ENTER が押されたか（1回読むと false に戻る）
+    bool consumeKeyConfigRequest(){
+        bool requested = requestKeyConfig_;
+        requestKeyConfig_ = false;
+        return requested;
+    }
+
     // 開く：表示モードは閉じたときに反映するので、開いた時点の値を覚えておく
     void open(const PlayerSettings& s){
         open_ = true;
@@ -94,6 +101,11 @@ public:
                 if(currentRow() == ROW_CALIBRATE){
                     // 判定調整：設定を保存して閉じ、選曲画面に「調整画面へ行く」ことを知らせる
                     requestCalibration_ = true;
+                    close(window, s);
+                }
+                else if(currentRow() == ROW_KEYCONFIG){
+                    // キー設定：判定調整と同じく、保存して閉じてから選曲画面に知らせる
+                    requestKeyConfig_ = true;
                     close(window, s);
                 }
                 else if(currentRow() == ROW_VSYNC || currentRow() == ROW_FASTLATE || currentRow() == ROW_TIMING_MS){
@@ -169,7 +181,7 @@ public:
 
             // 値：選択中だけ「< 値 >」の形にして、左右で変えられることを示す
             std::string value = valueText(i, s);
-            if(selected && i != ROW_CALIBRATE) value = "<  " + value + "  >";   // 判定調整は左右で変える値がない
+            if(selected && i != ROW_CALIBRATE && i != ROW_KEYCONFIG) value = "<  " + value + "  >";   // ENTER で開く項目は左右で変える値がない
             drawText(renderer, font, value, SDL_Color{255, 255, 255, 255}, row.x + row.w - 30, cy, a, Align::Right);
         }
 
@@ -188,12 +200,12 @@ private:
     static constexpr int PANEL_X = 60;
     static constexpr int PANEL_Y = 140;
     static constexpr int PANEL_W = 760;
-    static constexpr int PANEL_H = 736;   // 項目が一番多い分類（5項目）に合わせた高さ
+    static constexpr int PANEL_H = 824;   // 項目が一番多い分類（6項目）に合わせた高さ
     static constexpr int ROW_H   = 88;
     static constexpr int TAB_H   = 50;    // 分類タブの高さ
     static constexpr int TAB_GAP = 10;    // 分類タブどうしの隙間
     static constexpr int ROWS_TOP = PANEL_Y + 24 + TAB_H + 24;   // 項目の並びの上端
-    static constexpr int MAX_ROWS = 5;    // 1つの分類に入る項目の最大数（レイアウト用）
+    static constexpr int MAX_ROWS = 6;    // 1つの分類に入る項目の最大数（レイアウト用）
 
     // ----- 項目 -----
     enum Row{
@@ -208,6 +220,7 @@ private:
         ROW_VSYNC,
         ROW_FPS,
         ROW_WINDOW,
+        ROW_KEYCONFIG,
         ROW_COUNT
     };
 
@@ -222,7 +235,8 @@ private:
         "±ms 表示",
         "VSync",
         "FPS 上限",
-        "表示モード"
+        "表示モード",
+        "キー設定"
     };
 
     static constexpr const char* ROW_DESCRIPTIONS[ROW_COUNT] = {
@@ -236,7 +250,8 @@ private:
         "叩いたズレを ms で出します（- = 早い、+ = 遅い）",
         "垂直同期を設定できます",
         "VSync が OFF のときに使われる上限設定です",
-        "ウィンドウの設定です"
+        "ウィンドウの設定です",
+        "ENTER で キー設定の画面を開きます（キーボード・コントローラー）"
     };
 
     // ----- 分類 -----
@@ -244,9 +259,9 @@ private:
     static constexpr int CATEGORY_COUNT = 3;
     static constexpr const char* CATEGORY_NAMES[CATEGORY_COUNT] = {"オフセット", "ノーツ", "グラフィックス"};
     static constexpr int CATEGORY_ROWS[CATEGORY_COUNT][MAX_ROWS] = {
-        {ROW_CALIBRATE, ROW_OFFSET, ROW_VISUAL_OFFSET, -1,           -1},              // オフセット関連
-        {ROW_TAPSOUND,  ROW_SE,     ROW_BGM,           ROW_FASTLATE, ROW_TIMING_MS},   // ノーツ関連
-        {ROW_VSYNC,     ROW_FPS,    ROW_WINDOW,        -1,           -1},              // グラフィックス関連
+        {ROW_CALIBRATE, ROW_OFFSET,   ROW_VISUAL_OFFSET, -1,      -1,           -1},              // オフセット関連
+        {ROW_KEYCONFIG, ROW_TAPSOUND, ROW_SE,            ROW_BGM, ROW_FASTLATE, ROW_TIMING_MS},   // ノーツ関連
+        {ROW_VSYNC,     ROW_FPS,      ROW_WINDOW,        -1,      -1,           -1},              // グラフィックス関連
     };
 
     // 分類 c に入っている項目の数（-1 の手前まで）
@@ -264,6 +279,7 @@ private:
     // ----- 状態 -----
     bool open_ = false;
     bool requestCalibration_ = false;
+    bool requestKeyConfig_ = false;
     int category_ = 0;   // 選んでいる分類（閉じても覚えておく）
     int cursor_ = 0;     // 分類の中で何番目の項目か
 
@@ -372,6 +388,7 @@ private:
         char buf[64];
         switch(row){
             case ROW_CALIBRATE: return "ENTER で開始";
+            case ROW_KEYCONFIG: return "ENTER で開く";
             case ROW_OFFSET: std::snprintf(buf, sizeof(buf), "%+.0f ms", s.offsetMs); return buf;
             case ROW_VISUAL_OFFSET: std::snprintf(buf, sizeof(buf), "%+.0f ms", s.visualOffsetMs); return buf;
             case ROW_BGM:    std::snprintf(buf, sizeof(buf), "%d %%", s.bgmVolume);   return buf;

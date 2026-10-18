@@ -8,7 +8,7 @@ private:
     int currentCombo = 0;
     int displayCombo = 0;
     double currentScore = 1000000.0;
-    
+
     const double LOSS_GOOD = 0.3;
     const double LOSS_MISS = 1.0;
 
@@ -17,7 +17,11 @@ private:
     int badCount = 0;
     int missCount = 0;
 
+    int tickCount = 0;        // ロングの中継点で増えたコンボの数
+    int totalCombo = 0;       // 全部つなげたときのコンボ数（ノーツ ＋ 中継点）
+
 public:
+    // totalMaxCombo：スコアの計算に使う「ノーツの数」（中継点は入れない）
     void init(int totalMaxCombo){
         maxCombo = totalMaxCombo;
         currentCombo = 0;
@@ -28,7 +32,14 @@ public:
         goodCount = 0;
         badCount = 0;
         missCount = 0;
+
+        tickCount = 0;
+        totalCombo = totalMaxCombo;
     }
+
+    // 全部つなげたときのコンボ数を覚えておく（リザルトなどで「最大コンボ / 理論値」を出すとき用）
+    void setTotalCombo(int n){ totalCombo = n; }
+    int getTotalCombo() const { return totalCombo; }
 
     void registerJudge(const std::string& judge){
         if(maxCombo <= 0) return;
@@ -62,6 +73,16 @@ public:
         currentScore = std::min(1000000.0, currentScore);
     }
 
+    // ロングの中継点：コンボだけ 1 増やす
+    //   スコアと PERFECT の数は増やさない → フルコンボでも「ノーツの数」と「コンボの数」が違うものになる
+    void registerTick(){
+        currentCombo++;
+        tickCount++;
+        if(currentCombo > displayCombo){
+            displayCombo = currentCombo;
+        }
+    }
+
     int getTrueScore() const {
         return static_cast<int>(std::round(currentScore));
     }
@@ -87,6 +108,7 @@ public:
     int getGoodCount() const { return goodCount; }
     int getBadCount() const { return badCount; }
     int getMissCount() const { return missCount; }
+    int getTickCount() const { return tickCount; }
 
     void saveHighScore(const std::string& scorePath, int score){
         std::ofstream outFile(scorePath, std::ios::binary);

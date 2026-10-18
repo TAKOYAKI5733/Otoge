@@ -2,6 +2,7 @@
 #define SCENE_H
 
 #include "GameCommon.h"
+#include "InputBinding.h"
 
 class TutorialOverlay;
 
@@ -15,7 +16,9 @@ enum class GameScene{
     Load,
     ChartCreate,
     Tutorial,
-    Calibration
+    Calibration,
+    NameEntry,
+    KeyConfig
 };
 
 struct TimingSample{
@@ -47,6 +50,7 @@ struct PlayerSettings{
     double visualOffsetMs = 0.0;
     bool showFastLate = true;    // FAST/LATE 表示
     bool showTimingMs = false;   // ±ms 表示
+    LaneBindings laneBindings = defaultLaneBindings();
 };
 
 struct PlayTestOptions{
@@ -63,5 +67,7 @@ GameScene chartCreateScene(SDL_Window* window, SDL_Renderer* renderer, std::stri
 GameScene resultScene(SDL_Window* window, SDL_Renderer* renderer, const ResultData& result, SDL_Texture* targettex = nullptr);
 GameScene settingScene(SDL_Window* window, SDL_Renderer* renderer, PlayerSettings& playerSettings, SDL_Texture* targetTex = nullptr);
 GameScene calibrationScene(SDL_Window* window, SDL_Renderer* renderer, PlayerSettings& settings);
+GameScene titleScene(SDL_Window* window, SDL_Renderer* renderer);
+GameScene keyConfigScene(SDL_Window* window, SDL_Renderer* renderer, PlayerSettings& settings);
 
 #endif

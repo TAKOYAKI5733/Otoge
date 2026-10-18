@@ -1,5 +1,6 @@
 #pragma once
 
+#include <random>
 #include "GameCommon.h"
 #include "Play/GameContext.h"
 #include "Play/type.h"
@@ -39,17 +40,48 @@ inline void toggleLaneActive(GameContext& ctx, const Note& note){
     }
 }
 
+inline void spawnTickParticles(GameContext& ctx, const Note& ln){
+    if(!ctx.tickParticles) return;
+
+    static std::mt19937 rng{std::random_device{}()};
+    std::uniform_real_distribution<float> dirDist(0.0f, 6.2831853f);   // 向き：全方向
+    std::uniform_real_distribution<float> spdDist(0.20f, 0.45f);       // 速さ(px/ms)
+    std::uniform_real_distribution<float> sizeDist(20.0f, 32.0f);      // 大きさ(px)
+    std::uniform_real_distribution<float> spinDist(-0.012f, 0.012f);   // 回る速さ
+    std::uniform_real_distribution<float> alphaDist(0.45f, 1.0f);
+
+    // 判定の色（PERFECT の淡い黄色）を基準に、粒ごとに少しだけ明るさを変える
+    const SDL_Color base = {250, 250, 150, 255};
+    const float cx = ctx.startX + ctx.laneWidth * (ln.lane + ln.widthLanes * 0.5f);
+    const float cy = static_cast<float>(ctx.judgeY);
+
+    for(int k = 0; k < TICK_PARTICLE_COUNT; k++){
+        const float dir = dirDist(rng);
+        const float spd = spdDist(rng);
+        const float alpha = alphaDist(rng);
+        TickParticle p;
+        p.x = cx;
+        p.y = cy;
+        p.vx = std::cos(dir) * spd;
+        p.vy = std::sin(dir) * spd;
+        p.size = sizeDist(rng);
+        p.angle = dirDist(rng);
+        p.spin = spinDist(rng);
+        p.spawnTime = ctx.musicTimeExact;
+        p.color = {base.r, base.g, base.b, static_cast<Uint8>(230 * alpha)};
+        ctx.tickParticles->push_back(p);
+    }
+}
+
 inline void NoteJudge(GameContext& ctx, Tex& tex, Sq& sq){
     bool consumedThisFrame[6] = {false, false, false, false, false, false};
 
     for(int i = 0; i < 6; i++){
             if(ctx.currentPressed[i] && !ctx.prevPressed[i] && !consumedThisFrame[i]){
-                bool isNoteHit = false;
-
                 for(auto& note : ctx.notes){
                     // ドラッグと、ドラッグロング（始点がドラッグ判定）は叩いて判定しない → 下の「ドラッグの自動判定」で扱う
                     if(note.lane < 0 || note.isHit || note.type == NoteType::Drag || note.isDragLong()) continue;
-                    
+
                     int startLane = note.lane;
                     int endLane   = note.lane + note.widthLanes - 1;
                     bool isAreaPressed = (i >= startLane && i <= endLane);
@@ -108,7 +140,7 @@ inline void NoteJudge(GameContext& ctx, Tex& tex, Sq& sq){
 
                             if(note.type == NoteType::Lane) toggleLaneActive(ctx, note);
                         }
-                        
+
                         else if(timeDiff <= 90){
                             ctx.laneJudge[i] = {tex.bad, sq.bad, ctx.musicTime};
                             recordTiming(ctx.laneJudge[i], ctx, note, 3);
@@ -123,7 +155,6 @@ inline void NoteJudge(GameContext& ctx, Tex& tex, Sq& sq){
                             ctx.scoreTracker.registerJudge("BAD");
                             if(note.type == NoteType::Lane) toggleLaneActive(ctx, note);
                         }
-                        isNoteHit = true;
 
                         for(int l = std::max(0, startLane); l <= std::min(5, endLane); l++){
                             consumedThisFrame[l] = true;
@@ -197,13 +228,13 @@ inline void NoteJudge(GameContext& ctx, Tex& tex, Sq& sq){
                 note.isHit = true;
                 markLongFailed(note, note.targetTime);
                 ctx.scoreTracker.registerJudge("MISS");
-                
+
                 ctx.isAP = ctx.isFC = false;
                 if(note.type == NoteType::Lane) toggleLaneActive(ctx, note);
             }
         }
 
-    
+
     // --- 4. ロングノーツの継続ホールド・終点判定 ---
     for(auto& ln : ctx.notes){
         if(ln.type == NoteType::Long && ln.isHolding){
@@ -233,7 +264,7 @@ inline void NoteJudge(GameContext& ctx, Tex& tex, Sq& sq){
                     ln.releaseGrace = true;
                 }
                 else{
-                    // 早すぎる：MISS
+                    // 早すぎる：MISS（残りの中継点はもらえない）
                     ln.isHolding = false;
                     ln.isHit = true;
                     ctx.laneJudge[i] = {tex.miss, sq.miss, ctx.musicTime};
@@ -244,6 +275,18 @@ inline void NoteJudge(GameContext& ctx, Tex& tex, Sq& sq){
                     ctx.isAP = ctx.isFC = false;
                     continue;
                 }
+            }
+
+            // 中継点：決まった時刻を過ぎたら、押し続けている限りコンボを 1 ずつ足す
+            //   ・時刻は譜面を読んだときに決めてあるので、押し始めが遅くても、
+            //     その時刻までに過ぎた中継点はこのフレームでまとめて足される → 合計の数は変わらない
+            //   ・表示は PERFECT を出すが、数えるのはコンボだけ（スコア・PERFECT の数は増えない）
+            while(ln.nextTick < ln.tickTimes.size() && ctx.musicTime >= ln.tickTimes[ln.nextTick]){
+                ln.nextTick++;
+                ctx.scoreTracker.registerTick();
+                ctx.comboPop.startTime = ctx.musicTime;
+                ctx.laneJudge[i] = {tex.perfect, sq.perfect, ctx.musicTime};   // hasTiming = false → FAST/LATE は出ない
+                spawnTickParticles(ctx, ln);
             }
 
             // 終点に無事到達した場合

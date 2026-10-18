@@ -75,6 +75,7 @@ struct DigitFont{
             int d = *p - '0';
 
             SDL_SetTextureColorMod(digit[d], color.r, color.g, color.b);
+            SDL_SetTextureAlphaMod(digit[d], color.a);
             SDL_Rect dst = {
                 static_cast<int>(x),
                 y,

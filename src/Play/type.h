@@ -12,7 +12,7 @@ enum class NoteType{
     Long_c,
     Drag
 };
-  
+
 struct Effect{
     int lane;
     int widthLanes = 1;
@@ -51,6 +51,10 @@ struct Note{
 
     NoteType headType = NoteType::Normal;
     bool isDragLong() const { return type == NoteType::Long && headType == NoteType::Drag; }
+
+    // ロングの中継点（コンボだけが増える時刻）。譜面を読んだときに決めて、プレイ中は変えない
+    std::vector<int32_t> tickTimes;
+    size_t nextTick = 0;   // 次に判定する中継点の番号
 };
 
 struct JudgeEffect{
@@ -105,3 +109,18 @@ struct KeyBeam{
     int lane;
     int32_t spawnTime;
 };
+
+// ロングの中継点で飛び散る、正方形の枠1つぶん
+struct TickParticle{
+    float x, y;          // 出た位置（判定ボックスの中心）
+    float vx, vy;        // 飛ぶ向きと速さ(px/ms)
+    float size;          // 正方形の1辺(px)
+    float angle;         // 最初の傾き(ラジアン)
+    float spin;          // 回る速さ(ラジアン/ms)
+    double spawnTime;    // 出た時刻
+    SDL_Color color;
+};
+
+// 中継点のエフェクトの設定（renderGame.h と noteJudge.h の両方で使うので、両方より先に読まれる type.h に置く）
+inline constexpr int    TICK_PARTICLE_COUNT   = 1;       // 1回に飛ぶ枠の数
+inline constexpr double TICK_PARTICLE_LIFE_MS = 420.0;   // 消えるまでの時間

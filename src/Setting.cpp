@@ -33,6 +33,15 @@ void loadPlayerSettings(PlayerSettings& settings){
     settings.tapSound = j.value("tapSound", std::string(""));
     settings.showFastLate = j.value("showFastLate", true);
     settings.showTimingMs = j.value("showTimingMs", false);
+    settings.visualOffsetMs = j.value("visualOffsetMs", 0.0);
+    settings.laneBindings = defaultLaneBindings();
+    if(j.contains("keyBindings") && j["keyBindings"].is_array()){
+        const auto& arr = j["keyBindings"];
+        for(int i = 0; i < LANE_COUNT && i < static_cast<int>(arr.size()); i++){
+            InputBinding b;
+            if(arr[i].is_string() && bindingFromString(arr[i].get<std::string>(), b)) settings.laneBindings[i] = b;
+        }
+    }
 }
 
 void savePlayerSettings(const PlayerSettings& settings){
@@ -46,6 +55,10 @@ void savePlayerSettings(const PlayerSettings& settings){
     j["tapSound"] = settings.tapSound;
     j["showFastLate"] = settings.showFastLate;
     j["showTimingMs"] = settings.showTimingMs;
+    j["visualOffsetMs"] = settings.visualOffsetMs;
+    json keys = json::array();
+    for(const auto& b : settings.laneBindings) keys.push_back(bindingToString(b));
+    j["keyBindings"] = keys;
 
     std::ofstream out(SETTING_PATH);
     if(out.is_open()){

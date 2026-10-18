@@ -65,4 +65,8 @@ struct GameContext{
     TimingDisplay* timing = nullptr;   // FAST/LATE・±ms の表示
     
     std::vector<TimingSample>* timingLog = nullptr;
+    std::vector<TickParticle>* tickParticles = nullptr;   // ロングの中継点のエフェクト
+    SDL_Texture* comboLabel = nullptr;                    // コンボ数の上の「COMBO」
+    int comboLabelW = 0;
+    int comboLabelH = 0;
 };
