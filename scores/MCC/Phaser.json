@@ -1,0 +1,19 @@
+{
+  "bgm": "Phaser (16bit_wav).wav",
+  "composer": "Unknown",
+  "difficulties": [
+    {
+      "bpm": 120.0,
+      "bpmEvents": [],
+      "chartCreator": "Unknown",
+      "level": "0",
+      "name": "EASY",
+      "notes": [],
+      "sigDen": 4,
+      "sigNum": 4,
+      "speedEvents": []
+    }
+  ],
+  "offset": 0.0,
+  "previewStart": 0.0
+}
