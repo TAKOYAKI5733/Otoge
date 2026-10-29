@@ -14,7 +14,7 @@
   "seVolume": 100,
   "showFastLate": true,
   "showTimingMs": false,
-  "tapSound": "TAP_S.wav",
+  "tapSound": "",
   "visualOffsetMs": 0.0,
   "vsync": false,
   "windowMode": 2

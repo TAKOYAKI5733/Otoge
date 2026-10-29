@@ -85,8 +85,8 @@
         }
       ],
       "chartCreator": "xiang",
-      "level": "18",
-      "name": "MASTER",
+      "level": "xi",
+      "name": "擦",
       "notes": [
         {
           "lane": 1,
@@ -7436,7 +7436,7 @@
       ],
       "chartCreator": "xiang",
       "level": "10",
-      "name": "NORMAL",
+      "name": "HARD",
       "notes": [
         {
           "duration": 2513,
@@ -9637,7 +9637,7 @@
       ],
       "chartCreator": "xiang",
       "level": "15",
-      "name": "HARD",
+      "name": "MASTER(4LINE)",
       "notes": [
         {
           "duration": 2513,
@@ -14468,6 +14468,6 @@
       ]
     }
   ],
-  "offset": 215.0,
-  "previewStart": 27822.0
+  "offset": 210.0,
+  "previewStart": 28506.0
 }

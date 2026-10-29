@@ -57,6 +57,12 @@ inline constexpr float     SYNC_FRAME_GAP   = 2.0f;                    // ヘッ
 inline constexpr SDL_Color SYNC_FRAME_COLOR = {255, 190, 30, 0};     // 濃い金色
 inline constexpr SDL_Color SYNC_FRAME_GAP_COLOR = {20, 20, 30, 0};   // 隙間の色    // ← 追加：Drag より淡い黄色
 
+// ===== 隠れているレーン（laneActive が false）のノーツ =====
+//   レーンが閉じている間のノーツは、半透明にしてうっすら見えるだけにする
+//   値は 0〜255（小さいほど透明）。LANE ノーツはレーンを開け閉めするので対象外（いつも通り見える）
+inline constexpr Uint8 HIDDEN_NOTE_ALPHA       = 200;    // ヘッド・ロングの帯
+inline constexpr Uint8 HIDDEN_NOTE_INNER_ALPHA = 110;    // ロングの芯（帯より少し薄く）
+
 // ===== 判定文字の上のコンボ数 =====
 inline constexpr double JUDGE_COMBO_SCALE      = 1.3;    // 大きさ（数字の元の大きさの何倍か。元は 80px）
 inline constexpr double JUDGE_COMBO_SLIDE_MS     = 120.0;   // 下から上がりきるまでの時間
@@ -269,7 +275,7 @@ inline void renderGamePlayScreen(GameContext& ctx, Tex& tex, Sq& sq, double curr
             const NoteType colorType = (note.type == NoteType::Long) ? note.headType : note.type;
 
             SDL_Color col;
-            if(laneIsInactive && colorType != NoteType::Lane)          col = {20, 20, 20, 255};
+            if(laneIsInactive && colorType != NoteType::Lane)          col = {20, 20, 20, HIDDEN_NOTE_ALPHA};   // 隠れている：半透明
             else if(colorType == NoteType::Drag)                       col = {250, 250, 150, 255};
             else if(colorType == NoteType::Lane)                       col = {255, 50, 50, 255};
             else if(colorType == NoteType::Normal_c || note.isCyan)    col = {80, 220, 255, 255};
@@ -325,7 +331,7 @@ inline void renderGamePlayScreen(GameContext& ctx, Tex& tex, Sq& sq, double curr
 
                 SDL_Color innerCol;
                 if(laneIsInactive){
-                    innerCol = {col.r, col.g, col.b, 150};                   // 無効レーン：暗いまま
+                    innerCol = {col.r, col.g, col.b, HIDDEN_NOTE_INNER_ALPHA};   // 隠れている：帯より薄く
                 }
                 else if(note.isFailed){
                     innerCol = {static_cast<Uint8>(col.r * 0.15),            // 失敗：初期状態(0.6倍)より黒く

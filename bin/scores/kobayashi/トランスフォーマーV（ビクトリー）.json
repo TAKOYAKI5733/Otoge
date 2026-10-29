@@ -1,6 +1,6 @@
 {
   "bgm": "Transformers_ Victory Opening _Creditless_ [4K 60FPS Remastered]_part1_2.mp3",
-  "composer": "Unknown",
+  "composer": "渡辺宙明",
   "difficulties": [
     {
       "bpm": 159.0,
@@ -9,6 +9,8 @@
       "level": "0",
       "name": "MASTER",
       "notes": [],
+      "sigDen": 4,
+      "sigNum": 4,
       "speedEvents": []
     },
     {
@@ -18,15 +20,8 @@
       "level": "0",
       "name": "HARD",
       "notes": [],
-      "speedEvents": []
-    },
-    {
-      "bpm": 159.0,
-      "bpmEvents": [],
-      "chartCreator": "TKYK.env",
-      "level": "0",
-      "name": "NORMAL",
-      "notes": [],
+      "sigDen": 4,
+      "sigNum": 4,
       "speedEvents": []
     },
     {
@@ -751,6 +746,8 @@
           "type": 0
         }
       ],
+      "sigDen": 4,
+      "sigNum": 4,
       "speedEvents": [
         {
           "duration": 0,
@@ -761,5 +758,6 @@
       ]
     }
   ],
-  "offset": 1010.0
+  "offset": 1010.0,
+  "previewStart": 0.0
 }

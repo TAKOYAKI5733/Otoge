@@ -1,11 +1,11 @@
 {
   "bgm": "東京真中 -  ブレインロット feat. 重音テト.mp3",
-  "composer": "Unknown",
+  "composer": "東京真中",
   "difficulties": [
     {
       "bpm": 135.0,
       "bpmEvents": [],
-      "chartCreator": "Unknown",
+      "chartCreator": "TKYK.env",
       "level": "1",
       "name": "EASY",
       "notes": [
@@ -704,7 +704,7 @@
     {
       "bpm": 134.95,
       "bpmEvents": [],
-      "chartCreator": "Unknown",
+      "chartCreator": "TKYK.env",
       "level": "11",
       "name": "MASTER(4LINE)",
       "notes": [
@@ -4768,6 +4768,6 @@
       ]
     }
   ],
-  "offset": 150.0,
+  "offset": 156.0,
   "previewStart": 0.0
 }

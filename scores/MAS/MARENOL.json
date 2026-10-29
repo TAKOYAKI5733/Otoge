@@ -1,6 +1,6 @@
 {
   "bgm": "MARENOL.mp3",
-  "composer": "Unknown",
+  "composer": "LeaF",
   "difficulties": [
     {
       "bpm": 140.0,
@@ -10168,17 +10168,6 @@
       "chartCreator": "TKYK.env",
       "level": "0",
       "name": "HARD",
-      "notes": [],
-      "sigDen": 4,
-      "sigNum": 4,
-      "speedEvents": []
-    },
-    {
-      "bpm": 140.17635794269552,
-      "bpmEvents": [],
-      "chartCreator": "TKYK.env",
-      "level": "0",
-      "name": "NORMAL",
       "notes": [],
       "sigDen": 4,
       "sigNum": 4,

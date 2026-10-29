@@ -7,7 +7,7 @@
       "bpmEvents": [],
       "chartCreator": "TKYK.env",
       "level": "9",
-      "name": "MASTER",
+      "name": "MASTER(4LINE)",
       "notes": [
         {
           "lane": 1,
@@ -5725,17 +5725,6 @@
       "chartCreator": "TKYK.env",
       "level": "0",
       "name": "HARD",
-      "notes": [],
-      "sigDen": 4,
-      "sigNum": 4,
-      "speedEvents": []
-    },
-    {
-      "bpm": 125.0,
-      "bpmEvents": [],
-      "chartCreator": "TKYK.env",
-      "level": "0",
-      "name": "NORMAL",
       "notes": [],
       "sigDen": 4,
       "sigNum": 4,

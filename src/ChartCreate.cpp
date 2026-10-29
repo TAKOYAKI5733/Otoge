@@ -2,6 +2,8 @@
 #include <nlohmann/json.hpp>
 #include <limits>
 #include <cfloat>
+#include <cctype>
+#include <atomic>
 #include <string>
 #include <vector>
 #include "Editortempo.h"
@@ -600,6 +602,202 @@ inline void timeSigAt(const EditorDifficulty& d, int32_t t, int& num, int& den){
 }
 
 // =====================================================================
+//  エディタの曲の再生（EditorMusic）
+//
+//  なぜ必要か：
+//    この環境の SDL_mixer では、WAV を Mix_Music で読み込むと、Mix_SetMusicPosition が
+//    「1 秒単位」にしか動かない（2.372 秒を指定すると 2.000 秒から鳴る）。
+//    そのため、スクロールした位置と鳴っている位置が最大 1 秒ずれていた。
+//
+//  どうするか：
+//    ・WAV だけは Mix_LoadWAV で曲全体をメモリに読み込み（Mix_Chunk）、
+//      「曲の途中から始まるチャンク」を自分で作って鳴らす
+//      （波形の先頭アドレスを、始めたい位置のバイト数だけずらすだけ。コピーはしないので一瞬で終わる）
+//      → 1 サンプル単位で、好きな位置から鳴らせる
+//    ・WAV 以外（mp3 / ogg など）は今まで通り Mix_Music で鳴らす
+//    ・外からは Mix_Music と同じ感覚で使えるように、同じ名前の操作をそろえてある
+//
+//  WAV のときの注意：
+//    ・チャンネルを 1 つ（MUSIC_CHANNEL）予約して、タップ音やメトロノームに横取りされないようにする
+//    ・曲の位置は、チャンネルに付けた「エフェクト」で数える（countPlayedBytes）
+//      SDL_mixer は音を混ぜるたびに、そのチャンネルのエフェクトへ「今回混ぜたバイト数」を渡してくるので、
+//      それを足していけば「混ぜ終わった位置」が分かる。
+//      これは Mix_Music の Mix_GetMusicPosition（デコードし終わった位置）と同じ意味の値なので、
+//      WAV でも mp3 と同じ「ずれの補正」がかかる。
+//      → プレイ画面（PlayScene.cpp：Mix_Music ＋ Mix_GetMusicPosition で補正）と同じ基準で時刻が決まり、
+//        エディタとプレイ画面でオフセットの感じ方が変わらない
+// =====================================================================
+struct EditorMusic{
+    static constexpr int MUSIC_CHANNEL = 0;   // WAV を鳴らすチャンネル（予約する）
+
+    // 読み込む。拡張子が .wav ならチャンクで、それ以外は Mix_Music で
+    bool load(const std::string& path){
+        free();
+        if(isWavPath(path)){
+            int freq = 0, ch = 0;
+            Uint16 fmt = 0;
+            if(Mix_QuerySpec(&freq, &fmt, &ch) == 0) return false;
+            full_ = Mix_LoadWAV(path.c_str());   // 再生する形式（周波数・ビット数・チャンネル数）に変換して読む
+            if(!full_) return false;
+            freq_ = freq;
+            frameBytes_ = (SDL_AUDIO_BITSIZE(fmt) / 8) * ch;
+            Mix_ReserveChannels(MUSIC_CHANNEL + 1);   // チャンネル 0 を Mix_PlayChannel(-1, ...) に使わせない
+            reserved_ = true;
+            return true;
+        }
+        music_ = Mix_LoadMUS(path.c_str());
+        return music_ != nullptr;
+    }
+
+    void free(){
+        halt();
+        if(full_){ Mix_FreeChunk(full_); full_ = nullptr; }
+        if(music_){ Mix_FreeMusic(music_); music_ = nullptr; }
+        if(reserved_){ Mix_ReserveChannels(0); reserved_ = false; }
+    }
+
+    explicit operator bool() const { return full_ != nullptr || music_ != nullptr; }
+    bool isWav() const { return full_ != nullptr; }
+
+    // 頭から鳴らす（Mix_PlayMusic(bgm, 1) と同じ）
+    void play(){
+        if(music_){ Mix_PlayMusic(music_, 1); return; }
+        if(full_) startAt(0.0);
+    }
+
+    // 鳴らしているか（一時停止中も true。Mix_PlayingMusic と同じ）
+    bool playing() const {
+        if(music_) return Mix_PlayingMusic() != 0;
+        if(full_)  return started_ && (paused_ || Mix_Playing(MUSIC_CHANNEL) != 0);
+        return false;
+    }
+
+    // 一時停止中か（Mix_PausedMusic と同じ）
+    bool paused() const {
+        if(music_) return Mix_PausedMusic() != 0;
+        if(full_)  return started_ && paused_;
+        return false;
+    }
+
+    void pause(){
+        if(music_){ Mix_PauseMusic(); return; }
+        if(full_ && playing() && !paused_){
+            Mix_Pause(MUSIC_CHANNEL);
+            paused_ = true;
+        }
+    }
+
+    void resume(){
+        if(music_){ Mix_ResumeMusic(); return; }
+        if(!full_ || !paused_) return;
+        if(restartOnResume_){
+            // 一時停止中にシークされていた：その位置から鳴らし直す
+            restartOnResume_ = false;
+            Mix_HaltChannel(MUSIC_CHANNEL);
+            startAt(pendingSec_);
+        }
+        else{
+            Mix_Resume(MUSIC_CHANNEL);
+            paused_ = false;
+        }
+    }
+
+    void halt(){
+        if(music_){ Mix_HaltMusic(); return; }
+        if(full_){
+            Mix_HaltChannel(MUSIC_CHANNEL);
+            Mix_UnregisterAllEffects(MUSIC_CHANNEL);   // this を持ったエフェクトを残さない
+        }
+        started_ = false;
+        paused_ = false;
+        restartOnResume_ = false;
+    }
+
+    // 曲の sec 秒の位置へ（Mix_SetMusicPosition と同じ）。できたら true
+    bool seek(double sec){
+        if(music_) return Mix_SetMusicPosition(sec) == 0;
+        if(!full_ || !playing()) return false;
+        if(paused_){
+            // 一時停止中は鳴らさずに覚えておき、再開したときにその位置から鳴らす
+            pendingSec_ = sec;
+            restartOnResume_ = true;
+            return true;
+        }
+        Mix_HaltChannel(MUSIC_CHANNEL);
+        startAt(sec);
+        return true;
+    }
+
+    // 今の曲の位置（秒）。分からないときは -1
+    //   WAV：始めた位置 ＋ エフェクトで数えた「混ぜ終わったバイト数」
+    double position() const {
+        if(music_) return Mix_GetMusicPosition(music_);
+        if(full_ && started_){
+            const double bytes = static_cast<double>(startOffsetBytes_) + static_cast<double>(playedBytes_.load());
+            return bytes / (static_cast<double>(freq_) * frameBytes_);
+        }
+        return -1.0;
+    }
+
+private:
+    Mix_Music* music_ = nullptr;   // WAV 以外
+    Mix_Chunk* full_ = nullptr;    // WAV：曲全体
+    Mix_Chunk  view_{};            // WAV：途中から始まるチャンク（full_ の波形を指すだけ。解放しない）
+    int  freq_ = 44100;
+    int  frameBytes_ = 4;          // 1 サンプル（全チャンネル分）のバイト数
+    bool reserved_ = false;
+    bool started_ = false;
+    bool paused_ = false;
+    bool restartOnResume_ = false;
+    double pendingSec_ = 0.0;
+
+    Uint64 startOffsetBytes_ = 0;                  // 今のチャンクが曲のどこから始まったか（バイト）
+    std::atomic<Uint64> playedBytes_{0};           // そこから混ぜ終わったバイト数（音を混ぜるスレッドから足される）
+
+    // チャンネルのエフェクト：音を混ぜるたびに呼ばれる（音を混ぜるスレッドの中）。音は変えずに数えるだけ
+    static void countPlayedBytes(int /*chan*/, void* /*stream*/, int len, void* udata){
+        auto* self = static_cast<EditorMusic*>(udata);
+        if(len > 0) self->playedBytes_.fetch_add(static_cast<Uint64>(len));
+    }
+
+    static bool isWavPath(const std::string& p){
+        if(p.size() < 4) return false;
+        std::string ext = p.substr(p.size() - 4);
+        for(char& c : ext) c = static_cast<char>(std::tolower(static_cast<unsigned char>(c)));
+        return ext == ".wav";
+    }
+
+    // sec 秒の位置から鳴らす（WAV）
+    void startAt(double sec){
+        const Uint32 total = full_->alen;
+        Uint64 offset = static_cast<Uint64>(std::max(0.0, sec) * freq_) * static_cast<Uint64>(frameBytes_);   // サンプルの境目にそろえる
+        if(offset >= total){
+            // 曲の終わりより後：鳴らさない（最後まで流れたのと同じ扱い）
+            started_ = false;
+            paused_ = false;
+            return;
+        }
+        view_ = Mix_Chunk{};
+        view_.allocated = 0;                        // 自分では解放しない（波形は full_ のもの）
+        view_.abuf = full_->abuf + offset;          // 始めたい位置までずらす
+        view_.alen = total - static_cast<Uint32>(offset);
+        view_.volume = static_cast<Uint8>(std::clamp(Mix_VolumeMusic(-1), 0, MIX_MAX_VOLUME));   // 曲の音量の設定に合わせる
+        Mix_Volume(MUSIC_CHANNEL, MIX_MAX_VOLUME);
+
+        // 位置を数え直す。エフェクトはチャンネルが止まると外れるので、鳴らすたびに付け直す
+        //   鳴らし始めた直後の分も数えられるように、Mix_PlayChannel より「前」に付ける
+        startOffsetBytes_ = offset;
+        playedBytes_.store(0);
+        Mix_UnregisterAllEffects(MUSIC_CHANNEL);
+        Mix_RegisterEffect(MUSIC_CHANNEL, &EditorMusic::countPlayedBytes, nullptr, this);
+
+        Mix_PlayChannel(MUSIC_CHANNEL, &view_, 0);
+        started_ = true;
+        paused_ = false;
+    }
+};
+
+// =====================================================================
 //  エディタの見た目（選曲画面のウィンドウにそろえる）
 // =====================================================================
 namespace editorui {
@@ -898,11 +1096,24 @@ GameScene chartCreateScene(SDL_Window* window, SDL_Renderer* renderer, std::stri
     syncMetaBuffers();
     syncDifficultyBuffers();
 
-    Mix_Music* bgm = nullptr;
+    EditorMusic bgm;   // WAV はチャンクで、それ以外は Mix_Music で鳴らす（EditorMusic の説明を参照）
     bool isPlaying = false;
     int32_t scrollTimeMs = 0;
     uint32_t lastFrameticks = SDL_GetTicks();
     uint32_t lastDriftCheckTicks = 0;
+
+    // ----- 曲の位置合わせ（シーク）とずれの補正 -----
+    //   ・シークした直後は、音の出口（デコーダ・オーディオ装置のバッファ）にシーク前の音が残っていて、
+    //     Mix_GetMusicPosition がしばらく「古い位置」や「先読みした位置」を返すことがある。
+    //     WAV はデコードが一瞬で終わるので、この影響がとくに出やすい。
+    //     → シークしてから SEEK_DRIFT_GRACE_MS の間は、ずれの補正をしない
+    //   ・ずれが DRIFT_RESEEK_MS より大きいときは「曲の位置が付いてこなかった」とみなし、
+    //     スクロールで決めた位置（譜面の位置）を正として、曲の方をその位置へシークし直す
+    //     （今までは逆に、譜面の位置を曲の位置へ引っぱっていたので、スクロールした ms がずれていった）
+    constexpr uint32_t SEEK_DRIFT_GRACE_MS = 300;
+    constexpr double   DRIFT_RESEEK_MS     = 300.0;
+    constexpr bool     EDITOR_AUDIO_DEBUG  = true;   // シークの結果をコンソールに出す（原因が分かったら false に）
+    uint32_t driftResumeTicks = 0;                    // この時刻までは、ずれの補正をしない
 
     int editorAudioLatencyMs = 40;
     int32_t pendingAudioLatencyMs = 0;
@@ -921,10 +1132,29 @@ GameScene chartCreateScene(SDL_Window* window, SDL_Renderer* renderer, std::stri
         printf("効果音読込失敗\n");
     }
 
+    // 譜面上の時刻 chartTimeMs に、曲の位置を合わせる（音声位置 = 譜面時刻 + オフセット）
+    //   ・0 秒ちょうど（曲の頭）にも合わせる。今までは 0.001 秒以下だとシークしなかったので、
+    //     曲の頭へスクロールで戻しても、曲だけが前の位置のまま鳴り続けていた
+    //   ・曲を止めている（Mix_HaltMusic 後・最後まで流れた）ときはシークできない。
+    //     その場合は何もせず、次に再生したとき（togglePlayback）に合わせる
     auto seekMusicIfNeeded = [&](int32_t chartTimeMs){
-        double audioPosSec = std::max(0.0, (chartTimeMs + meta.offsetMs) / 1000.0);
-        if(audioPosSec > 0.001){
-            Mix_SetMusicPosition(audioPosSec);
+        if(!bgm || !bgm.playing()) return;   // 一時停止中は playing() が true なので、ここは通る
+
+        const double audioPosSec = std::max(0.0, (chartTimeMs + meta.offsetMs) / 1000.0);
+        const bool ok = bgm.seek(audioPosSec);
+
+        // シーク直後の古い位置で、ずれの補正が誤って働かないようにする
+        driftResumeTicks = SDL_GetTicks() + SEEK_DRIFT_GRACE_MS;
+
+        if(EDITOR_AUDIO_DEBUG){
+            if(bgm.isWav()){
+                printf("[譜面エディタ] シーク(WAV) 譜面 %d ms → 曲 %.3f s : %s / 直後の位置 %.3f s\n",
+                       chartTimeMs, audioPosSec, ok ? "成功" : "失敗", bgm.position());
+            }
+            else{
+                printf("[譜面エディタ] シーク 譜面 %d ms → 曲 %.3f s : %s / 直後の位置 %.3f s\n",
+                       chartTimeMs, audioPosSec, ok ? "成功" : Mix_GetError(), bgm.position());
+            }
         }
     };
 
@@ -949,16 +1179,16 @@ GameScene chartCreateScene(SDL_Window* window, SDL_Renderer* renderer, std::stri
 
             if(!bgm && !meta.bgm.empty()){
                 std::string fullPath = "sounds/" + meta.bgm;
-                bgm = Mix_LoadMUS(fullPath.c_str());
+                bgm.load(fullPath);
                 if(!bgm) printf("[譜面エディタ] BGM読込失敗 : %s\n", fullPath.c_str());
             }
 
             if(bgm){
-                if(!musicNeedsStart && Mix_PausedMusic() == 1){
-                    Mix_ResumeMusic();
+                if(!musicNeedsStart && bgm.paused()){
+                    bgm.resume();
                 }
                 else{
-                    Mix_PlayMusic(bgm, 1);
+                    bgm.play();
                     musicNeedsStart = false;
 
                     if(editorAudioLatencyMs > 0) pendingAudioLatencyMs = editorAudioLatencyMs;
@@ -974,7 +1204,7 @@ GameScene chartCreateScene(SDL_Window* window, SDL_Renderer* renderer, std::stri
             }
         }
         else{
-            if(bgm) Mix_PauseMusic();
+            if(bgm) bgm.pause();
         }
     };
 
@@ -1398,18 +1628,32 @@ GameScene chartCreateScene(SDL_Window* window, SDL_Renderer* renderer, std::stri
         }
 
         if(isPlaying && bgm && pendingAudioLatencyMs == 0 &&
-        Mix_PlayingMusic() && Mix_PausedMusic() == 0 &&
+        bgm.playing() && !bgm.paused() &&
+        SDL_TICKS_PASSED(nowTicks, driftResumeTicks) &&           // シーク直後は補正しない
         (nowTicks - lastDriftCheckTicks) >= 200){
             lastDriftCheckTicks = nowTicks;
 
-            double actualAudioMs = Mix_GetMusicPosition(bgm) * 1000.0;
-            if(actualAudioMs >= 0.0){
-                // seekMusicIfNeededの「音声位置 = chartTime - offset」という関係式の逆算
+            // 曲の位置：mp3 などは Mix_GetMusicPosition、WAV はエフェクトで数えた位置（どちらも「混ぜ終わった位置」）
+            const double posSec = bgm.position();
+            double actualAudioMs = posSec * 1000.0;
+            if(posSec >= 0.0){
+                // seekMusicIfNeededの「音声位置 = chartTime + offset」という関係式の逆算
                 double predictedAudioMs = static_cast<double>(scrollTimeMs) + meta.offsetMs;
                 double drift = actualAudioMs - predictedAudioMs;
 
-                if(std::abs(drift) > 5.0){
+                if(std::abs(drift) > DRIFT_RESEEK_MS){
+                    // 大きすぎるずれ：曲の位置がスクロールに付いてこなかった
+                    //   → 譜面の位置を動かさず、曲の方を譜面の位置へ合わせ直す
+                    if(EDITOR_AUDIO_DEBUG){
+                        printf("[譜面エディタ] 大きなずれ %.1f ms（曲 %.1f ms / 譜面 %d ms）→ 曲を合わせ直します\n",
+                               drift, actualAudioMs, scrollTimeMs);
+                    }
+                    seekMusicIfNeeded(scrollTimeMs);
+                }
+                else if(std::abs(drift) > 5.0){
+                    // 小さなずれ：今まで通り、譜面の位置を少しずつ曲に寄せる
                     scrollTimeMs += static_cast<int32_t>(drift * 0.2);
+                    if(scrollTimeMs < 0) scrollTimeMs = 0;
                 }
             }
         }
@@ -2299,7 +2543,7 @@ GameScene chartCreateScene(SDL_Window* window, SDL_Renderer* renderer, std::stri
             ImGui::SameLine();
             if(ImGui::Button("先頭へ")){
                 scrollTimeMs = 0;
-                if(bgm) Mix_HaltMusic();
+                if(bgm) bgm.halt();
                 isPlaying = false;
                 musicNeedsStart = true;
             }
@@ -3314,7 +3558,7 @@ GameScene chartCreateScene(SDL_Window* window, SDL_Renderer* renderer, std::stri
 
             // 1. エディタ側の再生を止める
             isPlaying = false;
-            if(bgm) Mix_HaltMusic();
+            if(bgm) bgm.halt();
             musicNeedsStart = true;
             flashEffects.clear();
 
@@ -3356,10 +3600,7 @@ GameScene chartCreateScene(SDL_Window* window, SDL_Renderer* renderer, std::stri
         }
     }
 
-    if(bgm){
-        Mix_HaltMusic();
-        Mix_FreeMusic(bgm);
-    }
+    bgm.free();   // 止めてから解放する（WAV のときはチャンネルの予約も戻す）
 
     ImGui_ImplSDLRenderer2_Shutdown();
     ImGui_ImplSDL2_Shutdown();

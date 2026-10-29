@@ -1,6 +1,6 @@
 {
   "bgm": "Re End of a Dream.mp3",
-  "composer": "Unknown",
+  "composer": "もりもりあつし",
   "difficulties": [
     {
       "bpm": 212.0,
@@ -40,17 +40,6 @@
       "chartCreator": "TKYK.env",
       "level": "0",
       "name": "HARD",
-      "notes": [],
-      "sigDen": 4,
-      "sigNum": 4,
-      "speedEvents": []
-    },
-    {
-      "bpm": 212.0,
-      "bpmEvents": [],
-      "chartCreator": "TKYK.env",
-      "level": "0",
-      "name": "NORMAL",
       "notes": [],
       "sigDen": 4,
       "sigNum": 4,

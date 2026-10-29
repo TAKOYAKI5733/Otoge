@@ -3165,17 +3165,6 @@
       "bpm": 120.0,
       "bpmEvents": [],
       "chartCreator": "TKYK.env",
-      "level": "0",
-      "name": "NORMAL",
-      "notes": [],
-      "sigDen": 4,
-      "sigNum": 4,
-      "speedEvents": []
-    },
-    {
-      "bpm": 120.0,
-      "bpmEvents": [],
-      "chartCreator": "TKYK.env",
       "level": "2",
       "name": "EASY",
       "notes": [
