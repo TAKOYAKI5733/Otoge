@@ -144,6 +144,8 @@ inline void drawSyncLines(GameContext& ctx, double currentNoteSpeed, int laneX[6
     const size_t n = ctx.notes.size();
     outIsSync.assign(n, 0);
 
+    const double visualTime = ctx.musicTimeExact + ctx.visualOffsetMs;   // 表示用の時刻
+
     size_t i = 0;
     while(i < n){
         // 1. targetTime が同じ連続部分 [i, j) をひとまとまりにする
@@ -154,7 +156,7 @@ inline void drawSyncLines(GameContext& ctx, double currentNoteSpeed, int laneX[6
         for(; j < n && ctx.notes[j].targetTime == t; j++){
             const Note& note = ctx.notes[j];
             if(note.lane < 0 || note.lane >= 6) continue;
-            if(note.isHit) continue;                         // 叩いたノーツは線から外す
+            if(note.isHit && visualTime >= note.hitTime) continue;   // 叩いた見た目になったノーツは線から外す
 
             int y = computeNoteY(ctx, note, currentNoteSpeed);
             if(y < -50 || y > SCREEN_H + 50) continue;       // 画面外は描かない
@@ -231,17 +233,36 @@ inline void renderGamePlayScreen(GameContext& ctx, Tex& tex, Sq& sq, double curr
     RoundedRectBatch noteBatch;    // ノーツのヘッド
     RoundedRectBatch syncFrameBatch;    //同時押しの枠
 
+    // 表示用の時刻（ノーツの位置と同じ時計）。判定には使わない
+    //   判定は ctx.musicTime で行い、その瞬間（note.hitTime）を「表示の時刻」が過ぎたときに
+    //   叩いた見た目（消える・破裂・ホールド）にする → 表示調整をずらしても、ノーツが箱にぴったり重なって破裂する
+    const double visualTime = ctx.musicTimeExact + ctx.visualOffsetMs;
+
     for(const auto& note : ctx.notes){
         if(note.lane < 0 || note.lane >= 6) continue;
 
-            if(note.isHit && !note.isHolding && !note.isFailed && ctx.musicTime >= note.targetTime) continue;
+            const bool isLong = (note.type == NoteType::Long);
+
+            // 判定が出た瞬間を、表示の時刻で過ぎたか
+            const bool hitShown = note.isHit && visualTime >= note.hitTime;
+
+            // 終点まで押し切ったロングで、終点の瞬間がまだ表示に来ていない（判定は済んだが、見た目はまだホールド中）
+            const bool finishPending = isLong && note.isHit && !note.isHolding && !note.isFailed && !hitShown;
+
+            if(hitShown && !note.isHolding && !note.isFailed) continue;
 
             double effectiveSpeed = note.hasCustomSpeed ? note.customSpeed : currentNoteSpeed;
             int noteY = computeNoteY(ctx, note, currentNoteSpeed);
 
             if(noteY < -50) continue;
 
-            bool laneIsInactive = !ctx.laneActive[note.lane];
+            bool laneIsInactive = true;
+            for(int l = note.lane; l < note.lane + note.widthLanes; l++){
+                if(l >= 0 && l < 6 && ctx.laneActive[l]){
+                    laneIsInactive = false;
+                    break;
+                }
+            }
 
             // ① 色を先に決める（ヘッドと帯で同じ色を使うため）
             // ロングは「ロングになる前の種類」で色を決める（エディタと同じ：DRAG 黄、通常C 水色）
@@ -264,20 +285,29 @@ inline void renderGamePlayScreen(GameContext& ctx, Tex& tex, Sq& sq, double curr
             const float noteH  = NOTE_HEAD_H;
             const float radius = NOTE_RADIUS;
 
-            // ホールド中はヘッドを判定ラインに固定する
-            const int headY = note.isHolding ? ctx.judgeY : noteY;
+            // 見た目のホールド中：叩いた瞬間が表示に来てから、終点の瞬間が表示に来るまで
+            const bool holdShown = (note.isHolding && hitShown) || finishPending;
 
-            // ② ロングノーツの帯：ヘッドと同じ形を縦に引き伸ばす
-                    // ② ロングノーツの帯 ＋ 中央の芯
-                    // ② ロングノーツの帯 ＋ 中央の芯
+            // 見た目のホールド中はヘッドを判定ラインに固定する（それまでは普通に流れてくる）
+            const int headY = holdShown ? ctx.judgeY : noteY;
+
+            // ② ロングノーツの帯 ＋ 中央の芯
             if(note.type == NoteType::Long){
-                int tailY = ctx.judgeY - static_cast<int>((static_cast<double>(note.targetTime + note.durationMs) - ctx.musicTimeExact) * effectiveSpeed);
+                // ヘッド（computeNoteY）と同じ「表示用の時刻」を使う。判定には使わない
+                //   ここを ctx.musicTimeExact のままにすると、表示調整を入れたときに
+                //   ヘッドだけがずれて、ロングの長さが変わってしまう
+                const double visualTime = ctx.musicTimeExact + ctx.visualOffsetMs;
+
+                int tailY = ctx.judgeY - static_cast<int>((static_cast<double>(note.targetTime + note.durationMs) - visualTime) * effectiveSpeed);
 
                 // 帯の下端：通常はヘッドの位置。失敗したら「失敗した時刻」の位置にして、判定ラインを越えて流す
                 int bottomY = headY;
                 if(note.isFailed){
-                    bottomY = ctx.judgeY - static_cast<int>((static_cast<double>(note.failCutTime) - ctx.musicTimeExact) * effectiveSpeed);
+                    bottomY = ctx.judgeY - static_cast<int>((static_cast<double>(note.failCutTime) - visualTime) * effectiveSpeed);
                 }
+
+                // ホールド中、終端がヘッド（判定ライン）より下に来たら止める（帯が裏返らないように）
+                if(holdShown && tailY > bottomY) tailY = bottomY;
 
                 float top    = static_cast<float>(tailY) - noteH * 0.5f;
                 float bottom = static_cast<float>(bottomY);
@@ -302,7 +332,7 @@ inline void renderGamePlayScreen(GameContext& ctx, Tex& tex, Sq& sq, double curr
                                 static_cast<Uint8>(col.g * 0.15),
                                 static_cast<Uint8>(col.b * 0.15), 230};
                 }
-                else if(note.isHolding){
+                else if(holdShown){
                     innerCol = {0, 255, 255, 255};
                 }
                 else{
@@ -314,8 +344,8 @@ inline void renderGamePlayScreen(GameContext& ctx, Tex& tex, Sq& sq, double curr
             innerBatch.add(innerX, top + innerMargin, innerW, bottom - (top + innerMargin), innerRadius, innerCol);
         }
 
-        // ③ ヘッド：未判定、またはホールド中なら描く
-        if(!note.isHit || note.isHolding){
+        // ③ ヘッド：叩いた見た目になる前、またはホールド中なら描く
+        if(!hitShown || note.isHolding){
             const float headTop = static_cast<float>(headY) - noteH * 0.5f;
 
             const size_t noteIndex = static_cast<size_t>(&note - ctx.notes.data());
@@ -350,7 +380,8 @@ inline void renderGamePlayScreen(GameContext& ctx, Tex& tex, Sq& sq, double curr
         if(fx.lane < 0 || fx.lane >= 6) continue;
         if(fx.judgeType == 0) continue;   // 判定のないエフェクト（空打ち）は出さない
 
-        double p = static_cast<double>(ctx.musicTime - fx.spawnTime) / fx.duration;
+        // 叩いた時刻（spawnTime）を表示の時刻が過ぎてから破裂を始める（ノーツが消える瞬間と同じ）
+        double p = (visualTime - static_cast<double>(fx.spawnTime)) / fx.duration;
         if(p < 0.0 || p >= 1.0) continue;
         double ease = 1.0 - (1.0 - p) * (1.0 - p);   // 最初に速く広がる
 
@@ -389,7 +420,7 @@ inline void renderGamePlayScreen(GameContext& ctx, Tex& tex, Sq& sq, double curr
     // ロングの中継点：正方形の枠が飛び散り、だんだん止まりながら消える
     if(ctx.tickParticles){
         for(const TickParticle& p : *ctx.tickParticles){
-            const double el = ctx.musicTimeExact - p.spawnTime;
+            const double el = visualTime - p.spawnTime;   // ホールドの見た目と同じく表示の時刻で進める
             const double t  = el / TICK_PARTICLE_LIFE_MS;
             if(t < 0.0 || t >= 1.0) continue;
 
@@ -510,8 +541,12 @@ inline void renderGamePlayScreen(GameContext& ctx, Tex& tex, Sq& sq, double curr
 }
 
 inline void erase_some(GameContext& ctx){
-    std::erase_if(ctx.effects, [&ctx](const Effect& fx){
-        return (ctx.musicTime - fx.spawnTime) >= static_cast<int32_t>(fx.duration);
+    // 破裂・中継点のエフェクトは表示の時刻で進むので、片付けも表示の時刻で判断する
+    //   （表示調整がマイナスのとき、破裂が始まる前に消してしまわないように）
+    const double visualTime = ctx.musicTimeExact + ctx.visualOffsetMs;
+
+    std::erase_if(ctx.effects, [visualTime](const Effect& fx){
+        return (visualTime - static_cast<double>(fx.spawnTime)) >= static_cast<double>(fx.duration);
     });
 
     std::erase_if(ctx.keyBeams, [&ctx](const KeyBeam& beam){
@@ -520,12 +555,12 @@ inline void erase_some(GameContext& ctx){
 
     // 消えたロングの中継点のエフェクトを片付ける
     if(ctx.tickParticles){
-        std::erase_if(*ctx.tickParticles, [&ctx](const TickParticle& p){
-            return ctx.musicTimeExact - p.spawnTime >= TICK_PARTICLE_LIFE_MS;
+        std::erase_if(*ctx.tickParticles, [visualTime](const TickParticle& p){
+            return visualTime - p.spawnTime >= TICK_PARTICLE_LIFE_MS;
         });
     }
 
-    std::erase_if(ctx.notes, [&ctx](const Note& note){
+    std::erase_if(ctx.notes, [&ctx, visualTime](const Note& note){
         if(note.isHolding){
             return false;
         }
@@ -535,7 +570,9 @@ inline void erase_some(GameContext& ctx){
             endTime = note.targetTime + note.durationMs;
         }
 
-        bool shouldErase = (ctx.musicTime > endTime) && (ctx.musicTime - endTime > 500);
+        // 判定の時刻と表示の時刻の両方で 500ms 過ぎてから消す
+        //   （判定の MISS より先に消さない／表示がまだ追いついていないノーツを消さない）
+        bool shouldErase = (ctx.musicTime - endTime > 500) && (visualTime - endTime > 500.0);
 
         return shouldErase;
     });

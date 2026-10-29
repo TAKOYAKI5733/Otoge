@@ -1,5 +1,6 @@
 {
-  "bgmVolume": 45,
+  "bgmVolume": 60,
+  "fpsAuto": true,
   "fpsCap": 165,
   "keyBindings": [
     "key:26",
@@ -10,11 +11,11 @@
     "key:18"
   ],
   "offsetMs": 0.0,
-  "seVolume": 90,
+  "seVolume": 100,
   "showFastLate": true,
   "showTimingMs": false,
   "tapSound": "TAP_S.wav",
   "visualOffsetMs": 0.0,
-  "vsync": true,
+  "vsync": false,
   "windowMode": 2
 }

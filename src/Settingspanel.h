@@ -62,6 +62,9 @@ public:
         open_ = false;
         if(s.windowMode != openedWindowMode_){
             applyWindowMode(window, s.windowMode);
+            // 表示モードを変えると Hz が変わることがある（フルスクリーンは一番高い Hz を選ぶ）ので、
+            // FPS 自動が ON ならその場で選び直す
+            if(s.fpsAuto) g_framePacer.setAutoCap(true, window);
         }
         savePlayerSettings(s);
     }
@@ -108,7 +111,8 @@ public:
                     requestKeyConfig_ = true;
                     close(window, s);
                 }
-                else if(currentRow() == ROW_VSYNC || currentRow() == ROW_FASTLATE || currentRow() == ROW_TIMING_MS){
+                else if(currentRow() == ROW_VSYNC || currentRow() == ROW_FASTLATE || currentRow() == ROW_TIMING_MS ||
+                        currentRow() == ROW_FPS_AUTO){
                     changeValue(+1, false, renderer, s);   // ON/OFF は ENTER でも切替
                 }
                 break;
@@ -168,6 +172,9 @@ public:
             bool selected = (k == cursor_);
             SDL_Rect row = {x + 30, ROWS_TOP + k * ROW_H, PANEL_W - 60, ROW_H - 12};
 
+            // FPS 自動が ON の間は FPS 上限を変えられないので、灰色で描く
+            const bool locked = isLocked(i, s);
+
             drawFrame(renderer, row,
                       selected ? SDL_Color{45, 45, 80, static_cast<Uint8>(210 * anim_)}
                                : SDL_Color{30, 30, 50, static_cast<Uint8>(170 * anim_)},
@@ -177,17 +184,22 @@ public:
 
             int cy = row.y + row.h / 2;
             SDL_Color labelColor = selected ? SDL_Color{0, 255, 255, 255} : SDL_Color{255, 255, 255, 255};
+            if(locked) labelColor = SDL_Color{130, 130, 150, 255};
             drawText(renderer, font, ROW_LABELS[i], labelColor, row.x + 30, cy, a, Align::Left);
 
             // 値：選択中だけ「< 値 >」の形にして、左右で変えられることを示す
             std::string value = valueText(i, s);
-            if(selected && i != ROW_CALIBRATE && i != ROW_KEYCONFIG) value = "<  " + value + "  >";   // ENTER で開く項目は左右で変える値がない
-            drawText(renderer, font, value, SDL_Color{255, 255, 255, 255}, row.x + row.w - 30, cy, a, Align::Right);
+            //   ENTER で開く項目・今は変えられない項目は、左右で変える値がないので付けない
+            if(selected && i != ROW_CALIBRATE && i != ROW_KEYCONFIG && !locked) value = "<  " + value + "  >";
+            SDL_Color valueColor = locked ? SDL_Color{130, 130, 150, 255} : SDL_Color{255, 255, 255, 255};
+            drawText(renderer, font, value, valueColor, row.x + row.w - 30, cy, a, Align::Right);
         }
 
         // 5. 選択中の項目の説明と、操作方法
         int descY = ROWS_TOP + MAX_ROWS * ROW_H + 10;
-        drawText(renderer, smallFont, ROW_DESCRIPTIONS[currentRow()], SDL_Color{180, 180, 200, 255},
+        const char* desc = isLocked(currentRow(), s) ? "FPS 自動が ON の間は、モニターに合わせて自動で決まります"
+                                                     : ROW_DESCRIPTIONS[currentRow()];
+        drawText(renderer, smallFont, desc, SDL_Color{180, 180, 200, 255},
                  x + 40, descY, a, Align::Left);
         drawText(renderer, smallFont, "Tab:分類   上下:選択   左右:変更（Shift で大きく）   F2/ESC:閉じて保存",
                  SDL_Color{130, 130, 150, 255}, x + 40, PANEL_Y + PANEL_H - 36, a, Align::Left);
@@ -221,6 +233,7 @@ private:
         ROW_FPS,
         ROW_WINDOW,
         ROW_KEYCONFIG,
+        ROW_FPS_AUTO,
         ROW_COUNT
     };
 
@@ -236,7 +249,8 @@ private:
         "VSync",
         "FPS 上限",
         "表示モード",
-        "キー設定"
+        "キー設定",
+        "FPS 自動"
     };
 
     static constexpr const char* ROW_DESCRIPTIONS[ROW_COUNT] = {
@@ -251,7 +265,8 @@ private:
         "垂直同期を設定できます",
         "VSync が OFF のときに使われる上限設定です",
         "ウィンドウの設定です",
-        "ENTER で キー設定の画面を開きます（キーボード・コントローラー）"
+        "ENTER で キー設定の画面を開きます（キーボード・コントローラー）",
+        "モニターの Hz に一番近い FPS 上限を自動で選びます"
     };
 
     // ----- 分類 -----
@@ -261,7 +276,7 @@ private:
     static constexpr int CATEGORY_ROWS[CATEGORY_COUNT][MAX_ROWS] = {
         {ROW_CALIBRATE, ROW_OFFSET,   ROW_VISUAL_OFFSET, -1,      -1,           -1},              // オフセット関連
         {ROW_KEYCONFIG, ROW_TAPSOUND, ROW_SE,            ROW_BGM, ROW_FASTLATE, ROW_TIMING_MS},   // ノーツ関連
-        {ROW_VSYNC,     ROW_FPS,      ROW_WINDOW,        -1,      -1,           -1},              // グラフィックス関連
+        {ROW_VSYNC,     ROW_FPS_AUTO, ROW_FPS,           ROW_WINDOW, -1,        -1},              // グラフィックス関連
     };
 
     // 分類 c に入っている項目の数（-1 の手前まで）
@@ -271,7 +286,7 @@ private:
         return n;
     }
 
-    static constexpr int FPS_OPTIONS[] ={0, 60, 120, 144, 165, 240, 360};   // 0 = 無制限
+    static constexpr int FPS_OPTIONS[] ={0, 60, 120, 144, 165, 240, 360};   // 0 = 無制限（FramePacer.h の FPS_AUTO_CHOICES とそろえる）
     static constexpr int FPS_COUNT = static_cast<int>(sizeof(FPS_OPTIONS) / sizeof(FPS_OPTIONS[0]));
 
     static constexpr const char* WINDOW_MODE_NAMES[3] = {"ウィンドウ", "ボーダーレス", "フルスクリーン"};
@@ -289,6 +304,11 @@ private:
     double anim_ = 0.0;              // 0.0 = 隠れている、1.0 = 出きっている
     Mix_Chunk* previewTap_ = nullptr;
     std::vector<std::string> tapSounds_;   // 選べるノーツ音（先頭は標準 = 空文字）
+
+    // その項目を今は変えられないか（FPS 自動が ON の間の FPS 上限）
+    static bool isLocked(int row, const PlayerSettings& s){
+        return row == ROW_FPS && s.fpsAuto;
+    }
 
     // 今の設定のノーツ音が、選択肢の何番目か（見つからなければ標準 = 0）
     int tapSoundIndex(const std::string& name) const{
@@ -367,7 +387,15 @@ private:
                 SDL_RenderSetVSync(renderer, s.vsync ? 1 : 0);
                 break;
 
+            case ROW_FPS_AUTO:
+                s.fpsAuto = !s.fpsAuto;
+                // ON → その場でモニターの Hz を調べて上限を決める／OFF → 手動の FPS 上限に戻る
+                //   changeValue には window が来ないので、renderer から取り出す
+                g_framePacer.setAutoCap(s.fpsAuto, SDL_RenderGetWindow(renderer));
+                break;
+
             case ROW_FPS:{
+                if(s.fpsAuto) break;   // 自動の間は変えられない
                 int idx = std::clamp(nearestFpsIndex(s.fpsCap) + dir, 0, FPS_COUNT - 1);
                 s.fpsCap = FPS_OPTIONS[idx];
                 g_framePacer.setCap(s.fpsCap);
@@ -397,7 +425,22 @@ private:
             case ROW_FASTLATE:  return s.showFastLate ? "ON" : "OFF";
             case ROW_TIMING_MS: return s.showTimingMs ? "ON" : "OFF";
             case ROW_VSYNC:  return s.vsync ? "ON" : "OFF";
+            case ROW_FPS_AUTO:{
+                if(!s.fpsAuto) return "OFF";
+                // ON のときは、取得できたモニターの Hz も一緒に出す
+                const int hz = g_framePacer.detectedHz();
+                if(hz > 0) std::snprintf(buf, sizeof(buf), "ON（%d Hz）", hz);
+                else if(hz == 0) std::snprintf(buf, sizeof(buf), "ON（Hz 取得不可）");
+                else std::snprintf(buf, sizeof(buf), "ON");
+                return buf;
+            }
+
             case ROW_FPS:
+                // 自動で決まった値があればそれを出す（Hz が取れないときは手動の値が使われる）
+                if(s.fpsAuto && g_framePacer.autoCapFps() > 0){
+                    std::snprintf(buf, sizeof(buf), "%d fps", g_framePacer.autoCapFps());
+                    return buf;
+                }
                 if(s.fpsCap <= 0) return "無制限";
                 std::snprintf(buf, sizeof(buf), "%d fps", s.fpsCap);
                 return buf;

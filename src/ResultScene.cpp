@@ -11,7 +11,7 @@
 // =====================================================================
 //  リザルト画面：選曲画面と同じウィンドウ表示で3つに分ける
 //    ・RANK   （左上）評価（SSS など）と ALL PERFECT / FULL COMBO
-//    ・SCORE  （左）  スコア・判定数・FAST/LATE・MAX COMBO
+//    ・SCORE  （左）  スコア・判定数（GOOD / BAD は FAST・LATE の内訳つき）・FAST/LATE・MAX COMBO
 //    ・TIMING （右）  叩いたズレの分布グラフ
 // =====================================================================
 
@@ -31,6 +31,15 @@ constexpr SDL_Rect RANK_RECT  = {  80, 110, 560, 300};
 constexpr SDL_Rect SCORE_RECT = {  80, 480, 780, 520};
 constexpr SDL_Rect GRAPH_RECT = { 940, 110, 900, 890};
 
+// SCORE ウィンドウの判定の行：列の位置（ウィンドウの左端 + 40 からの距離）
+//   [判定名]────[数]   [FAST] [数]   [LATE] [数]
+//   判定名と数の間を狭くして、空いた右側に FAST / LATE の内訳を置く
+constexpr int COL_COUNT_RIGHT = 300;   // 判定の数（右揃え）
+constexpr int COL_FAST_TAG    = 360;   // 「FAST」の文字（左揃え）
+constexpr int COL_FAST_RIGHT  = 500;   // FAST の数（右揃え）
+constexpr int COL_LATE_TAG    = 540;   // 「LATE」の文字（左揃え）
+constexpr int COL_LATE_RIGHT  = 700;   // LATE の数（右揃え）= ウィンドウの右端 - 40
+
 // 選曲画面のウィンドウと同じ色
 constexpr SDL_Color PANEL_FILL   = { 10,  10,  20, 190};
 constexpr SDL_Color PANEL_BORDER = {  0, 200, 255, 255};
@@ -44,6 +53,7 @@ constexpr SDL_Color COLOR_FAST    = { 80, 170, 255, 255};
 constexpr SDL_Color COLOR_LATE    = {255, 140,  60, 255};
 constexpr SDL_Color COLOR_WHITE   = {255, 255, 255, 255};
 constexpr SDL_Color COLOR_GRAY    = {150, 150, 170, 255};
+constexpr SDL_Color COLOR_DIM     = { 90,  90, 110, 255};   // 0 のときの数字（目立たせない）
 
 // リザルトの曲
 constexpr const char* RESULT_BGM_PATH = "sounds/月の降る街.mp3";   // 無ければ曲なしで表示する
@@ -170,14 +180,18 @@ GameScene resultScene(SDL_Window* window, SDL_Renderer* renderer, const ResultDa
     const SDL_Color rColor = rankColor(rank);
 
     // ----- ズレの集計（一度だけ） -----
+    //   fastOf[judgeType] / lateOf[judgeType]：判定ごとの FAST / LATE の数（1 = PERFECT, 2 = GOOD, 3 = BAD）
+    //   MISS は叩いていないのでズレが記録されない → 内訳なし
     int fastCount = 0, lateCount = 0;
+    int fastOf[4] = {}, lateOf[4] = {};
     int bins[BIN_COUNT] = {};
     double sum = 0.0, sumSq = 0.0;
     for(const TimingSample& s : result.timings){
         // FAST/LATE は PERFECT 以外で数える（プレイ中の表示と同じ）
         if(s.judgeType != 1){
-            if(s.diffMs < 0) fastCount++;
-            else if(s.diffMs > 0) lateCount++;
+            const int jt = std::clamp(s.judgeType, 0, 3);
+            if(s.diffMs < 0){ fastCount++; fastOf[jt]++; }
+            else if(s.diffMs > 0){ lateCount++; lateOf[jt]++; }
         }
         int idx = (static_cast<int>(s.diffMs) + BAD_MS) / BIN_MS;
         idx = std::clamp(idx, 0, BIN_COUNT - 1);
@@ -239,15 +253,22 @@ GameScene resultScene(SDL_Window* window, SDL_Renderer* renderer, const ResultDa
             // 区切り線
             fillRect(renderer, SDL_Rect{left, r.y + 115, r.w - 80, 2}, SDL_Color{110, 110, 150, 255}, a);
 
-            struct Row{ const char* label; int value; SDL_Color color; };
+            // FAST / LATE の数を描く：0 のときは目立たない色にする
+            auto drawCountAt = [&](int value, int x, int y){
+                drawText(renderer, fontSmall, std::to_string(value), value > 0 ? COLOR_WHITE : COLOR_DIM,
+                         x, y, Align::Right, a);
+            };
+
+            // breakdown = この行に FAST / LATE の内訳を出す判定（GOOD = 2, BAD = 3）。0 なら出さない
+            struct Row{ const char* label; int value; SDL_Color color; int breakdown; };
             const Row rows[] = {
-                {"PERFECT",   result.perfectCount, COLOR_PERFECT},
-                {"GOOD",      result.goodCount,    COLOR_GOOD},
-                {"BAD",       result.badCount,     COLOR_BAD},
-                {"MISS",      result.missCount,    COLOR_MISS},
-                {"FAST",      fastCount,           COLOR_FAST},
-                {"LATE",      lateCount,           COLOR_LATE},
-                {"MAX COMBO", result.maxCombo,     COLOR_WHITE},
+                {"PERFECT",   result.perfectCount, COLOR_PERFECT, 0},
+                {"GOOD",      result.goodCount,    COLOR_GOOD,    2},
+                {"BAD",       result.badCount,     COLOR_BAD,     3},
+                {"MISS",      result.missCount,    COLOR_MISS,    0},
+                {"FAST",      fastCount,           COLOR_FAST,    0},
+                {"LATE",      lateCount,           COLOR_LATE,    0},
+                {"MAX COMBO", result.maxCombo,     COLOR_WHITE,   0},
             };
             int y = r.y + 150;
             for(int i = 0; i < 7; i++){
@@ -256,8 +277,20 @@ GameScene resultScene(SDL_Window* window, SDL_Renderer* renderer, const ResultDa
                     fillRect(renderer, SDL_Rect{left, y - 22, r.w - 80, 1}, SDL_Color{70, 70, 90, 255}, a);
                     y += 6;
                 }
+
+                // 判定名と数：数は判定名のすぐ右の列（COL_COUNT_RIGHT）に右揃え
                 drawText(renderer, fontSmall, rows[i].label, rows[i].color, left, y, Align::Left, a);
-                drawText(renderer, fontSmall, std::to_string(rows[i].value), COLOR_WHITE, right, y, Align::Right, a);
+                drawText(renderer, fontSmall, std::to_string(rows[i].value), COLOR_WHITE,
+                         left + COL_COUNT_RIGHT, y, Align::Right, a);
+
+                // 空いた右側：GOOD / BAD の FAST・LATE の内訳
+                const int jt = rows[i].breakdown;
+                if(jt != 0){
+                    drawText(renderer, fontTab, "FAST", COLOR_FAST, left + COL_FAST_TAG, y, Align::Left, a);
+                    drawCountAt(fastOf[jt], left + COL_FAST_RIGHT, y);
+                    drawText(renderer, fontTab, "LATE", COLOR_LATE, left + COL_LATE_TAG, y, Align::Left, a);
+                    drawCountAt(lateOf[jt], left + COL_LATE_RIGHT, y);
+                }
                 y += 48;
             }
         }

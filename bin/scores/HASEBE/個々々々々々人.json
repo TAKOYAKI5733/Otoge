@@ -7,22 +7,32 @@
       "bpmEvents": [
         {
           "bpm": 140.0,
+          "sigDen": 4,
+          "sigNum": 4,
           "time": 101667
         },
         {
           "bpm": 130.0,
+          "sigDen": 4,
+          "sigNum": 4,
           "time": 114952
         },
         {
           "bpm": 125.0,
+          "sigDen": 4,
+          "sigNum": 4,
           "time": 123260
         },
         {
           "bpm": 145.0,
+          "sigDen": 4,
+          "sigNum": 4,
           "time": 131540
         },
         {
           "bpm": 144.0,
+          "sigDen": 4,
+          "sigNum": 4,
           "time": 137333
         }
       ],
@@ -9013,6 +9023,8 @@
           "type": 0
         }
       ],
+      "sigDen": 4,
+      "sigNum": 4,
       "speedEvents": [
         {
           "duration": 0,
@@ -9215,6 +9227,8 @@
       "level": "0",
       "name": "HARD",
       "notes": [],
+      "sigDen": 4,
+      "sigNum": 4,
       "speedEvents": []
     },
     {
@@ -9224,6 +9238,8 @@
       "level": "0",
       "name": "NORMAL",
       "notes": [],
+      "sigDen": 4,
+      "sigNum": 4,
       "speedEvents": []
     },
     {
@@ -9231,22 +9247,32 @@
       "bpmEvents": [
         {
           "bpm": 140.0,
+          "sigDen": 4,
+          "sigNum": 4,
           "time": 102154
         },
         {
           "bpm": 132.0,
+          "sigDen": 4,
+          "sigNum": 4,
           "time": 116083
         },
         {
           "bpm": 144.0,
+          "sigDen": 4,
+          "sigNum": 4,
           "time": 122446
         },
         {
           "bpm": 125.0,
+          "sigDen": 4,
+          "sigNum": 4,
           "time": 123905
         },
         {
           "bpm": 143.9,
+          "sigDen": 4,
+          "sigNum": 4,
           "time": 131465
         }
       ],
@@ -11057,6 +11083,8 @@
           "type": 0
         }
       ],
+      "sigDen": 4,
+      "sigNum": 4,
       "speedEvents": [
         {
           "duration": 0,
@@ -11067,5 +11095,6 @@
       ]
     }
   ],
-  "offset": -10.0
+  "offset": -10.0,
+  "previewStart": 30198.0
 }

@@ -31,6 +31,8 @@ struct Note{
     int widthLanes = 1;
     int32_t targetTime;
     bool isHit = false;
+    int32_t hitTime = 0;   // 判定が出た時刻（曲の時刻）。ロングは終点まで押し切ったら終点の判定の時刻に書き換える
+                           //   描画では「表示の時刻」がここを過ぎたら、叩いた見た目（消える・破裂）にする
     NoteType type = NoteType::Normal;
     int32_t durationMs = 0;
     int32_t lastTickTime = 0;

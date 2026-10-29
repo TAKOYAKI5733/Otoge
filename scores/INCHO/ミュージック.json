@@ -3,7 +3,7 @@
   "composer": "サカナクション",
   "difficulties": [
     {
-      "bpm": 136.01138835082037,
+      "bpm": 136.08,
       "bpmEvents": [],
       "chartCreator": "TKYK.env",
       "level": "10",
@@ -11,21 +11,3683 @@
       "notes": [
         {
           "lane": 1,
-          "time": 18528,
+          "time": 1984,
           "type": 0
         },
         {
           "lane": 4,
-          "time": 1875,
+          "time": 1984,
           "type": 0
         },
         {
           "lane": 1,
-          "time": 1875,
+          "time": 3306,
+          "type": 0
+        },
+        {
+          "lane": 2,
+          "time": 1544,
+          "type": 0
+        },
+        {
+          "lane": 3,
+          "time": 2425,
+          "type": 0
+        },
+        {
+          "lane": 1,
+          "time": 2866,
+          "type": 0
+        },
+        {
+          "lane": 4,
+          "time": 2866,
+          "type": 0
+        },
+        {
+          "lane": 2,
+          "time": 3087,
+          "type": 0
+        },
+        {
+          "lane": 3,
+          "time": 3306,
+          "type": 0
+        },
+        {
+          "lane": 2,
+          "time": 3747,
+          "type": 0
+        },
+        {
+          "lane": 4,
+          "time": 3747,
+          "type": 0
+        },
+        {
+          "lane": 1,
+          "time": 3969,
+          "type": 0
+        },
+        {
+          "lane": 3,
+          "time": 3969,
+          "type": 0
+        },
+        {
+          "lane": 2,
+          "time": 4410,
+          "type": 0
+        },
+        {
+          "lane": 4,
+          "time": 4410,
+          "type": 0
+        },
+        {
+          "duration": 220,
+          "lane": 1,
+          "time": 4851,
+          "type": 0
+        },
+        {
+          "duration": 220,
+          "lane": 3,
+          "time": 4851,
+          "type": 0
+        },
+        {
+          "lane": 4,
+          "time": 5071,
+          "type": 0
+        },
+        {
+          "lane": 2,
+          "time": 5071,
+          "type": 0
+        },
+        {
+          "lane": 1,
+          "time": 5511,
+          "type": 0
+        },
+        {
+          "lane": 4,
+          "time": 5511,
+          "type": 0
+        },
+        {
+          "lane": 2,
+          "time": 5952,
+          "type": 0
+        },
+        {
+          "lane": 3,
+          "time": 5952,
+          "type": 0
+        },
+        {
+          "lane": 4,
+          "time": 6172,
+          "type": 0
+        },
+        {
+          "lane": 1,
+          "time": 6172,
+          "type": 0
+        },
+        {
+          "lane": 2,
+          "time": 6393,
+          "type": 0
+        },
+        {
+          "lane": 4,
+          "time": 6612,
+          "type": 0
+        },
+        {
+          "lane": 1,
+          "time": 6612,
+          "type": 0
+        },
+        {
+          "lane": 3,
+          "time": 6725,
+          "type": 0
+        },
+        {
+          "lane": 2,
+          "time": 6832,
+          "type": 0
+        },
+        {
+          "lane": 4,
+          "time": 7055,
+          "type": 0
+        },
+        {
+          "lane": 1,
+          "time": 7055,
+          "type": 0
+        },
+        {
+          "lane": 1,
+          "speed": 1.4999999999999998,
+          "time": 0,
+          "type": 0
+        },
+        {
+          "lane": 4,
+          "speed": 1.4999999999999998,
+          "time": 0,
+          "type": 0
+        },
+        {
+          "lane": 2,
+          "speed": 1.4999999999999998,
+          "time": 441,
+          "type": 0
+        },
+        {
+          "lane": 3,
+          "speed": 1.4999999999999998,
+          "time": 661,
+          "type": 0
+        },
+        {
+          "lane": 4,
+          "speed": 1.4999999999999998,
+          "time": 1102,
+          "type": 0
+        },
+        {
+          "lane": 1,
+          "speed": 1.4999999999999998,
+          "time": 1102,
+          "type": 0
+        },
+        {
+          "lane": 2,
+          "time": 7275,
+          "type": 0
+        },
+        {
+          "lane": 1,
+          "time": 7495,
+          "type": 0
+        },
+        {
+          "lane": 4,
+          "time": 7495,
+          "type": 0
+        },
+        {
+          "lane": 3,
+          "time": 7715,
+          "type": 0
+        },
+        {
+          "lane": 2,
+          "time": 7936,
+          "type": 0
+        },
+        {
+          "lane": 4,
+          "time": 7936,
+          "type": 0
+        },
+        {
+          "lane": 1,
+          "time": 8157,
+          "type": 0
+        },
+        {
+          "lane": 3,
+          "time": 8157,
+          "type": 0
+        },
+        {
+          "lane": 2,
+          "time": 8377,
+          "type": 0
+        },
+        {
+          "lane": 3,
+          "time": 8377,
+          "type": 0
+        },
+        {
+          "lane": 1,
+          "time": 8598,
+          "type": 0
+        },
+        {
+          "lane": 4,
+          "time": 8598,
+          "type": 0
+        },
+        {
+          "lane": 3,
+          "time": 9039,
+          "type": 0
+        },
+        {
+          "lane": 2,
+          "time": 9039,
+          "type": 0
+        },
+        {
+          "lane": 1,
+          "time": 9480,
+          "type": 0
+        },
+        {
+          "lane": 4,
+          "time": 9480,
+          "type": 0
+        },
+        {
+          "lane": 4,
+          "time": 9701,
+          "type": 0
+        },
+        {
+          "lane": 3,
+          "time": 9811,
+          "type": 0
+        },
+        {
+          "lane": 2,
+          "time": 9921,
+          "type": 0
+        },
+        {
+          "lane": 1,
+          "time": 10032,
+          "type": 0
+        },
+        {
+          "lane": 4,
+          "time": 10141,
+          "type": 0
+        },
+        {
+          "lane": 3,
+          "time": 10252,
+          "type": 0
+        },
+        {
+          "lane": 2,
+          "time": 10363,
+          "type": 0
+        },
+        {
+          "lane": 1,
+          "time": 10363,
+          "type": 0
+        },
+        {
+          "lane": 1,
+          "time": 10804,
+          "type": 0
+        },
+        {
+          "lane": 3,
+          "time": 11023,
+          "type": 0
+        },
+        {
+          "lane": 4,
+          "time": 11023,
+          "type": 0
+        },
+        {
+          "lane": 1,
+          "time": 11464,
+          "type": 0
+        },
+        {
+          "lane": 4,
+          "time": 11464,
+          "type": 0
+        },
+        {
+          "lane": 3,
+          "time": 11684,
+          "type": 0
+        },
+        {
+          "lane": 1,
+          "time": 11905,
+          "type": 0
+        },
+        {
+          "lane": 4,
+          "time": 11905,
+          "type": 0
+        },
+        {
+          "lane": 2,
+          "time": 12125,
+          "type": 0
+        },
+        {
+          "lane": 1,
+          "time": 12566,
+          "type": 0
+        },
+        {
+          "lane": 4,
+          "time": 12566,
+          "type": 0
+        },
+        {
+          "lane": 2,
+          "time": 12787,
+          "type": 0
+        },
+        {
+          "lane": 3,
+          "time": 13007,
+          "type": 0
+        },
+        {
+          "lane": 1,
+          "time": 13007,
+          "type": 0
+        },
+        {
+          "duration": 222,
+          "lane": 2,
+          "time": 13447,
+          "type": 0
+        },
+        {
+          "duration": 663,
+          "lane": 4,
+          "time": 13447,
+          "type": 0
+        },
+        {
+          "lane": 3,
+          "time": 13669,
+          "type": 0
+        },
+        {
+          "lane": 1,
+          "time": 13889,
+          "type": 0
+        },
+        {
+          "lane": 2,
+          "time": 13999,
+          "type": 0
+        },
+        {
+          "duration": 881,
+          "lane": 3,
+          "time": 14110,
+          "type": 0
+        },
+        {
+          "lane": 2,
+          "time": 14550,
+          "type": 0
+        },
+        {
+          "lane": 1,
+          "time": 14771,
+          "type": 0
+        },
+        {
+          "duration": 1763,
+          "lane": 2,
+          "time": 14991,
+          "type": 0
+        },
+        {
+          "lane": 1,
+          "time": 15212,
+          "type": 0
+        },
+        {
+          "lane": 3,
+          "time": 15433,
+          "type": 0
+        },
+        {
+          "lane": 4,
+          "time": 15873,
+          "type": 0
+        },
+        {
+          "lane": 1,
+          "time": 16314,
+          "type": 0
+        },
+        {
+          "lane": 4,
+          "time": 16754,
+          "type": 0
+        },
+        {
+          "duration": 221,
+          "lane": 1,
+          "time": 16754,
+          "type": 0
+        },
+        {
+          "duration": 221,
+          "lane": 2,
+          "time": 16975,
+          "type": 0
+        },
+        {
+          "duration": 441,
+          "lane": 3,
+          "time": 17196,
+          "type": 0
+        },
+        {
+          "lane": 1,
+          "time": 17637,
+          "type": 0
+        },
+        {
+          "lane": 4,
+          "time": 17637,
+          "type": 0
+        },
+        {
+          "duration": 440,
+          "lane": 2,
+          "time": 17637,
+          "type": 0
+        },
+        {
+          "duration": 221,
+          "lane": 1,
+          "time": 18077,
+          "type": 0
+        },
+        {
+          "duration": 221,
+          "lane": 2,
+          "time": 18298,
+          "type": 0
+        },
+        {
+          "duration": 220,
+          "lane": 3,
+          "time": 18519,
+          "type": 0
+        },
+        {
+          "duration": 220,
+          "lane": 2,
+          "time": 18739,
+          "type": 0
+        },
+        {
+          "duration": 221,
+          "lane": 3,
+          "time": 18959,
+          "type": 0
+        },
+        {
+          "duration": 1103,
+          "lane": 4,
+          "time": 19180,
+          "type": 0
+        },
+        {
+          "lane": 3,
+          "time": 18077,
+          "type": 0
+        },
+        {
+          "lane": 4,
+          "time": 18298,
+          "type": 0
+        },
+        {
+          "lane": 1,
+          "time": 18739,
+          "type": 0
+        },
+        {
+          "lane": 1,
+          "time": 19180,
+          "type": 0
+        },
+        {
+          "lane": 2,
+          "time": 19401,
+          "type": 0
+        },
+        {
+          "lane": 3,
+          "time": 19842,
+          "type": 0
+        },
+        {
+          "lane": 2,
+          "time": 20283,
+          "type": 0
+        },
+        {
+          "lane": 1,
+          "time": 20502,
+          "type": 0
+        },
+        {
+          "lane": 4,
+          "time": 20502,
+          "type": 0
+        },
+        {
+          "lane": 4,
+          "time": 20722,
+          "type": 0
+        },
+        {
+          "lane": 3,
+          "time": 20832,
+          "type": 0
+        },
+        {
+          "lane": 2,
+          "time": 20943,
+          "type": 0
+        },
+        {
+          "lane": 1,
+          "time": 21053,
+          "type": 0
+        },
+        {
+          "lane": 3,
+          "time": 21163,
+          "type": 0
+        },
+        {
+          "lane": 4,
+          "time": 21163,
+          "type": 0
+        },
+        {
+          "lane": 2,
+          "time": 21384,
+          "type": 0
+        },
+        {
+          "lane": 4,
+          "time": 21605,
+          "type": 0
+        },
+        {
+          "lane": 3,
+          "time": 21605,
+          "type": 0
+        },
+        {
+          "lane": 2,
+          "time": 21825,
+          "type": 0
+        },
+        {
+          "lane": 1,
+          "time": 22046,
+          "type": 0
+        },
+        {
+          "lane": 2,
+          "time": 22266,
+          "type": 0
+        },
+        {
+          "lane": 3,
+          "time": 22487,
+          "type": 0
+        },
+        {
+          "lane": 2,
+          "time": 22708,
+          "type": 0
+        },
+        {
+          "lane": 1,
+          "time": 22928,
+          "type": 0
+        },
+        {
+          "lane": 4,
+          "time": 22928,
+          "type": 0
+        },
+        {
+          "lane": 2,
+          "time": 23148,
+          "type": 0
+        },
+        {
+          "lane": 4,
+          "time": 23368,
+          "type": 0
+        },
+        {
+          "lane": 1,
+          "time": 23368,
+          "type": 0
+        },
+        {
+          "lane": 3,
+          "time": 23589,
+          "type": 0
+        },
+        {
+          "lane": 2,
+          "time": 23810,
+          "type": 0
+        },
+        {
+          "lane": 3,
+          "time": 23920,
+          "type": 0
+        },
+        {
+          "lane": 2,
+          "time": 24030,
+          "type": 0
+        },
+        {
+          "lane": 3,
+          "time": 24140,
+          "type": 0
+        },
+        {
+          "lane": 4,
+          "time": 24251,
+          "type": 0
+        },
+        {
+          "lane": 3,
+          "time": 24361,
+          "type": 0
+        },
+        {
+          "lane": 2,
+          "time": 24471,
+          "type": 0
+        },
+        {
+          "lane": 1,
+          "time": 24582,
+          "type": 0
+        },
+        {
+          "lane": 3,
+          "time": 24692,
+          "type": 0
+        },
+        {
+          "lane": 4,
+          "time": 24692,
+          "type": 0
+        },
+        {
+          "lane": 2,
+          "time": 24912,
+          "type": 0
+        },
+        {
+          "lane": 1,
+          "time": 25132,
+          "type": 0
+        },
+        {
+          "lane": 4,
+          "time": 25352,
+          "type": 0
+        },
+        {
+          "lane": 3,
+          "time": 25352,
+          "type": 0
+        },
+        {
+          "lane": 2,
+          "time": 25573,
+          "type": 0
+        },
+        {
+          "lane": 1,
+          "time": 25793,
+          "type": 0
+        },
+        {
+          "lane": 2,
+          "time": 26014,
+          "type": 0
+        },
+        {
+          "lane": 3,
+          "time": 26014,
+          "type": 0
+        },
+        {
+          "lane": 1,
+          "time": 26234,
+          "type": 0
+        },
+        {
+          "lane": 4,
+          "time": 26234,
+          "type": 0
+        },
+        {
+          "lane": 2,
+          "time": 26455,
+          "type": 0
+        },
+        {
+          "lane": 3,
+          "time": 26455,
+          "type": 0
+        },
+        {
+          "lane": 1,
+          "time": 26675,
+          "type": 0
+        },
+        {
+          "lane": 2,
+          "time": 26786,
+          "type": 0
+        },
+        {
+          "lane": 4,
+          "time": 26896,
+          "type": 0
+        },
+        {
+          "lane": 3,
+          "time": 26896,
+          "type": 0
+        },
+        {
+          "lane": 4,
+          "time": 27116,
+          "type": 0
+        },
+        {
+          "lane": 3,
+          "time": 27227,
+          "type": 0
+        },
+        {
+          "lane": 2,
+          "time": 27337,
+          "type": 0
+        },
+        {
+          "lane": 1,
+          "time": 27337,
+          "type": 0
+        },
+        {
+          "lane": 4,
+          "time": 27557,
+          "type": 0
+        },
+        {
+          "lane": 3,
+          "time": 27557,
+          "type": 0
+        },
+        {
+          "lane": 4,
+          "time": 27778,
+          "type": 0
+        },
+        {
+          "lane": 1,
+          "time": 27778,
+          "type": 0
+        },
+        {
+          "lane": 2,
+          "time": 27888,
+          "type": 0
+        },
+        {
+          "lane": 3,
+          "time": 27998,
+          "type": 0
+        },
+        {
+          "lane": 4,
+          "time": 28109,
+          "type": 0
+        },
+        {
+          "lane": 2,
+          "time": 28219,
+          "type": 0
+        },
+        {
+          "lane": 1,
+          "time": 28219,
+          "type": 0
+        },
+        {
+          "lane": 4,
+          "time": 28660,
+          "type": 0
+        },
+        {
+          "lane": 2,
+          "time": 28660,
+          "type": 0
+        },
+        {
+          "lane": 1,
+          "time": 28660,
+          "type": 0
+        },
+        {
+          "lane": 1,
+          "time": 28880,
+          "type": 0
+        },
+        {
+          "lane": 2,
+          "time": 28880,
+          "type": 0
+        },
+        {
+          "lane": 4,
+          "time": 28880,
+          "type": 0
+        },
+        {
+          "lane": 3,
+          "time": 29101,
+          "type": 0
+        },
+        {
+          "lane": 4,
+          "time": 29101,
+          "type": 0
+        },
+        {
+          "lane": 1,
+          "time": 29101,
+          "type": 0
+        },
+        {
+          "lane": 1,
+          "time": 29321,
+          "type": 0
+        },
+        {
+          "lane": 3,
+          "time": 29321,
+          "type": 0
+        },
+        {
+          "lane": 4,
+          "time": 29321,
+          "type": 0
+        },
+        {
+          "duration": 1323,
+          "lane": 4,
+          "time": 29541,
+          "type": 0
+        },
+        {
+          "duration": 1323,
+          "lane": 1,
+          "time": 29541,
+          "type": 0
+        },
+        {
+          "lane": 3,
+          "time": 29982,
+          "type": 0
+        },
+        {
+          "lane": 2,
+          "time": 30423,
+          "type": 0
+        },
+        {
+          "lane": 3,
+          "time": 30864,
+          "type": 0
+        },
+        {
+          "lane": 2,
+          "time": 31085,
+          "type": 0
+        },
+        {
+          "lane": 4,
+          "time": 31305,
+          "type": 0
+        },
+        {
+          "lane": 3,
+          "time": 31305,
+          "type": 0
+        },
+        {
+          "lane": 2,
+          "time": 31526,
+          "type": 0
+        },
+        {
+          "lane": 1,
+          "time": 31526,
+          "type": 0
+        },
+        {
+          "lane": 4,
+          "time": 31746,
+          "type": 0
+        },
+        {
+          "lane": 1,
+          "time": 31967,
+          "type": 0
+        },
+        {
+          "lane": 2,
+          "time": 32077,
+          "type": 0
+        },
+        {
+          "lane": 3,
+          "time": 32187,
+          "type": 0
+        },
+        {
+          "lane": 4,
+          "time": 32187,
+          "type": 0
+        },
+        {
+          "lane": 3,
+          "time": 32408,
+          "type": 0
+        },
+        {
+          "lane": 2,
+          "time": 32518,
+          "type": 0
+        },
+        {
+          "lane": 1,
+          "time": 32628,
+          "type": 0
+        },
+        {
+          "lane": 4,
+          "time": 32628,
+          "type": 0
+        },
+        {
+          "lane": 2,
+          "time": 32849,
+          "type": 0
+        },
+        {
+          "lane": 3,
+          "time": 32849,
+          "type": 0
+        },
+        {
+          "duration": 221,
+          "lane": 1,
+          "time": 33069,
+          "type": 0
+        },
+        {
+          "duration": 221,
+          "lane": 4,
+          "time": 33069,
+          "type": 0
+        },
+        {
+          "duration": 1101,
+          "lane": 3,
+          "time": 33290,
+          "type": 0
+        },
+        {
+          "duration": 1101,
+          "lane": 2,
+          "time": 33290,
+          "type": 0
+        },
+        {
+          "lane": 1,
+          "time": 33510,
+          "type": 0
+        },
+        {
+          "lane": 4,
+          "time": 33951,
+          "type": 0
+        },
+        {
+          "lane": 1,
+          "time": 34391,
+          "type": 0
+        },
+        {
+          "lane": 4,
+          "time": 34832,
+          "type": 0
+        },
+        {
+          "lane": 3,
+          "time": 34942,
+          "type": 0
+        },
+        {
+          "lane": 2,
+          "time": 35053,
+          "type": 0
+        },
+        {
+          "lane": 1,
+          "time": 35163,
+          "type": 0
+        },
+        {
+          "duration": 1764,
+          "lane": 4,
+          "time": 35273,
+          "type": 0
+        },
+        {
+          "lane": 1,
+          "time": 35494,
+          "type": 0
+        },
+        {
+          "lane": 2,
+          "time": 35714,
+          "type": 0
+        },
+        {
+          "lane": 3,
+          "time": 35935,
+          "type": 0
+        },
+        {
+          "lane": 2,
+          "time": 36155,
+          "type": 0
+        },
+        {
+          "lane": 1,
+          "time": 36376,
+          "type": 0
+        },
+        {
+          "lane": 2,
+          "time": 36596,
+          "type": 0
+        },
+        {
+          "lane": 3,
+          "time": 36817,
+          "type": 0
+        },
+        {
+          "duration": 1763,
+          "lane": 1,
+          "time": 37037,
+          "type": 0
+        },
+        {
+          "lane": 4,
+          "time": 37258,
+          "type": 0
+        },
+        {
+          "lane": 3,
+          "time": 37478,
+          "type": 0
+        },
+        {
+          "lane": 2,
+          "time": 37699,
+          "type": 0
+        },
+        {
+          "lane": 3,
+          "time": 37919,
+          "type": 0
+        },
+        {
+          "lane": 4,
+          "time": 38140,
+          "type": 0
+        },
+        {
+          "lane": 3,
+          "time": 38360,
+          "type": 0
+        },
+        {
+          "lane": 2,
+          "time": 38580,
+          "type": 0
+        },
+        {
+          "lane": 4,
+          "time": 38800,
+          "type": 0
+        },
+        {
+          "lane": 3,
+          "time": 39021,
+          "type": 0
+        },
+        {
+          "lane": 1,
+          "time": 39241,
+          "type": 0
+        },
+        {
+          "lane": 2,
+          "time": 39462,
+          "type": 0
+        },
+        {
+          "lane": 4,
+          "time": 39682,
+          "type": 0
+        },
+        {
+          "lane": 3,
+          "time": 39682,
+          "type": 0
+        },
+        {
+          "lane": 3,
+          "time": 39903,
+          "type": 0
+        },
+        {
+          "lane": 2,
+          "time": 40123,
+          "type": 0
+        },
+        {
+          "lane": 1,
+          "time": 40123,
+          "type": 0
+        },
+        {
+          "lane": 2,
+          "time": 40344,
+          "type": 0
+        },
+        {
+          "lane": 4,
+          "time": 40564,
+          "type": 0
+        },
+        {
+          "lane": 1,
+          "time": 40564,
+          "type": 0
+        },
+        {
+          "lane": 2,
+          "time": 40785,
+          "type": 0
+        },
+        {
+          "lane": 3,
+          "time": 40895,
+          "type": 0
+        },
+        {
+          "lane": 4,
+          "time": 41005,
+          "type": 0
+        },
+        {
+          "lane": 1,
+          "time": 41005,
+          "type": 0
+        },
+        {
+          "lane": 3,
+          "time": 41226,
+          "type": 0
+        },
+        {
+          "lane": 2,
+          "time": 41336,
+          "type": 0
+        },
+        {
+          "lane": 1,
+          "time": 41446,
+          "type": 0
+        },
+        {
+          "lane": 4,
+          "time": 41446,
+          "type": 0
+        },
+        {
+          "duration": 661,
+          "lane": 2,
+          "time": 41667,
+          "type": 0
+        },
+        {
+          "duration": 661,
+          "lane": 3,
+          "time": 41667,
+          "type": 0
+        },
+        {
+          "duration": 441,
+          "lane": 4,
+          "time": 41887,
+          "type": 0
+        },
+        {
+          "duration": 441,
+          "lane": 1,
+          "time": 41887,
+          "type": 0
+        },
+        {
+          "lane": 1,
+          "time": 42769,
+          "type": 0
+        },
+        {
+          "lane": 4,
+          "time": 42769,
+          "type": 0
+        },
+        {
+          "lane": 2,
+          "time": 43209,
+          "type": 4
+        },
+        {
+          "lane": 3,
+          "time": 43430,
+          "type": 4
+        },
+        {
+          "lane": 1,
+          "time": 43871,
+          "type": 0
+        },
+        {
+          "lane": 4,
+          "time": 43871,
+          "type": 0
+        },
+        {
+          "lane": 3,
+          "time": 42990,
+          "type": 0
+        },
+        {
+          "lane": 2,
+          "time": 44311,
+          "type": 4
+        },
+        {
+          "lane": 3,
+          "time": 44311,
+          "type": 4
+        },
+        {
+          "lane": 1,
+          "time": 44752,
+          "type": 0
+        },
+        {
+          "lane": 4,
+          "time": 44752,
+          "type": 0
+        },
+        {
+          "lane": 2,
+          "time": 44973,
+          "type": 0
+        },
+        {
+          "lane": 3,
+          "time": 45193,
+          "type": 0
+        },
+        {
+          "duration": 110,
+          "lane": 1,
+          "time": 45414,
+          "type": 0
+        },
+        {
+          "duration": 110,
+          "lane": 4,
+          "time": 45414,
+          "type": 0
+        },
+        {
+          "lane": 1,
+          "time": 46296,
+          "type": 0
+        },
+        {
+          "lane": 4,
+          "time": 46296,
+          "type": 0
+        },
+        {
+          "lane": 2,
+          "time": 46516,
+          "type": 0
+        },
+        {
+          "lane": 3,
+          "time": 46516,
+          "type": 0
+        },
+        {
+          "lane": 1,
+          "time": 46737,
+          "type": 0
+        },
+        {
+          "lane": 4,
+          "time": 46737,
+          "type": 0
+        },
+        {
+          "lane": 3,
+          "time": 46957,
+          "type": 0
+        },
+        {
+          "duration": 1323,
+          "lane": 2,
+          "time": 47178,
+          "type": 0
+        },
+        {
+          "duration": 1323,
+          "lane": 1,
+          "time": 47178,
+          "type": 0
+        },
+        {
+          "lane": 3,
+          "time": 47619,
+          "type": 0
+        },
+        {
+          "lane": 4,
+          "time": 48060,
+          "type": 0
+        },
+        {
+          "lane": 3,
+          "time": 48501,
+          "type": 0
+        },
+        {
+          "lane": 4,
+          "time": 48722,
+          "type": 0
+        },
+        {
+          "lane": 1,
+          "time": 48942,
+          "type": 0
+        },
+        {
+          "lane": 2,
+          "time": 49053,
+          "type": 0
+        },
+        {
+          "lane": 3,
+          "time": 49163,
+          "type": 0
+        },
+        {
+          "lane": 4,
+          "time": 49273,
+          "type": 0
+        },
+        {
+          "lane": 2,
+          "time": 49383,
+          "type": 0
+        },
+        {
+          "lane": 1,
+          "time": 49383,
+          "type": 0
+        },
+        {
+          "lane": 3,
+          "time": 49604,
+          "type": 0
+        },
+        {
+          "lane": 2,
+          "time": 49824,
+          "type": 0
+        },
+        {
+          "lane": 3,
+          "time": 50045,
+          "type": 0
+        },
+        {
+          "duration": 2204,
+          "lane": 4,
+          "time": 50265,
+          "type": 0
+        },
+        {
+          "duration": 1983,
+          "lane": 1,
+          "time": 50486,
+          "type": 0
+        },
+        {
+          "duration": 441,
+          "lane": 3,
+          "time": 50706,
+          "type": 0
+        },
+        {
+          "duration": 220,
+          "lane": 2,
+          "time": 50927,
+          "type": 0
+        },
+        {
+          "lane": 3,
+          "time": 51588,
+          "type": 0
+        },
+        {
+          "lane": 2,
+          "time": 52029,
+          "type": 0
+        },
+        {
+          "lane": 3,
+          "time": 52469,
+          "type": 0
+        },
+        {
+          "lane": 2,
+          "time": 52689,
+          "type": 0
+        },
+        {
+          "lane": 3,
+          "time": 52800,
+          "type": 0
+        },
+        {
+          "lane": 4,
+          "time": 52910,
+          "type": 0
+        },
+        {
+          "duration": 882,
+          "lane": 1,
+          "time": 52910,
+          "type": 0
+        },
+        {
+          "duration": 882,
+          "lane": 2,
+          "time": 53792,
+          "type": 0
+        },
+        {
+          "duration": 882,
+          "lane": 3,
+          "time": 54674,
+          "type": 0
+        },
+        {
+          "lane": 3,
+          "time": 53130,
+          "type": 0
+        },
+        {
+          "lane": 4,
+          "time": 53351,
+          "type": 0
+        },
+        {
+          "lane": 3,
+          "time": 53571,
+          "type": 0
+        },
+        {
+          "lane": 1,
+          "time": 54012,
+          "type": 0
+        },
+        {
+          "lane": 3,
+          "time": 54233,
+          "type": 0
+        },
+        {
+          "lane": 1,
+          "time": 54453,
+          "type": 0
+        },
+        {
+          "lane": 2,
+          "time": 54894,
+          "type": 0
+        },
+        {
+          "lane": 4,
+          "time": 55115,
+          "type": 0
+        },
+        {
+          "lane": 2,
+          "time": 55335,
+          "type": 0
+        },
+        {
+          "duration": 882,
+          "lane": 4,
+          "time": 55556,
+          "type": 0
+        },
+        {
+          "lane": 1,
+          "time": 55776,
+          "type": 0
+        },
+        {
+          "lane": 2,
+          "time": 55997,
+          "type": 0
+        },
+        {
+          "lane": 3,
+          "time": 56217,
+          "type": 0
+        },
+        {
+          "duration": 880,
+          "lane": 1,
+          "time": 56438,
+          "type": 3
+        },
+        {
+          "duration": 882,
+          "lane": 2,
+          "time": 57318,
+          "type": 3
+        },
+        {
+          "lane": 2,
+          "time": 56438,
+          "type": 0
+        },
+        {
+          "lane": 3,
+          "time": 56658,
+          "type": 0
+        },
+        {
+          "lane": 4,
+          "time": 56877,
+          "type": 0
+        },
+        {
+          "lane": 3,
+          "time": 57098,
+          "type": 0
+        },
+        {
+          "lane": 4,
+          "time": 57318,
+          "type": 0
+        },
+        {
+          "lane": 3,
+          "time": 57539,
+          "type": 0
+        },
+        {
+          "lane": 1,
+          "time": 57759,
+          "type": 0
+        },
+        {
+          "lane": 4,
+          "time": 57980,
+          "type": 0
+        },
+        {
+          "duration": 882,
+          "lane": 3,
+          "time": 58200,
+          "type": 3
+        },
+        {
+          "lane": 1,
+          "time": 58200,
+          "type": 0
+        },
+        {
+          "lane": 2,
+          "time": 58421,
+          "type": 0
+        },
+        {
+          "lane": 4,
+          "time": 58641,
+          "type": 0
+        },
+        {
+          "lane": 2,
+          "time": 58862,
+          "type": 0
+        },
+        {
+          "duration": 882,
+          "lane": 4,
+          "time": 59082,
+          "type": 3
+        },
+        {
+          "lane": 1,
+          "time": 59082,
+          "type": 0
+        },
+        {
+          "lane": 2,
+          "time": 59303,
+          "type": 0
+        },
+        {
+          "lane": 3,
+          "time": 59413,
+          "type": 0
+        },
+        {
+          "lane": 1,
+          "time": 59523,
+          "type": 0
+        },
+        {
+          "lane": 2,
+          "time": 59633,
+          "type": 0
+        },
+        {
+          "lane": 3,
+          "time": 59744,
+          "type": 0
+        },
+        {
+          "lane": 2,
+          "time": 59854,
+          "type": 0
+        },
+        {
+          "lane": 1,
+          "time": 59964,
+          "type": 0
+        },
+        {
+          "lane": 2,
+          "time": 60184,
+          "type": 0
+        },
+        {
+          "lane": 3,
+          "time": 60184,
+          "type": 0
+        },
+        {
+          "lane": 1,
+          "time": 60405,
+          "type": 0
+        },
+        {
+          "lane": 4,
+          "time": 60625,
+          "type": 0
+        },
+        {
+          "lane": 2,
+          "time": 60846,
+          "type": 0
+        },
+        {
+          "lane": 1,
+          "time": 60846,
+          "type": 0
+        },
+        {
+          "lane": 2,
+          "time": 61066,
+          "type": 0
+        },
+        {
+          "lane": 1,
+          "time": 61066,
+          "type": 0
+        },
+        {
+          "lane": 2,
+          "time": 61288,
+          "type": 0
+        },
+        {
+          "lane": 3,
+          "time": 61288,
+          "type": 0
+        },
+        {
+          "duration": 1323,
+          "lane": 4,
+          "time": 61288,
+          "type": 0
+        },
+        {
+          "lane": 1,
+          "time": 61729,
+          "type": 0
+        },
+        {
+          "lane": 2,
+          "time": 62170,
+          "type": 0
+        },
+        {
+          "lane": 3,
+          "time": 62611,
+          "type": 0
+        },
+        {
+          "lane": 1,
+          "time": 62831,
+          "type": 0
+        },
+        {
+          "lane": 2,
+          "time": 62831,
+          "type": 0
+        },
+        {
+          "lane": 4,
+          "time": 63052,
+          "type": 0
+        },
+        {
+          "lane": 3,
+          "time": 63162,
+          "type": 0
+        },
+        {
+          "lane": 2,
+          "time": 63272,
+          "type": 0
+        },
+        {
+          "lane": 1,
+          "time": 63383,
+          "type": 0
+        },
+        {
+          "lane": 4,
+          "time": 63493,
+          "type": 0
+        },
+        {
+          "lane": 3,
+          "time": 63493,
+          "type": 0
+        },
+        {
+          "lane": 2,
+          "time": 63713,
+          "type": 0
+        },
+        {
+          "lane": 1,
+          "time": 63934,
+          "type": 0
+        },
+        {
+          "lane": 2,
+          "time": 64154,
+          "type": 0
+        },
+        {
+          "duration": 882,
+          "lane": 4,
+          "time": 64374,
+          "type": 0
+        },
+        {
+          "duration": 661,
+          "lane": 3,
+          "time": 64595,
+          "type": 0
+        },
+        {
+          "duration": 441,
+          "lane": 2,
+          "time": 64815,
+          "type": 0
+        },
+        {
+          "duration": 220,
+          "lane": 1,
+          "time": 65036,
+          "type": 0
+        },
+        {
+          "lane": 2,
+          "time": 65697,
+          "type": 0
+        },
+        {
+          "lane": 3,
+          "time": 65697,
+          "type": 0
+        },
+        {
+          "lane": 1,
+          "time": 65917,
+          "type": 0
+        },
+        {
+          "lane": 4,
+          "time": 65917,
+          "type": 0
+        },
+        {
+          "lane": 3,
+          "time": 66138,
+          "type": 0
+        },
+        {
+          "lane": 2,
+          "time": 66138,
+          "type": 0
+        },
+        {
+          "lane": 4,
+          "time": 66248,
+          "type": 0
+        },
+        {
+          "lane": 3,
+          "time": 66358,
+          "type": 0
+        },
+        {
+          "lane": 2,
+          "time": 66468,
+          "type": 0
+        },
+        {
+          "lane": 1,
+          "time": 66579,
+          "type": 0
+        },
+        {
+          "lane": 4,
+          "time": 66579,
+          "type": 0
+        },
+        {
+          "lane": 3,
+          "time": 66689,
+          "type": 0
+        },
+        {
+          "lane": 2,
+          "time": 66799,
+          "type": 0
+        },
+        {
+          "lane": 1,
+          "time": 66909,
+          "type": 0
+        },
+        {
+          "lane": 3,
+          "time": 67020,
+          "type": 0
+        },
+        {
+          "duration": 2645,
+          "lane": 4,
+          "time": 67020,
+          "type": 0
+        },
+        {
+          "duration": 221,
+          "lane": 3,
+          "time": 67460,
+          "type": 0
+        },
+        {
+          "duration": 661,
+          "lane": 2,
+          "time": 67681,
+          "type": 0
+        },
+        {
+          "duration": 221,
+          "lane": 1,
+          "time": 68342,
+          "type": 0
+        },
+        {
+          "duration": 221,
+          "lane": 3,
+          "time": 68342,
+          "type": 0
+        },
+        {
+          "duration": 440,
+          "lane": 2,
+          "time": 68563,
+          "type": 0
+        },
+        {
+          "duration": 441,
+          "lane": 1,
+          "time": 69003,
+          "type": 0
+        },
+        {
+          "lane": 3,
+          "time": 69444,
+          "type": 0
+        },
+        {
+          "lane": 2,
+          "time": 69665,
+          "type": 0
+        },
+        {
+          "lane": 3,
+          "time": 69775,
+          "type": 0
+        },
+        {
+          "lane": 2,
+          "time": 69885,
+          "type": 0
+        },
+        {
+          "lane": 3,
+          "time": 69995,
+          "type": 0
+        },
+        {
+          "lane": 1,
+          "time": 70106,
+          "type": 0
+        },
+        {
+          "lane": 2,
+          "time": 70216,
+          "type": 0
+        },
+        {
+          "lane": 3,
+          "time": 70326,
+          "type": 0
+        },
+        {
+          "lane": 4,
+          "time": 70436,
+          "type": 0
+        },
+        {
+          "lane": 2,
+          "time": 70546,
+          "type": 0
+        },
+        {
+          "lane": 1,
+          "time": 70546,
+          "type": 0
+        },
+        {
+          "lane": 3,
+          "time": 70767,
+          "type": 0
+        },
+        {
+          "lane": 4,
+          "time": 70877,
+          "type": 0
+        },
+        {
+          "lane": 2,
+          "time": 70987,
+          "type": 0
+        },
+        {
+          "lane": 1,
+          "time": 70987,
+          "type": 0
+        },
+        {
+          "lane": 4,
+          "time": 71208,
+          "type": 0
+        },
+        {
+          "lane": 3,
+          "time": 71318,
+          "type": 0
+        },
+        {
+          "lane": 2,
+          "time": 71428,
+          "type": 0
+        },
+        {
+          "lane": 1,
+          "time": 71428,
+          "type": 0
+        },
+        {
+          "lane": 2,
+          "time": 71649,
+          "type": 0
+        },
+        {
+          "lane": 3,
+          "time": 71759,
+          "type": 0
+        },
+        {
+          "lane": 4,
+          "time": 71869,
+          "type": 0
+        },
+        {
+          "lane": 3,
+          "time": 71979,
+          "type": 0
+        },
+        {
+          "lane": 2,
+          "time": 72089,
+          "type": 0
+        },
+        {
+          "lane": 1,
+          "time": 72200,
+          "type": 0
+        },
+        {
+          "lane": 4,
+          "time": 72310,
+          "type": 0
+        },
+        {
+          "lane": 3,
+          "time": 72365,
+          "type": 0
+        },
+        {
+          "lane": 2,
+          "time": 72420,
+          "type": 0
+        },
+        {
+          "lane": 3,
+          "time": 72530,
+          "type": 0
+        },
+        {
+          "lane": 2,
+          "time": 72640,
+          "type": 0
+        },
+        {
+          "lane": 1,
+          "time": 72751,
+          "type": 0
+        },
+        {
+          "lane": 2,
+          "time": 72861,
+          "type": 0
+        },
+        {
+          "lane": 3,
+          "time": 72971,
+          "type": 0
+        },
+        {
+          "lane": 4,
+          "time": 73081,
+          "type": 0
+        },
+        {
+          "lane": 2,
+          "time": 73191,
+          "type": 0
+        },
+        {
+          "lane": 3,
+          "time": 73302,
+          "type": 0
+        },
+        {
+          "lane": 2,
+          "time": 73412,
+          "type": 0
+        },
+        {
+          "lane": 3,
+          "time": 73522,
+          "type": 0
+        },
+        {
+          "lane": 1,
+          "time": 73632,
+          "type": 0
+        },
+        {
+          "lane": 2,
+          "time": 73743,
+          "type": 0
+        },
+        {
+          "lane": 3,
+          "time": 73853,
+          "type": 0
+        },
+        {
+          "lane": 4,
+          "time": 73963,
+          "type": 0
+        },
+        {
+          "duration": 441,
+          "lane": 1,
+          "time": 74073,
+          "type": 0
+        },
+        {
+          "duration": 443,
+          "lane": 2,
+          "time": 74514,
+          "type": 0
+        },
+        {
+          "duration": 443,
+          "lane": 3,
+          "time": 74514,
+          "type": 0
+        },
+        {
+          "duration": 882,
+          "lane": 4,
+          "time": 74957,
+          "type": 0
+        },
+        {
+          "duration": 441,
+          "lane": 3,
+          "time": 75398,
+          "type": 0
+        },
+        {
+          "lane": 1,
+          "time": 75839,
+          "type": 0
+        },
+        {
+          "duration": 440,
+          "lane": 2,
+          "time": 75839,
+          "type": 0
+        },
+        {
+          "duration": 1323,
+          "lane": 3,
+          "time": 76279,
+          "type": 0
+        },
+        {
+          "duration": 882,
+          "lane": 4,
+          "time": 76720,
+          "type": 0
+        },
+        {
+          "duration": 3086,
+          "lane": 2,
+          "time": 77161,
+          "type": 0
+        },
+        {
+          "duration": 2645,
+          "lane": 1,
+          "time": 78043,
+          "type": 0
+        },
+        {
+          "duration": 881,
+          "lane": 4,
+          "time": 78484,
+          "type": 0
+        },
+        {
+          "duration": 881,
+          "lane": 3,
+          "time": 78925,
+          "type": 0
+        },
+        {
+          "duration": 882,
+          "lane": 4,
+          "time": 79806,
+          "type": 0
+        },
+        {
+          "duration": 1323,
+          "lane": 3,
+          "time": 80247,
+          "type": 0
+        },
+        {
+          "duration": 882,
+          "lane": 2,
+          "time": 80688,
+          "type": 0
+        },
+        {
+          "duration": 882,
+          "lane": 4,
+          "time": 81129,
+          "type": 0
+        },
+        {
+          "duration": 882,
+          "lane": 1,
+          "time": 81129,
+          "type": 0
+        },
+        {
+          "duration": 440,
+          "lane": 2,
+          "time": 82011,
+          "type": 0
+        },
+        {
+          "duration": 440,
+          "lane": 3,
+          "time": 82011,
+          "type": 0
+        },
+        {
+          "duration": 882,
+          "lane": 4,
+          "time": 82451,
+          "type": 0
+        },
+        {
+          "duration": 882,
+          "lane": 1,
+          "time": 82451,
+          "type": 0
+        },
+        {
+          "lane": 2,
+          "time": 82892,
+          "type": 0
+        },
+        {
+          "lane": 3,
+          "time": 82892,
+          "type": 0
+        },
+        {
+          "duration": 441,
+          "lane": 2,
+          "time": 83333,
+          "type": 0
+        },
+        {
+          "duration": 441,
+          "lane": 3,
+          "time": 83774,
+          "type": 0
+        },
+        {
+          "duration": 441,
+          "lane": 4,
+          "time": 83774,
+          "type": 0
+        },
+        {
+          "duration": 441,
+          "lane": 2,
+          "time": 84215,
+          "type": 0
+        },
+        {
+          "duration": 2204,
+          "lane": 1,
+          "time": 84215,
+          "type": 0
+        },
+        {
+          "lane": 4,
+          "time": 85096,
+          "type": 0
+        },
+        {
+          "lane": 3,
+          "time": 85537,
+          "type": 0
+        },
+        {
+          "lane": 2,
+          "time": 85978,
+          "type": 0
+        },
+        {
+          "duration": 1323,
+          "lane": 4,
+          "time": 86419,
+          "type": 0
+        },
+        {
+          "lane": 3,
+          "time": 86419,
+          "type": 0
+        },
+        {
+          "lane": 2,
+          "time": 86639,
+          "type": 0
+        },
+        {
+          "lane": 1,
+          "time": 86860,
+          "type": 0
+        },
+        {
+          "lane": 2,
+          "time": 87080,
+          "type": 0
+        },
+        {
+          "lane": 3,
+          "time": 87301,
+          "type": 0
+        },
+        {
+          "lane": 2,
+          "time": 87411,
+          "type": 0
+        },
+        {
+          "lane": 1,
+          "time": 87521,
+          "type": 0
+        },
+        {
+          "lane": 2,
+          "time": 87631,
+          "type": 0
+        },
+        {
+          "lane": 3,
+          "time": 87742,
+          "type": 0
+        },
+        {
+          "lane": 2,
+          "time": 87962,
+          "type": 0
+        },
+        {
+          "lane": 3,
+          "time": 88072,
+          "type": 0
+        },
+        {
+          "duration": 1766,
+          "lane": 4,
+          "time": 88182,
+          "type": 0
+        },
+        {
+          "duration": 1764,
+          "lane": 3,
+          "time": 88625,
+          "type": 0
+        },
+        {
+          "duration": 1764,
+          "lane": 2,
+          "time": 89066,
+          "type": 0
+        },
+        {
+          "duration": 1763,
+          "lane": 1,
+          "time": 89507,
+          "type": 0
+        },
+        {
+          "duration": 441,
+          "lane": 4,
+          "time": 90389,
+          "type": 0
+        },
+        {
+          "duration": 440,
+          "lane": 3,
+          "time": 90830,
+          "type": 0
+        },
+        {
+          "duration": 882,
+          "lane": 2,
+          "time": 91270,
+          "type": 0
+        },
+        {
+          "duration": 1323,
+          "lane": 4,
+          "time": 91270,
+          "type": 0
+        },
+        {
+          "duration": 441,
+          "lane": 1,
+          "time": 92152,
+          "type": 0
+        },
+        {
+          "duration": 882,
+          "lane": 2,
+          "time": 92593,
+          "type": 0
+        },
+        {
+          "duration": 441,
+          "lane": 3,
+          "time": 93034,
+          "type": 0
+        },
+        {
+          "duration": 881,
+          "lane": 4,
+          "time": 93475,
+          "type": 0
+        },
+        {
+          "duration": 441,
+          "lane": 1,
+          "time": 93475,
+          "type": 0
+        },
+        {
+          "duration": 440,
+          "lane": 2,
+          "time": 93916,
+          "type": 0
+        },
+        {
+          "duration": 441,
+          "lane": 3,
+          "time": 94356,
+          "type": 0
+        },
+        {
+          "duration": 441,
+          "lane": 1,
+          "time": 94356,
+          "type": 0
+        },
+        {
+          "duration": 441,
+          "lane": 2,
+          "time": 94797,
+          "type": 0
+        },
+        {
+          "duration": 441,
+          "lane": 4,
+          "time": 94797,
+          "type": 0
+        },
+        {
+          "duration": 2645,
+          "lane": 3,
+          "time": 95238,
+          "type": 0
+        },
+        {
+          "duration": 882,
+          "lane": 2,
+          "time": 96120,
+          "type": 0
+        },
+        {
+          "duration": 1763,
+          "lane": 4,
+          "time": 95679,
+          "type": 0
+        },
+        {
+          "duration": 441,
+          "lane": 1,
+          "time": 96561,
+          "type": 0
+        },
+        {
+          "duration": 441,
+          "lane": 2,
+          "time": 97442,
+          "type": 0
+        },
+        {
+          "duration": 441,
+          "lane": 1,
+          "time": 97883,
+          "type": 0
+        },
+        {
+          "duration": 441,
+          "lane": 4,
+          "time": 97883,
+          "type": 0
+        },
+        {
+          "duration": 1763,
+          "lane": 2,
+          "time": 98324,
+          "type": 0
+        },
+        {
+          "duration": 661,
+          "lane": 1,
+          "time": 100308,
+          "type": 0
+        },
+        {
+          "duration": 661,
+          "lane": 4,
+          "time": 100308,
+          "type": 0
+        },
+        {
+          "lane": 2,
+          "time": 100749,
+          "type": 0
+        },
+        {
+          "lane": 3,
+          "time": 100859,
+          "type": 0
+        },
+        {
+          "lane": 2,
+          "time": 100969,
+          "type": 0
+        },
+        {
+          "lane": 3,
+          "time": 101190,
+          "type": 0
+        },
+        {
+          "lane": 2,
+          "time": 101300,
+          "type": 0
+        },
+        {
+          "lane": 4,
+          "time": 101410,
+          "type": 0
+        },
+        {
+          "lane": 3,
+          "time": 101520,
+          "type": 0
+        },
+        {
+          "lane": 2,
+          "time": 101630,
+          "type": 0
+        },
+        {
+          "lane": 1,
+          "time": 101631,
+          "type": 0
+        },
+        {
+          "duration": 1763,
+          "lane": 3,
+          "time": 98324,
+          "type": 0
+        },
+        {
+          "lane": 1,
+          "time": 104057,
+          "type": 0
+        },
+        {
+          "lane": 4,
+          "time": 104057,
+          "type": 0
+        },
+        {
+          "lane": 2,
+          "time": 104498,
+          "type": 0
+        },
+        {
+          "lane": 3,
+          "time": 104278,
+          "type": 0
+        },
+        {
+          "lane": 1,
+          "time": 104719,
+          "type": 0
+        },
+        {
+          "lane": 4,
+          "time": 104938,
+          "type": 0
+        },
+        {
+          "lane": 2,
+          "time": 104938,
+          "type": 0
+        },
+        {
+          "lane": 3,
+          "time": 105159,
+          "type": 0
+        },
+        {
+          "lane": 2,
+          "time": 105379,
+          "type": 0
+        },
+        {
+          "lane": 1,
+          "time": 105600,
+          "type": 0
+        },
+        {
+          "lane": 4,
+          "time": 105820,
+          "type": 0
+        },
+        {
+          "lane": 3,
+          "time": 105820,
+          "type": 0
+        },
+        {
+          "lane": 2,
+          "time": 106041,
+          "type": 0
+        },
+        {
+          "lane": 1,
+          "time": 106261,
+          "type": 0
+        },
+        {
+          "lane": 4,
+          "time": 106482,
+          "type": 0
+        },
+        {
+          "lane": 3,
+          "time": 106702,
+          "type": 0
+        },
+        {
+          "lane": 1,
+          "time": 106702,
+          "type": 0
+        },
+        {
+          "lane": 2,
+          "time": 106923,
+          "type": 0
+        },
+        {
+          "lane": 3,
+          "time": 107143,
+          "type": 0
+        },
+        {
+          "lane": 4,
+          "time": 107364,
+          "type": 0
+        },
+        {
+          "lane": 1,
+          "time": 107583,
+          "type": 0
+        },
+        {
+          "lane": 2,
+          "time": 107583,
+          "type": 0
+        },
+        {
+          "lane": 3,
+          "time": 107583,
+          "type": 0
+        },
+        {
+          "lane": 4,
+          "time": 107804,
+          "type": 0
+        },
+        {
+          "lane": 3,
+          "time": 108025,
+          "type": 0
+        },
+        {
+          "lane": 2,
+          "time": 108245,
+          "type": 0
+        },
+        {
+          "lane": 1,
+          "time": 108466,
+          "type": 0
+        },
+        {
+          "lane": 4,
+          "time": 108466,
+          "type": 0
+        },
+        {
+          "lane": 2,
+          "time": 108686,
+          "type": 0
+        },
+        {
+          "lane": 3,
+          "time": 108907,
+          "type": 0
+        },
+        {
+          "duration": 441,
+          "lane": 1,
+          "time": 109127,
+          "type": 0
+        },
+        {
+          "duration": 441,
+          "lane": 4,
+          "time": 109127,
+          "type": 0
+        },
+        {
+          "duration": 221,
+          "lane": 3,
+          "time": 109568,
+          "type": 0
+        },
+        {
+          "duration": 221,
+          "lane": 2,
+          "time": 109568,
+          "type": 0
+        },
+        {
+          "duration": 220,
+          "lane": 4,
+          "time": 109789,
+          "type": 0
+        },
+        {
+          "duration": 220,
+          "lane": 1,
+          "time": 109789,
+          "type": 0
+        },
+        {
+          "duration": 220,
+          "lane": 2,
+          "time": 110009,
+          "type": 0
+        },
+        {
+          "duration": 220,
+          "lane": 3,
+          "time": 110009,
+          "type": 0
+        },
+        {
+          "lane": 4,
+          "time": 110229,
+          "type": 0
+        },
+        {
+          "lane": 1,
+          "time": 110229,
+          "type": 0
+        },
+        {
+          "lane": 3,
+          "time": 110449,
+          "type": 0
+        },
+        {
+          "lane": 2,
+          "time": 110559,
+          "type": 0
+        },
+        {
+          "lane": 1,
+          "time": 110670,
+          "type": 0
+        },
+        {
+          "lane": 4,
+          "time": 110670,
+          "type": 0
+        },
+        {
+          "lane": 3,
+          "time": 110780,
+          "type": 0
+        },
+        {
+          "lane": 2,
+          "time": 110890,
+          "type": 0
+        },
+        {
+          "lane": 1,
+          "time": 111000,
+          "type": 0
+        },
+        {
+          "lane": 3,
+          "time": 111111,
+          "type": 0
+        },
+        {
+          "lane": 4,
+          "time": 111111,
+          "type": 0
+        },
+        {
+          "lane": 2,
+          "time": 111331,
+          "type": 0
+        },
+        {
+          "lane": 1,
+          "time": 111331,
+          "type": 0
+        },
+        {
+          "lane": 3,
+          "time": 111552,
+          "type": 0
+        },
+        {
+          "lane": 4,
+          "time": 111772,
+          "type": 0
+        },
+        {
+          "lane": 2,
+          "time": 111993,
+          "type": 0
+        },
+        {
+          "lane": 1,
+          "time": 111993,
+          "type": 0
+        },
+        {
+          "lane": 3,
+          "time": 112213,
+          "type": 0
+        },
+        {
+          "lane": 4,
+          "time": 112213,
+          "type": 0
+        },
+        {
+          "lane": 2,
+          "time": 112434,
+          "type": 0
+        },
+        {
+          "lane": 1,
+          "time": 112654,
+          "type": 0
+        },
+        {
+          "lane": 4,
+          "time": 112875,
+          "type": 0
+        },
+        {
+          "lane": 2,
+          "time": 112875,
+          "type": 0
+        },
+        {
+          "lane": 3,
+          "time": 113094,
+          "type": 0
+        },
+        {
+          "lane": 2,
+          "time": 113315,
+          "type": 0
+        },
+        {
+          "lane": 1,
+          "time": 113535,
+          "type": 0
+        },
+        {
+          "lane": 2,
+          "time": 113756,
+          "type": 0
+        },
+        {
+          "lane": 3,
+          "time": 113756,
+          "type": 0
+        },
+        {
+          "lane": 4,
+          "time": 113976,
+          "type": 0
+        },
+        {
+          "lane": 3,
+          "time": 114197,
+          "type": 0
+        },
+        {
+          "lane": 2,
+          "time": 114417,
+          "type": 0
+        },
+        {
+          "duration": 1103,
+          "lane": 1,
+          "time": 114417,
+          "type": 0
+        },
+        {
+          "duration": 1103,
+          "lane": 4,
+          "time": 114417,
+          "type": 0
+        },
+        {
+          "lane": 3,
+          "time": 114858,
+          "type": 0
+        },
+        {
+          "lane": 2,
+          "time": 115079,
+          "type": 0
+        },
+        {
+          "lane": 3,
+          "time": 115299,
+          "type": 0
+        },
+        {
+          "lane": 2,
+          "time": 115520,
+          "type": 0
+        },
+        {
+          "lane": 4,
+          "time": 115962,
+          "type": 0
+        },
+        {
+          "lane": 1,
+          "time": 115962,
+          "type": 0
+        },
+        {
+          "duration": 1103,
+          "lane": 2,
+          "time": 116182,
+          "type": 0
+        },
+        {
+          "duration": 1103,
+          "lane": 3,
+          "time": 116182,
+          "type": 0
+        },
+        {
+          "lane": 1,
+          "time": 116623,
+          "type": 0
+        },
+        {
+          "lane": 4,
+          "time": 116844,
+          "type": 0
+        },
+        {
+          "lane": 1,
+          "time": 117064,
+          "type": 0
+        },
+        {
+          "lane": 4,
+          "time": 117285,
+          "type": 0
+        },
+        {
+          "lane": 2,
+          "time": 117505,
+          "type": 0
+        },
+        {
+          "lane": 3,
+          "time": 117616,
+          "type": 0
+        },
+        {
+          "lane": 1,
+          "time": 117726,
+          "type": 0
+        },
+        {
+          "lane": 4,
+          "time": 117726,
+          "type": 0
+        },
+        {
+          "lane": 2,
+          "time": 117836,
+          "type": 0
+        },
+        {
+          "lane": 3,
+          "time": 117946,
+          "type": 0
+        },
+        {
+          "lane": 4,
+          "time": 118057,
+          "type": 0
+        },
+        {
+          "lane": 2,
+          "time": 118167,
+          "type": 0
+        },
+        {
+          "lane": 1,
+          "time": 118167,
+          "type": 0
+        },
+        {
+          "lane": 3,
+          "time": 118607,
+          "type": 0
+        },
+        {
+          "lane": 4,
+          "time": 118607,
+          "type": 0
+        },
+        {
+          "lane": 2,
+          "time": 118827,
+          "type": 0
+        },
+        {
+          "lane": 4,
+          "time": 119048,
+          "type": 0
+        },
+        {
+          "lane": 1,
+          "time": 119048,
+          "type": 0
+        },
+        {
+          "lane": 2,
+          "time": 119268,
+          "type": 0
+        },
+        {
+          "lane": 3,
+          "time": 119489,
+          "type": 0
+        },
+        {
+          "duration": 882,
+          "lane": 4,
+          "time": 119709,
+          "type": 0
+        },
+        {
+          "duration": 882,
+          "lane": 1,
+          "time": 119709,
+          "type": 0
+        },
+        {
+          "lane": 3,
+          "time": 120150,
+          "type": 0
+        },
+        {
+          "lane": 2,
+          "time": 120371,
+          "type": 0
+        },
+        {
+          "lane": 3,
+          "time": 120591,
+          "type": 0
+        },
+        {
+          "lane": 2,
+          "time": 120812,
+          "type": 0
+        },
+        {
+          "lane": 3,
+          "time": 120922,
+          "type": 0
+        },
+        {
+          "lane": 4,
+          "time": 121032,
+          "type": 0
+        },
+        {
+          "lane": 3,
+          "time": 121142,
+          "type": 0
+        },
+        {
+          "lane": 1,
+          "time": 121252,
+          "type": 0
+        },
+        {
+          "lane": 2,
+          "time": 121362,
+          "type": 0
+        },
+        {
+          "lane": 3,
+          "time": 121472,
+          "type": 0
+        },
+        {
+          "lane": 4,
+          "time": 121583,
+          "type": 0
+        },
+        {
+          "lane": 2,
+          "time": 121693,
+          "type": 0
+        },
+        {
+          "lane": 1,
+          "time": 121693,
+          "type": 0
+        },
+        {
+          "lane": 3,
+          "time": 121913,
+          "type": 0
+        },
+        {
+          "lane": 4,
+          "time": 122134,
+          "type": 0
+        },
+        {
+          "lane": 3,
+          "time": 122354,
+          "type": 0
+        },
+        {
+          "duration": 662,
+          "lane": 1,
+          "time": 122575,
+          "type": 0
+        },
+        {
+          "duration": 442,
+          "lane": 2,
+          "time": 122795,
+          "type": 0
+        },
+        {
+          "duration": 221,
+          "lane": 3,
+          "time": 123016,
+          "type": 0
+        },
+        {
+          "duration": 881,
+          "lane": 4,
+          "time": 123237,
+          "type": 0
+        },
+        {
+          "lane": 1,
+          "time": 123678,
+          "type": 0
+        },
+        {
+          "lane": 2,
+          "time": 123897,
+          "type": 0
+        },
+        {
+          "lane": 3,
+          "time": 124118,
+          "type": 0
+        },
+        {
+          "lane": 2,
+          "time": 124338,
+          "type": 0
+        },
+        {
+          "lane": 1,
+          "time": 124338,
+          "type": 0
+        },
+        {
+          "lane": 3,
+          "time": 124559,
+          "type": 0
+        },
+        {
+          "lane": 2,
+          "time": 124669,
+          "type": 0
+        },
+        {
+          "lane": 1,
+          "time": 124779,
+          "type": 0
+        },
+        {
+          "lane": 4,
+          "time": 124779,
+          "type": 0
+        },
+        {
+          "lane": 3,
+          "time": 124889,
+          "type": 0
+        },
+        {
+          "lane": 2,
+          "time": 125000,
+          "type": 0
+        },
+        {
+          "lane": 1,
+          "time": 125110,
+          "type": 0
+        },
+        {
+          "duration": 441,
+          "lane": 4,
+          "time": 125220,
+          "type": 0
+        },
+        {
+          "lane": 3,
+          "time": 125220,
+          "type": 0
+        },
+        {
+          "lane": 2,
+          "time": 125441,
+          "type": 0
+        },
+        {
+          "lane": 3,
+          "time": 125661,
+          "type": 0
+        },
+        {
+          "lane": 2,
+          "time": 125882,
+          "type": 0
+        },
+        {
+          "duration": 441,
+          "lane": 1,
+          "time": 126102,
+          "type": 0
+        },
+        {
+          "lane": 3,
+          "time": 126102,
+          "type": 0
+        },
+        {
+          "lane": 2,
+          "time": 126323,
+          "type": 0
+        },
+        {
+          "lane": 3,
+          "time": 126543,
+          "type": 0
+        },
+        {
+          "lane": 2,
+          "time": 126763,
+          "type": 0
+        },
+        {
+          "duration": 441,
+          "lane": 3,
+          "time": 126983,
+          "type": 0
+        },
+        {
+          "lane": 4,
+          "time": 127204,
+          "type": 0
+        },
+        {
+          "lane": 1,
+          "time": 127645,
+          "type": 0
+        },
+        {
+          "duration": 441,
+          "lane": 2,
+          "time": 127424,
+          "type": 0
+        },
+        {
+          "duration": 882,
+          "lane": 4,
+          "time": 127865,
+          "type": 0
+        },
+        {
+          "lane": 3,
+          "time": 128086,
+          "type": 0
+        },
+        {
+          "lane": 2,
+          "time": 128196,
+          "type": 0
+        },
+        {
+          "lane": 3,
+          "time": 128306,
+          "type": 0
+        },
+        {
+          "lane": 2,
+          "time": 128416,
+          "type": 0
+        },
+        {
+          "lane": 1,
+          "time": 128527,
+          "type": 0
+        },
+        {
+          "lane": 3,
+          "time": 128637,
+          "type": 0
+        },
+        {
+          "duration": 883,
+          "lane": 2,
+          "time": 128747,
+          "type": 0
+        },
+        {
+          "lane": 1,
+          "time": 128968,
+          "type": 0
+        },
+        {
+          "lane": 3,
+          "time": 128968,
+          "type": 0
+        },
+        {
+          "lane": 3,
+          "time": 129188,
+          "type": 0
+        },
+        {
+          "lane": 1,
+          "time": 129188,
+          "type": 0
+        },
+        {
+          "lane": 1,
+          "time": 129410,
+          "type": 0
+        },
+        {
+          "lane": 3,
+          "time": 129410,
+          "type": 0
+        },
+        {
+          "lane": 4,
+          "time": 129630,
+          "type": 0
+        },
+        {
+          "lane": 3,
+          "time": 129740,
+          "type": 0
+        },
+        {
+          "lane": 2,
+          "time": 129851,
+          "type": 0
+        },
+        {
+          "lane": 1,
+          "time": 129961,
+          "type": 0
+        },
+        {
+          "duration": 221,
+          "lane": 4,
+          "time": 130071,
+          "type": 0
+        },
+        {
+          "duration": 221,
+          "lane": 3,
+          "time": 130071,
+          "type": 0
+        },
+        {
+          "lane": 2,
+          "time": 130292,
+          "type": 0
+        },
+        {
+          "lane": 1,
+          "time": 130292,
+          "type": 0
+        },
+        {
+          "lane": 1,
+          "time": 130733,
+          "type": 0
+        },
+        {
+          "lane": 4,
+          "time": 130733,
+          "type": 0
+        },
+        {
+          "lane": 4,
+          "time": 130953,
+          "type": 0
+        },
+        {
+          "lane": 3,
+          "time": 131008,
+          "type": 0
+        },
+        {
+          "lane": 2,
+          "time": 131064,
+          "type": 0
+        },
+        {
+          "lane": 4,
+          "time": 131174,
+          "type": 0
+        },
+        {
+          "lane": 3,
+          "time": 131174,
+          "type": 0
+        },
+        {
+          "lane": 1,
+          "time": 131394,
+          "type": 0
+        },
+        {
+          "lane": 2,
+          "time": 131615,
+          "type": 0
+        },
+        {
+          "lane": 3,
+          "time": 131835,
+          "type": 0
+        },
+        {
+          "lane": 4,
+          "time": 132055,
+          "type": 0
+        },
+        {
+          "duration": 442,
+          "lane": 2,
+          "speed": 1.4999999999999998,
+          "time": 45854,
+          "type": 0
+        },
+        {
+          "duration": 442,
+          "lane": 3,
+          "speed": 1.4999999999999998,
+          "time": 45854,
           "type": 0
         }
       ],
-      "speedEvents": []
+      "sigDen": 4,
+      "sigNum": 4,
+      "speedEvents": [
+        {
+          "duration": 0,
+          "easing": 1,
+          "target": 1.5000000000000004,
+          "time": 0
+        },
+        {
+          "duration": 0,
+          "easing": 1,
+          "target": 6.0,
+          "time": 45414
+        },
+        {
+          "duration": 0,
+          "easing": 1,
+          "target": 1.5000000000000004,
+          "time": 45524
+        },
+        {
+          "duration": 441,
+          "easing": 2,
+          "target": 0.10000000000000014,
+          "time": 101631
+        },
+        {
+          "duration": 882,
+          "easing": 2,
+          "target": 1.5000000000000004,
+          "time": 103175
+        },
+        {
+          "duration": 3528,
+          "easing": 3,
+          "target": 0.5000000000000001,
+          "time": 128747
+        }
+      ]
     },
     {
       "bpm": 136.01138835082037,
@@ -34,6 +3696,8 @@
       "level": "0",
       "name": "HARD",
       "notes": [],
+      "sigDen": 4,
+      "sigNum": 4,
       "speedEvents": []
     },
     {
@@ -43,6 +3707,8 @@
       "level": "0",
       "name": "NORMAL",
       "notes": [],
+      "sigDen": 4,
+      "sigNum": 4,
       "speedEvents": []
     },
     {
@@ -273,7 +3939,7 @@
         },
         {
           "lane": 1,
-          "time": 18964,
+          "time": 18963,
           "type": 0
         },
         {
@@ -688,7 +4354,7 @@
         },
         {
           "lane": 3,
-          "time": 56891,
+          "time": 56892,
           "type": 0
         },
         {
@@ -1098,7 +4764,7 @@
         },
         {
           "lane": 1,
-          "time": 94818,
+          "time": 94819,
           "type": 0
         },
         {
@@ -1497,6 +5163,8 @@
           "type": 0
         }
       ],
+      "sigDen": 4,
+      "sigNum": 4,
       "speedEvents": [
         {
           "duration": 0,
@@ -1507,5 +5175,6 @@
       ]
     }
   ],
-  "offset": 500.0
+  "offset": 489.0,
+  "previewStart": 0.0
 }

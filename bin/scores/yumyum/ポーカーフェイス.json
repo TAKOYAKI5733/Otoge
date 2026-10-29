@@ -6,7 +6,7 @@
       "bpm": 120.0,
       "bpmEvents": [],
       "chartCreator": "TKYK.env",
-      "level": "8",
+      "level": "10",
       "name": "MASTER(4LINE)",
       "notes": [
         {
@@ -3073,6 +3073,8 @@
           "width": 2
         }
       ],
+      "sigDen": 4,
+      "sigNum": 4,
       "speedEvents": [
         {
           "duration": 0,
@@ -3155,6 +3157,8 @@
       "level": "0",
       "name": "HARD",
       "notes": [],
+      "sigDen": 4,
+      "sigNum": 4,
       "speedEvents": []
     },
     {
@@ -3164,6 +3168,8 @@
       "level": "0",
       "name": "NORMAL",
       "notes": [],
+      "sigDen": 4,
+      "sigNum": 4,
       "speedEvents": []
     },
     {
@@ -3675,6 +3681,8 @@
           "type": 0
         }
       ],
+      "sigDen": 4,
+      "sigNum": 4,
       "speedEvents": [
         {
           "duration": 0,
@@ -3685,5 +3693,6 @@
       ]
     }
   ],
-  "offset": 125.0
+  "offset": 125.0,
+  "previewStart": 4625.0
 }

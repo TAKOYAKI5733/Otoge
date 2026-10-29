@@ -29,6 +29,7 @@ void loadPlayerSettings(PlayerSettings& settings){
     settings.seVolume = j.value("seVolume", 100);
     settings.vsync  = j.value("vsync", true);
     settings.fpsCap = j.value("fpsCap", 0);
+    settings.fpsAuto = j.value("fpsAuto", false);
     settings.windowMode = std::clamp(j.value("windowMode", 0), 0, 2);
     settings.tapSound = j.value("tapSound", std::string(""));
     settings.showFastLate = j.value("showFastLate", true);
@@ -51,6 +52,7 @@ void savePlayerSettings(const PlayerSettings& settings){
     j["seVolume"] = settings.seVolume;
     j["vsync"]  = settings.vsync;
     j["fpsCap"] = settings.fpsCap;
+    j["fpsAuto"] = settings.fpsAuto;
     j["windowMode"] = settings.windowMode;
     j["tapSound"] = settings.tapSound;
     j["showFastLate"] = settings.showFastLate;

@@ -156,6 +156,10 @@ inline void NoteJudge(GameContext& ctx, Tex& tex, Sq& sq){
                             if(note.type == NoteType::Lane) toggleLaneActive(ctx, note);
                         }
 
+                        // 判定が出た時刻を記録（描画で「表示の時刻」と比べて、叩いた見た目にする）
+                        //   上の continue で isHit のノーツは飛ばしているので、ここで isHit なら今判定したもの
+                        if(note.isHit) note.hitTime = ctx.musicTime;
+
                         for(int l = std::max(0, startLane); l <= std::min(5, endLane); l++){
                             consumedThisFrame[l] = true;
                         }
@@ -195,6 +199,7 @@ inline void NoteJudge(GameContext& ctx, Tex& tex, Sq& sq){
                 if(timeDiff >= 0 && timeDiff <= 60){
                     ctx.laneJudge[i] = {tex.perfect, sq.perfect, ctx.musicTime};
                     note.isHit = true;
+                    note.hitTime = ctx.musicTime;
                     ctx.scoreTracker.registerJudge("PERFECT");
                     ctx.scorePop.startTime = ctx.musicTime;
                     ctx.comboPop.startTime = ctx.musicTime;
@@ -226,6 +231,7 @@ inline void NoteJudge(GameContext& ctx, Tex& tex, Sq& sq){
             if(ctx.musicTime > note.targetTime && (ctx.musicTime - note.targetTime > 200)){
                 ctx.laneJudge[note.lane]  = {tex.miss, sq.miss, ctx.musicTime};
                 note.isHit = true;
+                note.hitTime = ctx.musicTime;
                 markLongFailed(note, note.targetTime);
                 ctx.scoreTracker.registerJudge("MISS");
 
@@ -293,6 +299,7 @@ inline void NoteJudge(GameContext& ctx, Tex& tex, Sq& sq){
             if(ctx.musicTime >= endTime){
                 ln.isHolding = false;
                 ln.isHit = true;
+                ln.hitTime = ctx.musicTime;   // 終点の判定の時刻：表示がここに来るまでホールドの見た目を続ける
                 ctx.scoreTracker.registerJudge("PERFECT");
                 ctx.scorePop.startTime = ctx.musicTime;
                 ctx.comboPop.startTime = ctx.musicTime;

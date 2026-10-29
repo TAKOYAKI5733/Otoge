@@ -84,6 +84,7 @@ int main(){
     // 設定ファイルの値でVSyncとFPS上限を反映
     SDL_RenderSetVSync(renderer, playerSettings.vsync ? 1 : 0);
     g_framePacer.setCap(playerSettings.fpsCap);
+    g_framePacer.setAutoCap(playerSettings.fpsAuto, window);   // FPS 自動が ON ならモニターの Hz に合わせる
 
     SDL_DisplayMode dm;
     if(SDL_GetWindowDisplayMode(window, &dm) == 0){

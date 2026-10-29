@@ -6,6 +6,9 @@
 #include <vector>
 #include "Editortempo.h"
 #include "bpmdetect.h"
+#include "musicAnalyze.h"   // Music Settings：オフセット・BPM・BPM の変化を自動で決める
+#include "InputBinding.h"   // キー設定（レーンのキー）を読む：キーボード配置モードで使う
+#include "SongPreview.h"    // 試聴の長さ（選曲画面と共通）
 #include "Play/drawFrame.h"      // NOTE_SIDE_MARGIN などノーツの形（プレイ画面と共通）
 #include "Play/roundedRect.h"    // 角丸の描画（プレイ画面と共通）
 #include "imgui.h"
@@ -31,6 +34,8 @@ struct EditorNote{
     double customSpeed = 1.0;
 
     std::vector<EditorPathKeyfrane> path;
+
+    bool selected = false;   // 範囲選択で選ばれているか（エディタ専用。JSONには保存しない）
 
     bool isLong() const {return duration > 0;}
 };
@@ -60,6 +65,8 @@ struct FlashEffect{
 struct EditorBpmEvent{
     int32_t time = 0;
     double bpm = 120.0;
+    int sigNum = 4;   // 拍子の分子（1 小節に何拍）
+    int sigDen = 4;   // 拍子の分母（何分音符を 1 拍とするか）
 };
 
 struct EditorDifficulty{
@@ -67,6 +74,8 @@ struct EditorDifficulty{
     std::string level = "0";
     std::string chartCreator = "Unknown";
     double bpm = 120.0;
+    int sigNum = 4;   // 曲の始まり（最初の BPM イベントより前）の拍子
+    int sigDen = 4;
 
     std::vector<EditorNote> notes;
     std::vector<EditorSpeedEvent> speedEvents;
@@ -80,6 +89,7 @@ struct ChartMeta{
     std::string bgm;
     std::string composer = "Unknown";
     double offsetMs = 0.0;
+    double previewStartMs = 0.0;   // 選曲画面の試聴を始める位置（曲ファイル上の ms。オフセットの影響を受けない）
 };
 
 //JSON保存・読込
@@ -90,6 +100,7 @@ inline bool saveChart(const std::string& path, const ChartMeta& meta, const std:
     j["bgm"] = meta.bgm;
     j["composer"] = meta.composer;
     j["offset"] = meta.offsetMs;
+    j["previewStart"] = meta.previewStartMs;
 
     json diffArr = json::array();
     for(const auto& d : difficulties){
@@ -98,6 +109,8 @@ inline bool saveChart(const std::string& path, const ChartMeta& meta, const std:
         dj["level"] = d.level;
         dj["chartCreator"] = d.chartCreator;
         dj["bpm"] = d.bpm;
+        dj["sigNum"] = d.sigNum;
+        dj["sigDen"] = d.sigDen;
 
         json notesArr = json::array();
         for(const auto& n : d.notes){
@@ -141,6 +154,8 @@ inline bool saveChart(const std::string& path, const ChartMeta& meta, const std:
             json item;
             item["time"] = b.time;
             item["bpm"] = b.bpm;
+            item["sigNum"] = b.sigNum;
+            item["sigDen"] = b.sigDen;
             bpmArr.push_back(item);
         }
         dj["bpmEvents"] = bpmArr;
@@ -167,6 +182,8 @@ inline EditorDifficulty parseOneDifficulty(const json& src){
     d.level = src.value("level", std::string("0"));
     d.chartCreator = src.value("chartCreator", std::string("Unknown"));
     d.bpm = src.value("bpm", 120.0);
+    d.sigNum = std::max(1, src.value("sigNum", 4));   // 拍子がない古い譜面は 4/4
+    d.sigDen = std::max(1, src.value("sigDen", 4));
 
     if(src.contains("notes")){
         for(const auto& item : src.at("notes")){
@@ -214,6 +231,8 @@ inline EditorDifficulty parseOneDifficulty(const json& src){
             EditorBpmEvent b;
             b.time = item.value("time", 0);
             b.bpm = item.value("bpm", 120.0);
+            b.sigNum = std::max(1, item.value("sigNum", 4));
+            b.sigDen = std::max(1, item.value("sigDen", 4));
             d.bpmEvents.push_back(b);
         }
     }
@@ -236,6 +255,7 @@ inline bool loadChartForEdit(const std::string & path, ChartMeta& meta, std::vec
     meta.bgm = j.value("bgm", std::string(""));
     meta.composer = j.value("composer", std::string("Unknown"));
     meta.offsetMs = j.value("offset", 0.0);
+    meta.previewStartMs = j.value("previewStart", 0.0);
 
     difficulties.clear();
     if(j.contains("difficulties") && j.at("difficulties").is_array()){
@@ -276,6 +296,307 @@ inline double evaluateEditorPathY(const EditorNote& n, int32_t musicTime){
         }
     }
     return path.back().y;
+}
+
+// =====================================================================
+//  BPM を変えたあと、BPM イベント自身の時刻を「拍の位置」を保つように直す
+//    oldMap  : 変える前のテンポ表（alignedMap）
+//    baseBpm : 今の難易度の BPM（変えたあとの値）
+//    events  : 今の BPM イベント。時刻は「変える前のテンポ表」で置いた位置、BPM の値は変えたあとの値
+//  やること：
+//    1. どのイベントも、今の時刻を「変える前のテンポ表」で拍に直す
+//       （右クリックで追加したイベントも、変える前のグリッドに吸着して置いたものなので、これで正しい拍になる）
+//    2. 拍の順に並べ、新しい BPM で 0ms から時刻を積み上げ直す
+//       → 前の区間の BPM が変われば、後ろのイベントもその分だけ前後に動く
+//  戻り値：直したあとのテンポ表（ノーツ・SPEED イベントの移動先の計算に使う）
+// =====================================================================
+inline TempoMap realignBpmEvents(const TempoMap& oldMap, double baseBpm, std::vector<EditorBpmEvent>& events){
+    const double base = (baseBpm > 0.0) ? baseBpm : 1.0;
+
+    // 1. 各イベントが「何拍目」にあるか（変える前のテンポ表で）
+    std::vector<std::pair<double, size_t>> order;   // (拍, 番号)
+    order.reserve(events.size());
+    for(size_t i = 0; i < events.size(); i++){
+        order.push_back({tempoBeatAt(oldMap, static_cast<double>(events[i].time)), i});
+    }
+    std::sort(order.begin(), order.end());
+
+    // 2. 拍の順に、新しい BPM で時刻を積み上げ直す
+    double prevBeat = 0.0;    // 1つ前の区切りの拍
+    double prevTime = 0.0;    // 1つ前の区切りの時刻(ms)
+    double prevBpm  = base;   // 1つ前の区切りから使われる BPM
+    for(const auto& [beat, idx] : order){
+        EditorBpmEvent& ev = events[idx];
+        if(beat < 0.0){
+            // 0ms より前に置かれたイベント（ふつうはない）：最初の BPM で戻すだけで、後ろには影響させない
+            ev.time = static_cast<int32_t>(std::lround(beat * 60000.0 / base));
+            continue;
+        }
+        const double t = prevTime + (beat - prevBeat) * 60000.0 / prevBpm;
+        ev.time = static_cast<int32_t>(std::lround(t));
+        prevBeat = beat;
+        prevTime = t;
+        if(ev.bpm > 0.0) prevBpm = ev.bpm;
+    }
+
+    // BPM タブの並びも時刻順にそろえる
+    std::stable_sort(events.begin(), events.end(),
+        [](const EditorBpmEvent& a, const EditorBpmEvent& b){ return a.time < b.time; });
+
+    // 3. 直したあとの時刻（整数 ms に丸めたもの）でテンポ表を作る
+    //    → 保存される値と、ノーツの移動先の計算がぴったり一致する
+    std::vector<TempoPoint> pts;
+    pts.reserve(events.size());
+    for(const auto& ev : events) pts.push_back({static_cast<double>(ev.time), ev.bpm});
+    return makeTempoMap(base, pts);
+}
+
+// =====================================================================
+//  Music Settings の結果を譜面に入れる（すべての難易度）
+//    ・オフセット、曲頭の BPM、BPM イベントを、解析結果で置き換える
+//    ・拍子は変えない：曲頭の拍子はそのまま。新しい BPM イベントには、その位置で今まで使われていた拍子を入れる
+//      （テンポは曲そのものの性質なので、難易度ごとに変えず全部そろえる）
+//    ・ノーツと SPEED イベントは「何拍目か」を保って動かす（BPM を変えたときと同じ考え方）
+// =====================================================================
+inline void applyMusicAnalysis(const MusicAnalysis& r, ChartMeta& meta, std::vector<EditorDifficulty>& difficulties){
+    // オフセットの入力欄は 0.1ms 単位なので、それに合わせて丸めてから、イベントの譜面上の時刻を決める
+    meta.offsetMs = std::round(r.offsetMs * 10.0) / 10.0;
+
+    std::vector<EditorBpmEvent> events;
+    std::vector<TempoPoint> newPts;
+    for(const auto& c : r.changes){
+        EditorBpmEvent b;
+        b.time = static_cast<int32_t>(std::lround(c.audioMs - meta.offsetMs));   // 音源上の位置 → 譜面上の時刻
+        b.bpm = c.bpm;
+        events.push_back(b);
+        newPts.push_back({static_cast<double>(b.time), b.bpm});
+    }
+    const TempoMap newMap = makeTempoMap(r.bpm, newPts);
+
+    for(auto& d : difficulties){
+        std::vector<TempoPoint> oldPts;
+        for(const auto& b : d.bpmEvents) oldPts.push_back({static_cast<double>(b.time), b.bpm});
+        const TempoMap oldMap = makeTempoMap(d.bpm, oldPts);
+
+        for(auto& n : d.notes){
+            const int32_t newStart = remapTime(oldMap, newMap, n.time);
+            if(n.duration > 0){
+                const int32_t newEnd = remapTime(oldMap, newMap, n.time + n.duration);
+                n.duration = std::max<int32_t>(1, newEnd - newStart);
+            }
+            for(auto& k : n.path) k.time = remapTime(oldMap, newMap, k.time);
+            n.time = newStart;
+        }
+        for(auto& sev : d.speedEvents) sev.time = remapTime(oldMap, newMap, sev.time);
+
+        // 拍子は勝手に変えない：新しいイベントの位置を「今までのテンポ表で何拍目か」に直し、
+        // そこで今まで使われていた拍子（曲頭の拍子か、それより前の一番近い BPM イベントの拍子）を入れる
+        std::vector<EditorBpmEvent> evs = events;
+        for(auto& b : evs){
+            const int32_t oldT = remapTime(newMap, oldMap, b.time);
+            b.sigNum = d.sigNum;
+            b.sigDen = d.sigDen;
+            int32_t best = std::numeric_limits<int32_t>::min();
+            for(const auto& ob : d.bpmEvents){
+                if(ob.time <= oldT && ob.time >= best){
+                    best = ob.time;
+                    b.sigNum = ob.sigNum;
+                    b.sigDen = ob.sigDen;
+                }
+            }
+        }
+
+        d.bpm = r.bpm;
+        d.bpmEvents = evs;   // 曲頭の拍子（d.sigNum / d.sigDen）はそのまま
+
+        // 「今のテンポ表 = 合わせ済み」にしておく。
+        //   これをしないと、毎フレームの「BPM が変わったらノーツを動かす」処理が、もう一度ノーツを動かしてしまう
+        d.alignedMap = newMap;
+        d.tempoAligned = true;
+    }
+}
+
+// BPM をすべて倍・半分にする（倍テン・半テンの直し用。すべての難易度）
+//   拍の数え方が変わるだけで、音の位置は変わらないので、ノーツ・イベントの時刻（ms）はそのまま
+inline void scaleAllBpm(double factor, std::vector<EditorDifficulty>& difficulties){
+    for(auto& d : difficulties){
+        d.bpm *= factor;
+        std::vector<TempoPoint> pts;
+        for(auto& b : d.bpmEvents){
+            b.bpm *= factor;
+            pts.push_back({static_cast<double>(b.time), b.bpm});
+        }
+        d.alignedMap = makeTempoMap(d.bpm, pts);   // ノーツは動かさない
+        d.tempoAligned = true;
+    }
+}
+
+// =====================================================================
+//  拍子
+//    ・BPM は拍子に関係なく「1 分間の 4 分音符の数」のまま（ノーツの時刻・判定は変わらない）
+//    ・拍子で変わるのは小節線の位置だけ。1 小節 = 分子 × (4 ÷ 分母) 拍（4 分音符いくつ分か）
+//      例：4/4 → 4 拍、3/4 → 3 拍、6/8 → 3 拍、7/8 → 3.5 拍
+//    ・BPM イベントのところで、新しい小節が始まる
+// =====================================================================
+inline constexpr int kSigMax = 64;   // 拍子の分子・分母の上限（入力欄で打てる範囲）
+
+// 拍子の入力欄：「分子 / 分母」を横に並べる。+/- ボタンは付けず、キーボードで打つ
+//   変更されたら true
+inline bool timeSigInput(const char* id, int& num, int& den){
+    bool changed = false;
+    ImGui::PushID(id);
+    ImGui::PushItemWidth(60.0f);
+    changed |= ImGui::InputInt("##num", &num, 0, 0);
+    ImGui::SameLine(0.0f, 6.0f);
+    ImGui::TextUnformatted("/");
+    ImGui::SameLine(0.0f, 6.0f);
+    changed |= ImGui::InputInt("##den", &den, 0, 0);
+    ImGui::PopItemWidth();
+    ImGui::SameLine();
+    ImGui::TextUnformatted("拍子");
+    ImGui::PopID();
+    num = std::clamp(num, 1, kSigMax);
+    den = std::clamp(den, 1, kSigMax);
+    return changed;
+}
+
+// 拍子の区切り：曲の始まり（拍 0）と各 BPM イベント。区切りごとに新しい小節が始まる
+struct SigSeg{ double beat; int num, den; };
+inline std::vector<SigSeg> buildSigSegs(const EditorDifficulty& d, const TempoMap& tm){
+    std::vector<SigSeg> segs;
+    segs.push_back({0.0, d.sigNum, d.sigDen});
+    std::vector<EditorBpmEvent> evs = d.bpmEvents;   // 入力中で並びが崩れていても大丈夫なように、写して並べる
+    std::stable_sort(evs.begin(), evs.end(), [](const EditorBpmEvent& a, const EditorBpmEvent& b){ return a.time < b.time; });
+    for(const auto& b : evs){
+        const double bb = std::max(0.0, tempoBeatAt(tm, static_cast<double>(b.time)));
+        if(bb <= segs.back().beat + 1.0e-9) segs.back() = {bb, b.sigNum, b.sigDen};   // 同じ位置なら後のものを使う
+        else segs.push_back({bb, b.sigNum, b.sigDen});
+    }
+    return segs;
+}
+
+// =====================================================================
+//  区切りごとのグリッド
+//    グリッドの原点は「拍 0」ではなく、各区切り（曲の始まり・BPM イベント）の先頭。
+//    こうしないと 3/8 などの半端な小節のあとで、4 分の線が小節線からずれる。
+//    区切りの境目そのものも、必ずグリッドの点になる。
+// =====================================================================
+
+// beat が入っている区切りの番号（eps だけ手前でも「その区切り」とみなす）
+inline size_t sigSegIndexAt(const std::vector<SigSeg>& segs, double beat, double eps = 1.0e-9){
+    size_t i = 0;
+    while(i + 1 < segs.size() && segs[i + 1].beat <= beat + eps) i++;
+    return i;
+}
+
+// 区切り i の終わりの拍（最後の区切りは終わりなし）
+inline double sigSegEnd(const std::vector<SigSeg>& segs, size_t i){
+    return (i + 1 < segs.size()) ? segs[i + 1].beat : std::numeric_limits<double>::infinity();
+}
+
+// 一番近いグリッドの拍（gb = 1マスの拍数）
+inline double gridSnapBeat(const std::vector<SigSeg>& segs, double beat, double gb){
+    const size_t i = sigSegIndexAt(segs, beat);
+    const double s = segs[i].beat;
+    const double e = sigSegEnd(segs, i);
+    double c = s + std::round((beat - s) / gb) * gb;
+    if(c > e) c = e;   // 区切りを越えたら、境目（次の区切りの先頭）のほうが近い
+    return c;
+}
+
+// 次(+1)/前(-1)のグリッドの拍。eps 以内の誤差は「線の上にいる」とみなす
+inline double gridStepBeat(const std::vector<SigSeg>& segs, double beat, double gb, int dir, double eps){
+    const size_t i = sigSegIndexAt(segs, beat, eps);
+    const double s = segs[i].beat;
+    if(dir > 0){
+        const long k = static_cast<long>(std::floor((beat - s + eps) / gb)) + 1;
+        return std::min(s + k * gb, sigSegEnd(segs, i));   // 区切りの終わりで一度止まる
+    }
+    const long k = static_cast<long>(std::ceil((beat - s - eps) / gb)) - 1;
+    const double c = s + k * gb;
+    if(c >= s - 1.0e-9 || i == 0) return c;
+    // この区切りの先頭より前 → 1つ前の区切りの、最後のグリッド線
+    const double ps = segs[i - 1].beat;
+    const long pk = static_cast<long>(std::ceil((s - ps - 1.0e-9) / gb)) - 1;
+    return ps + pk * gb;
+}
+
+// =====================================================================
+//  メトロノームの音（コードで作るので、音のファイルは要らない）
+//    ・拍子の分母で音を変える：4 分（分母 4 以下）= 1000Hz、8 分 = 1500Hz、16 分以上 = 2000Hz
+//    ・大きさ：4 分を基準に、8 分は 65%、16 分は 45%。小節の頭以外はさらに 75%
+//      （8 分の小節の頭でも、4 分のふつうの拍より小さい）
+// =====================================================================
+struct MetronomeSounds{
+    enum Kind{ QUARTER, EIGHTH, SIXTEENTH, KIND_COUNT };
+
+    bool create(){
+        int freq = 0;
+        Uint16 fmt = 0;
+        int ch = 0;
+        if(Mix_QuerySpec(&freq, &fmt, &ch) == 0 || fmt != AUDIO_S16SYS || ch < 1) return false;
+        const double hz[KIND_COUNT] = {1000.0, 1500.0, 2000.0};
+        for(int k = 0; k < KIND_COUNT; k++) makeClick(k, hz[k], freq, ch);
+        return true;
+    }
+
+    void destroy(){
+        for(int k = 0; k < KIND_COUNT; k++){
+            if(chunk_[k]) Mix_FreeChunk(chunk_[k]);   // QuickLoad で作ったものは、中の波形（pcm_）を解放しない
+            chunk_[k] = nullptr;
+            pcm_[k].clear();
+        }
+    }
+
+    // 拍子の分母 → 音の種類
+    static Kind kindFor(int den){
+        if(den >= 16) return SIXTEENTH;
+        if(den >= 8)  return EIGHTH;
+        return QUARTER;
+    }
+
+    // 鳴らす。volume = メトロノーム全体の音量（0〜100）
+    void play(Kind k, bool barHead, int volume){
+        if(!chunk_[k]) return;
+        const double base[KIND_COUNT] = {1.0, 0.65, 0.45};
+        const double level = base[k] * (barHead ? 1.0 : 0.75) * std::clamp(volume, 0, 100) / 100.0;
+        // チャンネルの音量（Mix_Volume）を変えると、同じチャンネルで鳴るノーツ音まで小さくなるので、音そのものの音量を変える
+        Mix_VolumeChunk(chunk_[k], static_cast<int>(std::lround(MIX_MAX_VOLUME * level)));
+        Mix_PlayChannel(-1, chunk_[k], 0);
+    }
+
+private:
+    std::vector<int16_t> pcm_[KIND_COUNT];   // Mix_QuickLoad_RAW はコピーしないので、ここに持ち続ける
+    Mix_Chunk* chunk_[KIND_COUNT] = {nullptr, nullptr, nullptr};
+
+    // 60ms の「ピッ」：1ms で立ち上がり、すぐに減っていくサイン波
+    void makeClick(int k, double hz, int freq, int ch){
+        const double kPi = 3.14159265358979323846;
+        const int n = static_cast<int>(freq * 0.06);
+        pcm_[k].assign(static_cast<size_t>(n) * static_cast<size_t>(ch), 0);
+        for(int i = 0; i < n; i++){
+            const double t = static_cast<double>(i) / freq;
+            const double env = (t < 0.001) ? t / 0.001 : std::exp(-(t - 0.001) / 0.012);
+            const int16_t v = static_cast<int16_t>(0.6 * env * std::sin(2.0 * kPi * hz * t) * 32767.0);
+            for(int c = 0; c < ch; c++) pcm_[k][static_cast<size_t>(i) * ch + c] = v;
+        }
+        chunk_[k] = Mix_QuickLoad_RAW(reinterpret_cast<Uint8*>(pcm_[k].data()),
+                                      static_cast<Uint32>(pcm_[k].size() * sizeof(int16_t)));
+    }
+};
+
+// 時刻 t で使われている拍子（t ちょうどの BPM イベントも含む）
+inline void timeSigAt(const EditorDifficulty& d, int32_t t, int& num, int& den){
+    num = d.sigNum;
+    den = d.sigDen;
+    int32_t best = std::numeric_limits<int32_t>::min();
+    for(const auto& b : d.bpmEvents){
+        if(b.time <= t && b.time >= best){
+            best = b.time;
+            num = b.sigNum;
+            den = b.sigDen;
+        }
+    }
 }
 
 // =====================================================================
@@ -587,6 +908,13 @@ GameScene chartCreateScene(SDL_Window* window, SDL_Renderer* renderer, std::stri
     int32_t pendingAudioLatencyMs = 0;
     bool musicNeedsStart = true;
 
+    // メトロノーム（再生中に、拍子に合わせて鳴らす）
+    MetronomeSounds metronome;
+    if(!metronome.create()) printf("[譜面エディタ] メトロノームの音を作れませんでした\n");
+    bool metronomeOn = false;
+    int metronomeVolume = 70;     // 0〜100
+    double metronomePrevMs = 0.0; // 前のフレームの再生位置（ここから今の位置までに過ぎた拍で鳴らす）
+
     Mix_Chunk* tap_sound = Mix_LoadWAV("sounds/tapsound_2.wav");
     Mix_Chunk* tap_sound_c = Mix_LoadWAV("sounds/tapsound_2.wav");
     if(!tap_sound || !tap_sound_c){
@@ -616,6 +944,9 @@ GameScene chartCreateScene(SDL_Window* window, SDL_Renderer* renderer, std::stri
         isPlaying = !isPlaying;
 
         if(isPlaying){
+            // 再生を始めた位置ちょうどに拍があれば、その拍のメトロノームも鳴らす（「前の位置」を少しだけ手前にしておく）
+            metronomePrevMs = static_cast<double>(scrollTimeMs) - 0.5;
+
             if(!bgm && !meta.bgm.empty()){
                 std::string fullPath = "sounds/" + meta.bgm;
                 bgm = Mix_LoadMUS(fullPath.c_str());
@@ -657,18 +988,40 @@ GameScene chartCreateScene(SDL_Window* window, SDL_Renderer* renderer, std::stri
 
     int gridDivisor = 16; //標準で16分
 
+    // スナップの「自由入力」
+    //   一覧（4〜1920）にない分割数を、プレイヤーが数字で打って使えるようにする
+    //   gridDivisor = 「全音符をいくつに分けるか」なので、20 と打てば 20 分音符（1 拍を 5 等分）になる
+    constexpr int GRID_DIVISOR_MAX = 1920;   // 打てる上限（一覧の一番細かい値と同じ）
+    bool gridCustom = false;                 // 自由入力を選んでいるか
+    int  customGridDivisor = 20;             // 自由入力の値
+
     auto currentTempoMap = [&]() -> TempoMap {
         std::vector<TempoPoint> pts;
         for(const auto& b : currentDiff().bpmEvents) pts.push_back({static_cast<double>(b.time), b.bpm});
         return makeTempoMap(currentDiff().bpm, pts);
     };
-    // 最も近いグリッド線へ吸着
+    // 最も近いグリッド線へ吸着（区切りごとに原点を置き直したグリッド）
     auto snapToGrid = [&](double rawTimeMs) -> int32_t {
-        return static_cast<int32_t>(std::lround(tempoSnap(currentTempoMap(), rawTimeMs, 4.0 / gridDivisor)));
+        const TempoMap tm = currentTempoMap();
+        const std::vector<SigSeg> segs = buildSigSegs(currentDiff(), tm);
+        const double b = gridSnapBeat(segs, tempoBeatAt(tm, rawTimeMs), 4.0 / gridDivisor);
+        return static_cast<int32_t>(std::lround(tempoTimeAt(tm, b)));
     };
     // 次(+1)/前(-1)のグリッド線へ
     auto stepGrid = [&](int32_t fromMs, int dir) -> int32_t {
-        return tempoStepMs(currentTempoMap(), fromMs, 4.0 / gridDivisor, dir);
+        const TempoMap tm = currentTempoMap();
+        const std::vector<SigSeg> segs = buildSigSegs(currentDiff(), tm);
+        const double gb = 4.0 / gridDivisor;
+        // 時刻は整数 ms に丸められているので、0.6ms 以内のずれは「線の上」とみなす（細かいグリッドではマスの 1/4 まで）
+        const double eps = std::min(tempoBpmAt(tm, fromMs) / 60000.0 * 0.6, gb * 0.25);
+
+        double b = tempoBeatAt(tm, static_cast<double>(fromMs));
+        int32_t result = fromMs;
+        for(int guard = 0; guard < 4 && result == fromMs; guard++){   // 丸めで同じ ms に戻ったら、もう1マス進む
+            b = gridStepBeat(segs, b, gb, dir, eps);
+            result = static_cast<int32_t>(std::lround(tempoTimeAt(tm, b)));
+        }
+        return result;
     };
     // その時刻付近のグリッド1マスの長さ(ms)。当たり判定の許容幅に使う
     auto localGridMs = [&](double atMs) -> double {
@@ -689,6 +1042,8 @@ GameScene chartCreateScene(SDL_Window* window, SDL_Renderer* renderer, std::stri
     int     eventMenuSpeedEasing = 1;       // SPEED のイージング
     int     eventMenuSpeedDuration = 500;   // SPEED の変化にかける時間
     double  eventMenuBpm = 120.0;           // BPM の値
+    int     eventMenuSigNum = 4;            // 拍子の分子
+    int     eventMenuSigDen = 4;            // 拍子の分母
 
     // テストプレイ（右クリックメニューから）
     int     testPlayFrom = 0;               // 0 = 右クリックした位置から、1 = 最初から
@@ -710,10 +1065,308 @@ GameScene chartCreateScene(SDL_Window* window, SDL_Renderer* renderer, std::stri
     int selectedNoteIndex = -1;
     bool moveNotesOnBpmChange = true;
 
-    enum class DragMode{ None, MoveNote, ResizeTail, MoveSpeedEvent, MoveBpmEvent, ResizeSpeedDuration };
+    enum class DragMode{ None, MoveNote, ResizeTail, MoveSpeedEvent, MoveBpmEvent, ResizeSpeedDuration, MoveSelection };
     DragMode dragMode = DragMode::None;
     int dragNoteIndex = -1;
     int dragEventIndex = -1;
+
+    // =================================================================
+    //  範囲選択（Shift + ドラッグ）
+    // =================================================================
+    bool    boxSelecting = false;      // 四角を描いている最中か
+    double  boxStartTime = 0.0;        // 始点の譜面上の時刻（スクロールしてもずれないように時刻で持つ）
+    int     boxStartX = 0;             // 始点の x（レーンは横に動かないので画面座標でよい）
+    int     boxNowX = 0, boxNowY = 0;  // 今のマウス位置
+
+    // まとめて移動：掴んだ瞬間の状態
+    struct MoveOrigin{
+        size_t index;
+        int32_t time;
+        int lane;
+        std::vector<int32_t> pathTimes;
+    };
+    std::vector<MoveOrigin> moveOrigins;
+    int32_t moveAnchorTime = 0;   // 掴んだ位置の時刻
+    int     moveAnchorLane = 0;   // 掴んだ位置のレーン
+
+    std::vector<EditorNote> clipboard;   // コピーしたノーツ（先頭を 0ms とした相対時刻）
+
+    // 範囲選択のメニュー（右クリックメニューと同じく、マウスの位置にポップアップで出す）
+    bool    selectMenuRequest = false;      // 次の ImGui フレームで開く
+    bool    selectMenuOpen = false;         // 今開いているか（Esc の扱いに使う）
+    bool    selectMenuCloseRequest = false; // Esc で閉じる
+    ImVec2  selectMenuPos(0.0f, 0.0f);      // メニューを出す位置（マウスの位置）
+
+    // 画面の x → レーン番号（レーンの外は端のレーンに丸める）
+    auto laneAtX = [&](int x) -> int {
+        int l = static_cast<int>(std::floor(static_cast<double>(x - startX) / laneWidth));
+        return std::clamp(l, 0, 5);
+    };
+
+    auto clearSelection = [&](){
+        for(auto& d : difficulties){
+            for(auto& n : d.notes) n.selected = false;
+        }
+    };
+
+    auto countSelected = [&]() -> int {
+        int c = 0;
+        for(const auto& n : currentDiff().notes){
+            if(n.selected) c++;
+        }
+        return c;
+    };
+
+    // 範囲選択がないときは、クリックで選んでいる1個を対象にする
+    // （1個だけでも Ctrl+C / Ctrl+R / Delete が効くように）
+    auto promoteSingleSelection = [&](){
+        if(countSelected() == 0 && selectedNoteIndex >= 0 &&
+           selectedNoteIndex < static_cast<int>(currentDiff().notes.size())){
+            currentDiff().notes[selectedNoteIndex].selected = true;
+        }
+    };
+
+    // 四角に入っているノーツに旗を立てる（時間とレーンの両方で判定。時間はヘッドの位置で見る）
+    auto updateBoxSelection = [&](double ppm){
+        const double t0 = boxStartTime;
+        const double t1 = scrollTimeMs + (judgeY - boxNowY) / ppm;
+        const double tMin = std::min(t0, t1);
+        const double tMax = std::max(t0, t1);
+        const int l0 = laneAtX(boxStartX);
+        const int l1 = laneAtX(boxNowX);
+        const int lMin = std::min(l0, l1);
+        const int lMax = std::max(l0, l1);
+
+        for(auto& n : currentDiff().notes){
+            const bool laneHit = (n.lane <= lMax) && (n.lane + n.width - 1 >= lMin);   // 幅のあるノーツは一部でも重なればOK
+            const bool timeHit = (n.time >= tMin) && (n.time <= tMax);
+            n.selected = laneHit && timeHit;
+        }
+    };
+
+    auto copySelection = [&](){
+        promoteSingleSelection();
+        int32_t base = std::numeric_limits<int32_t>::max();
+        for(const auto& n : currentDiff().notes){
+            if(n.selected) base = std::min(base, n.time);
+        }
+        if(base == std::numeric_limits<int32_t>::max()) return;   // 何も選ばれていない
+
+        clipboard.clear();
+        for(const auto& n : currentDiff().notes){
+            if(!n.selected) continue;
+            EditorNote c = n;
+            c.time -= base;
+            for(auto& k : c.path) k.time -= base;   // パスもノーツと一緒にずらす
+            c.selected = false;
+            clipboard.push_back(c);
+        }
+    };
+
+    // 判定ライン（今の再生位置）に一番近いグリッドへ貼り付ける。貼ったノーツが選ばれた状態になる
+    auto pasteClipboard = [&](){
+        if(clipboard.empty()) return;
+        clearSelection();
+        const int32_t base = std::max<int32_t>(0, snapToGrid(scrollTimeMs));
+        for(const auto& c : clipboard){
+            EditorNote n = c;
+            n.time += base;
+            for(auto& k : n.path) k.time += base;
+            n.selected = true;
+            currentDiff().notes.push_back(n);
+        }
+        selectedNoteIndex = -1;
+    };
+
+    // 左右反転：レーン 0⇔5, 1⇔4, 2⇔3。幅のあるノーツは右端が左端になるように 6 - lane - width
+    auto mirrorSelection = [&](){
+        promoteSingleSelection();
+        for(auto& n : currentDiff().notes){
+            if(n.selected) n.lane = 6 - n.lane - n.width;
+        }
+    };
+
+    auto deleteSelection = [&](){
+        promoteSingleSelection();
+        std::erase_if(currentDiff().notes, [](const EditorNote& n){ return n.selected; });
+        selectedNoteIndex = -1;   // 番号がずれるので、クリック選択は解除する
+        dragMode = DragMode::None;
+        dragNoteIndex = -1;
+    };
+
+    // =================================================================
+    //  キーボード配置モード（Ctrl+K で ON/OFF）
+    //    ・プレイと同じキー設定（PlayerSettings::laneBindings）のキーを押すと、
+    //      判定ライン（今の再生位置）に一番近いグリッド線へ、パレットで選んだノーツを置く
+    //    ・ロングは「押した位置が始点」。押している間、終点が判定ラインに一番近いグリッド線まで伸び、
+    //      離したところで決まる（再生中なら曲に合わせて伸びる／止めているならホイールで伸ばせる）
+    //    ・キーの「押した瞬間」は、SDL のイベントではなく毎フレームの状態の変化で見る
+    //      （プレイ画面と同じ isBindingPressed を使うので、コントローラーのボタンでも置ける）
+    // =================================================================
+    PlayerSettings editorSettings;
+    loadPlayerSettings(editorSettings);   // キー設定を読むためだけに使う（エディタからは保存しない）
+
+    std::string kbKeyNames[6];            // レーンの下に出すキーの名前
+    for(int i = 0; i < 6; i++) kbKeyNames[i] = bindingName(editorSettings.laneBindings[i]);
+
+    bool     keyboardMode = false;
+    bool     kbPrev[6] = {};              // 前のフレームで押していたか（「押した瞬間」を見つける用）
+    bool     kbHeld[6] = {};              // 今押しているか（キービームの描画用）
+    uint32_t kbReleaseTicks[6] = {};      // 離した時刻（キービームを少しずつ消す用。0 = まだ離していない）
+    constexpr uint32_t KEY_BEAM_FADE_MS = 150;
+
+    // 押している間に伸ばしているロングノーツ（レーンのキーごと）
+    //   ノーツは vector の番号で覚えるが、削除・移動などで番号がずれることがあるので、
+    //   使う前に「置いたときの時刻・レーン・難易度」と一致するかを必ず確かめる
+    struct KeyHold{
+        bool    active = false;
+        int     diff = 0;       // どの難易度に置いたか
+        size_t  index = 0;      // currentDiff().notes の番号
+        int32_t start = 0;      // 始点の時刻
+        int     lane = 0;       // 左端のレーン
+    };
+    KeyHold keyHolds[6];
+
+    // その入力（スキャンコード）がレーンのキーか
+    auto isLaneKey = [&](SDL_Scancode sc) -> bool {
+        const InputBinding b = InputBinding::key(sc);
+        for(int i = 0; i < 6; i++){
+            if(editorSettings.laneBindings[i] == b) return true;
+        }
+        return false;
+    };
+
+    auto setKeyboardMode = [&](bool on){
+        keyboardMode = on;
+        // 切り替えた瞬間に押しっぱなしのキー（Ctrl+K の K など）を「押した瞬間」と数えないように、今の状態で埋めておく
+        const Uint8* ks = SDL_GetKeyboardState(nullptr);
+        for(int i = 0; i < 6; i++){
+            kbPrev[i] = on && isBindingPressed(editorSettings.laneBindings[i], ks);
+            kbHeld[i] = false;
+            kbReleaseTicks[i] = 0;
+            keyHolds[i].active = false;
+        }
+    };
+
+    // 重なってはいけないノーツか：DRAG(3) 以外（通常・通常C・それらのロング・LANE）
+    //   DRAG はどのノーツとも重ねてよい（単発+DRAG、DRAG+DRAG など）
+    auto isSolidType = [](int type) -> bool { return type != 3; };
+
+    // 2つのノーツのレーンが重なっているか（幅のあるノーツは一部でも重なれば重なり）
+    auto lanesOverlap = [](int laneA, int widthA, int laneB, int widthB) -> bool {
+        return laneA <= laneB + widthB - 1 && laneB <= laneA + widthA - 1;
+    };
+
+    // 時刻 t・レーン lane〜lane+width-1 に type のノーツを置くと、ほかのノーツと重なるか
+    //   既存のロングは [始点, 終点] の全体を占めているとみなす
+    auto keyPlaceBlocked = [&](int lane, int width, int type, int32_t t) -> bool {
+        if(!isSolidType(type)) return false;
+        for(const auto& n : currentDiff().notes){
+            if(!isSolidType(n.noteTypeInt)) continue;
+            if(!lanesOverlap(lane, width, n.lane, n.width)) continue;
+            if(t >= n.time && t <= n.time + n.duration) return true;
+        }
+        return false;
+    };
+
+    // ロングを伸ばすとき、ぶつかる相手：start より後にある、同じレーンの重なってはいけないノーツの始点のうち一番近いもの
+    //   なければ int32_t の最大値
+    auto nextBlockingHead = [&](int lane, int width, int type, int32_t start, size_t selfIndex) -> int32_t {
+        int32_t best = std::numeric_limits<int32_t>::max();
+        if(!isSolidType(type)) return best;
+        const auto& notes = currentDiff().notes;
+        for(size_t j = 0; j < notes.size(); j++){
+            if(j == selfIndex) continue;
+            const auto& n = notes[j];
+            if(!isSolidType(n.noteTypeInt)) continue;
+            if(!lanesOverlap(lane, width, n.lane, n.width)) continue;
+            if(n.time > start) best = std::min(best, n.time);
+        }
+        return best;
+    };
+
+    // keyHolds[k] が指しているノーツ。もう同じノーツでなければ nullptr
+    auto holdNote = [&](const KeyHold& h) -> EditorNote* {
+        if(!h.active || h.diff != currentDiffIndex) return nullptr;
+        auto& notes = currentDiff().notes;
+        if(h.index >= notes.size()) return nullptr;
+        EditorNote& n = notes[h.index];
+        if(n.time != h.start || n.lane != h.lane || !n.isLong()) return nullptr;
+        return &n;
+    };
+
+    // レーンのキー keyLane が押された：ノーツを置く
+    auto keyPlaceNote = [&](int keyLane, uint32_t nowTicks){
+        const editorui::PaletteItem& pal = editorui::PALETTE[paletteIndex];
+        const int width = std::clamp(toolWidth, 1, 6);
+        const int lane = std::min(keyLane, 6 - width);   // 右にはみ出すときは左にずらす
+
+        const int32_t t = std::max<int32_t>(0, snapToGrid(scrollTimeMs));
+        if(keyPlaceBlocked(lane, width, pal.type, t)) return;   // 重なるなら置かない
+
+        EditorNote n;
+        n.noteTypeInt = pal.type;
+        n.lane = lane;
+        n.width = width;
+        n.time = t;
+        n.duration = 0;
+        n.hasCustomSpeed = toolHasCustomSpeed;
+        n.customSpeed = toolCustomSpeed;
+
+        if(pal.isLong){
+            // まずは 1 マス分の長さで置き、押している間に伸ばす
+            n.duration = std::max<int32_t>(1, stepGrid(t, +1) - t);
+        }
+
+        currentDiff().notes.push_back(n);
+        const size_t idx = currentDiff().notes.size() - 1;
+        selectedNoteIndex = static_cast<int>(idx);
+
+        if(pal.isLong){
+            KeyHold& h = keyHolds[keyLane];
+            h.active = true;
+            h.diff = currentDiffIndex;
+            h.index = idx;
+            h.start = t;
+            h.lane = lane;
+        }
+
+        // 手応え：置いた音と判定ボックスの光
+        //   再生中で、置いた位置がまだ判定ラインより先（未来）なら、そこを通るときにプレビューが鳴らすので鳴らさない
+        if(!(isPlaying && t > scrollTimeMs)){
+            FlashEffect fx;
+            fx.lane = lane;
+            fx.width = width;
+            fx.spawnTime = nowTicks;
+            flashEffects.push_back(fx);
+            Mix_Chunk* se = (pal.type == 5 && !pal.isLong && tap_sound_c) ? tap_sound_c : tap_sound;
+            if(se) Mix_PlayChannel(-1, se, 0);
+        }
+    };
+
+    // 押している間のロングを、判定ラインに一番近いグリッド線まで伸ばす（毎フレーム）
+    auto updateKeyHolds = [&](){
+        for(int k = 0; k < 6; k++){
+            KeyHold& h = keyHolds[k];
+            if(!h.active) continue;
+            EditorNote* n = holdNote(h);
+            if(!n){ h.active = false; continue; }   // 消された・動かされた・難易度を変えた
+
+            const int32_t minEnd = std::max<int32_t>(h.start + 1, stepGrid(h.start, +1));   // 最低 1 マス
+            int32_t end = std::max(minEnd, snapToGrid(scrollTimeMs));
+
+            // 前にある重なってはいけないノーツの手前（1 マス前）で止める
+            const int32_t limit = nextBlockingHead(n->lane, n->width, n->noteTypeInt, h.start, h.index);
+            if(limit != std::numeric_limits<int32_t>::max()){
+                const int32_t cap = stepGrid(limit, -1);
+                end = (cap >= minEnd) ? std::min(end, cap) : minEnd;
+            }
+            n->duration = end - h.start;
+        }
+    };
+
+    MusicAnalysis musicResult;          // Music Settings の結果（画面に出す用）
+    bool hasMusicResult = false;
     BpmAnalysisResult bpmResult;
     bool hasBpmResult = false;
     TempoMapResult tempoMap;
@@ -777,9 +1430,29 @@ GameScene chartCreateScene(SDL_Window* window, SDL_Renderer* renderer, std::stri
                 if(eventMenuOpen){
                     eventMenuCloseRequest = true;   // メニューが開いているときは、メニューを閉じるだけ
                 }
+                else if(selectMenuOpen){
+                    selectMenuCloseRequest = true;  // 範囲選択のメニューも同じく、閉じるだけ
+                }
                 else{
                     running = false;
                     nextScene = GameScene::Select;
+                }
+            }
+
+            // ----- キーボード配置モード -----
+            //   Ctrl+K：モードの ON/OFF（入力欄で文字を打っている最中でも切り替えられる）
+            //   モード中は、レーンのキーを最優先にする。
+            //   レーンのキーに W・S・M・1〜7・Space などが入っていても、下のショートカットには流さない
+            //   （Ctrl 付きの操作と Esc はそのまま使える。ノーツを置く処理はイベントループの後で行う）
+            if(e.type == SDL_KEYDOWN){
+                const bool ctrlNow = (SDL_GetModState() & KMOD_CTRL) != 0;
+                if(ctrlNow && e.key.repeat == 0 && e.key.keysym.sym == SDLK_k){
+                    setKeyboardMode(!keyboardMode);
+                    continue;
+                }
+                if(keyboardMode && !ctrlNow && !io.WantTextInput &&
+                   e.key.keysym.sym != SDLK_ESCAPE && isLaneKey(e.key.keysym.scancode)){
+                    continue;
                 }
             }
 
@@ -790,6 +1463,12 @@ GameScene chartCreateScene(SDL_Window* window, SDL_Renderer* renderer, std::stri
 
             if(!imguiWantsKeyBoard && e.type == SDL_KEYDOWN && e.key.repeat == 0 && e.key.keysym.sym == SDLK_SPACE){
                 togglePlayback();
+            }
+
+            // M キー：メトロノームの ON/OFF
+            if(!imguiWantsKeyBoard && e.type == SDL_KEYDOWN && e.key.repeat == 0 && e.key.keysym.sym == SDLK_m &&
+               (SDL_GetModState() & KMOD_CTRL) == 0){
+                metronomeOn = !metronomeOn;
             }
 
             // 1〜7 キー：パレットのマスを選ぶ
@@ -806,6 +1485,18 @@ GameScene chartCreateScene(SDL_Window* window, SDL_Renderer* renderer, std::stri
                 saveToastOk = saveChart(savePathBuf, meta, difficulties);
                 saveToastTicks = SDL_GetTicks();
                 continue;   // 下の「S = 1マス戻る」には流さない
+            }
+
+            // 範囲選択の操作
+            //   入力欄で文字を打っている最中は、ImGui 側の Ctrl+C / V（文字のコピペ）を優先する
+            //   ドラッグ中に押されるとノーツの番号がずれるので、ドラッグしていないときだけ
+            if(!imguiWantsKeyBoard && e.type == SDL_KEYDOWN && e.key.repeat == 0 &&
+               dragMode == DragMode::None && !boxSelecting){
+                const SDL_Keycode key = e.key.keysym.sym;
+                if(ctrlDown && key == SDLK_c){ copySelection();   continue; }
+                if(ctrlDown && key == SDLK_v){ pasteClipboard();  continue; }
+                if(ctrlDown && key == SDLK_r){ mirrorSelection(); continue; }
+                if(key == SDLK_DELETE){        deleteSelection(); continue; }
             }
 
             if(!imguiWantsKeyBoard && !ctrlDown && e.type == SDL_KEYDOWN && e.key.repeat == 0 && (e.key.keysym.sym == SDLK_w || e.key.keysym.sym == SDLK_s)){
@@ -844,6 +1535,18 @@ GameScene chartCreateScene(SDL_Window* window, SDL_Renderer* renderer, std::stri
             if(!imguiWantsMouse && e.type == SDL_MOUSEBUTTONDOWN){
                 int mx = e.button.x;
                 int my = e.button.y;
+
+                // Shift + 左ドラッグ：範囲選択を始める（イベント線を掴む・ノーツを置くより優先）
+                const bool shiftHeld = (SDL_GetModState() & KMOD_SHIFT) != 0;
+                if(shiftHeld && e.button.button == SDL_BUTTON_LEFT){
+                    boxSelecting = true;
+                    boxStartTime = scrollTimeMs + (judgeY - my) / effectivePixelsPerMs;
+                    boxStartX = mx;
+                    boxNowX = mx;
+                    boxNowY = my;
+                    selectedNoteIndex = -1;
+                    continue;   // このクリックではノーツを置かない
+                }
 
                 bool grabbedEventLine = false;
                 if(e.button.button == SDL_BUTTON_LEFT){
@@ -925,11 +1628,35 @@ GameScene chartCreateScene(SDL_Window* window, SDL_Renderer* renderer, std::stri
                                 }
 
                                 if(hitIndex >= 0){
-                                    selectedNoteIndex = hitIndex;
-                                    dragMode = DragMode::MoveNote;
-                                    dragNoteIndex = hitIndex;
+                                    const auto& notesRef = currentDiff().notes;
+                                    if(notesRef[hitIndex].selected && countSelected() >= 2){
+                                        // 範囲選択に入っているノーツを掴んだ → 選んだもの全部を動かす
+                                        dragMode = DragMode::MoveSelection;
+                                        moveOrigins.clear();
+                                        for(size_t i = 0; i < notesRef.size(); i++){
+                                            if(!notesRef[i].selected) continue;
+                                            MoveOrigin o;
+                                            o.index = i;
+                                            o.time = notesRef[i].time;
+                                            o.lane = notesRef[i].lane;
+                                            for(const auto& k : notesRef[i].path) o.pathTimes.push_back(k.time);
+                                            moveOrigins.push_back(o);
+                                        }
+                                        moveAnchorTime = snappedTime;
+                                        moveAnchorLane = clickedLane;
+                                        selectedNoteIndex = -1;
+                                    }
+                                    else{
+                                        // 選ばれていないノーツを普通にクリック → 範囲選択は解除して、今までどおり1個だけ動かす
+                                        clearSelection();
+                                        selectedNoteIndex = hitIndex;
+                                        dragMode = DragMode::MoveNote;
+                                        dragNoteIndex = hitIndex;
+                                    }
                                 }
                                 else{
+                                    clearSelection();   // 空いている場所をクリック → 範囲選択は外す
+
                                     EditorNote newNote;
                                     // 置くノーツの種類・ロングかどうかはパレットで選んだマスで決まる
                                     toolNotetype = editorui::PALETTE[paletteIndex].type;
@@ -949,10 +1676,17 @@ GameScene chartCreateScene(SDL_Window* window, SDL_Renderer* renderer, std::stri
                             }
                         }
                         else if(e.button.button == SDL_BUTTON_RIGHT){
-                            bool erasedNote = false;
+                            bool erasedNote = false;   // ノーツの上を右クリックした（＝イベントメニューは出さない）
                             for(size_t idx = 0; idx < currentDiff().notes.size(); idx++){
                                 const auto& n = currentDiff().notes[idx];
                                 if(clickedLane >= n.lane && clickedLane <= n.lane + n.width - 1 && std::abs(n.time - snappedTime) < gridMs / 2){
+                                    // 範囲選択に入っているノーツを右クリック → 消さずに、範囲選択のメニューを開き直す
+                                    if(n.selected){
+                                        selectMenuRequest = true;
+                                        selectMenuPos = ImVec2(static_cast<float>(mx), static_cast<float>(my));
+                                        erasedNote = true;
+                                        break;
+                                    }
                                     currentDiff().notes.erase(currentDiff().notes.begin() + idx);
                                     if(selectedNoteIndex == static_cast<int>(idx)) selectedNoteIndex = -1;
                                     else if(selectedNoteIndex > static_cast<int>(idx)) selectedNoteIndex--;   // 前が消えたら番号を詰める
@@ -969,10 +1703,17 @@ GameScene chartCreateScene(SDL_Window* window, SDL_Renderer* renderer, std::stri
                                 eventMenuTime = snappedTime;
                                 eventMenuPos = ImVec2(static_cast<float>(mx), static_cast<float>(my));
                                 eventMenuBpm = getCurrentBpm(snappedTime);   // 入力欄の初期値：その位置の今の BPM
+                                timeSigAt(currentDiff(), snappedTime, eventMenuSigNum, eventMenuSigDen);   // 拍子も今のもの
                             }
                         }
                     }
                 }
+            }
+
+            // 範囲選択中：今のマウス位置を覚えておく（判定は毎フレーム updateBoxSelection で行う）
+            if(e.type == SDL_MOUSEMOTION && boxSelecting){
+                boxNowX = e.motion.x;
+                boxNowY = e.motion.y;
             }
 
             if(e.type == SDL_MOUSEMOTION && dragMode != DragMode::None){
@@ -1039,6 +1780,30 @@ GameScene chartCreateScene(SDL_Window* window, SDL_Renderer* renderer, std::stri
                         ev.duration = std::max(minDuration, newDuration);
                     }
                 }
+                else if(dragMode == DragMode::MoveSelection){
+                    auto& notes = currentDiff().notes;
+                    int32_t dt = snappedTime - moveAnchorTime;
+                    int dl = laneAtX(e.motion.x) - moveAnchorLane;
+
+                    // 1個でもはみ出すなら、ずれ量を減らす → 全体が形を保ったまま端で止まる
+                    for(const auto& o : moveOrigins){
+                        if(o.index >= notes.size()) continue;
+                        const int w = notes[o.index].width;
+                        dl = std::clamp(dl, -o.lane, (6 - w) - o.lane);
+                        if(o.time + dt < 0) dt = -o.time;
+                    }
+
+                    // 「掴んだ瞬間の位置 + ずれ量」で毎回計算し直す（足し続けないので誤差がたまらない）
+                    for(const auto& o : moveOrigins){
+                        if(o.index >= notes.size()) continue;
+                        EditorNote& n = notes[o.index];
+                        n.time = o.time + dt;
+                        n.lane = o.lane + dl;
+                        for(size_t k = 0; k < n.path.size() && k < o.pathTimes.size(); k++){
+                            n.path[k].time = o.pathTimes[k] + dt;
+                        }
+                    }
+                }
             }
 
             if(e.type == SDL_MOUSEBUTTONUP && e.button.button == SDL_BUTTON_LEFT){
@@ -1051,12 +1816,59 @@ GameScene chartCreateScene(SDL_Window* window, SDL_Renderer* renderer, std::stri
                         [](const EditorBpmEvent& a, const EditorBpmEvent& b){ return a.time < b.time; });
                 }
 
+                // 範囲選択を終えた → 何か選べていたら、離した位置にメニューを出す
+                //   ここは ImGui のフレームの外なので「予約」だけして、開くのは ImGui のフレームの中で行う
+                if(boxSelecting){
+                    boxNowX = e.button.x;
+                    boxNowY = e.button.y;
+                    updateBoxSelection(effectivePixelsPerMs);   // 離した瞬間の位置で選び直す（最後の1フレーム分のずれを防ぐ）
+                    if(countSelected() > 0){
+                        selectMenuRequest = true;
+                        selectMenuPos = ImVec2(static_cast<float>(e.button.x), static_cast<float>(e.button.y));
+                    }
+                }
+
+                boxSelecting = false;
+                moveOrigins.clear();
                 dragMode = DragMode::None;
                 dragNoteIndex = -1;
                 dragEventIndex = -1;
             }
         }
         if(selectedNoteIndex >= static_cast<int>(currentDiff().notes.size())) selectedNoteIndex = -1;
+
+        // 範囲選択中は毎フレーム判定し直す（マウスを止めたままホイールでスクロールしても追いかける）
+        if(boxSelecting) updateBoxSelection(effectivePixelsPerMs);
+
+        // =================================================================
+        //  キーボード配置モード：レーンのキーの状態を見て、置く・伸ばす・離す
+        //    ・入力欄で文字を打っている最中、Ctrl / Alt を押している間、メニューが開いている間は置かない
+        //      （Ctrl+K の K がレーンのキーでも、ノーツが置かれないように）
+        //    ・状態（kbPrev）は置かないときも毎フレーム更新する。こうしないと、Ctrl を離した瞬間に
+        //      押しっぱなしのキーが「今押された」と判定されてしまう
+        // =================================================================
+        if(keyboardMode){
+            InputDevices::get().refresh();   // コントローラーの抜き差しに合わせる（プレイ画面と同じ）
+            const Uint8* ks = SDL_GetKeyboardState(nullptr);
+            const bool modBlocked = (SDL_GetModState() & (KMOD_CTRL | KMOD_ALT)) != 0;
+            const bool canPlace = !io.WantTextInput && !modBlocked && !eventMenuOpen && !selectMenuOpen;
+
+            for(int i = 0; i < 6; i++){
+                const bool pressed = !io.WantTextInput && isBindingPressed(editorSettings.laneBindings[i], ks);
+
+                if(pressed && !kbPrev[i] && canPlace){
+                    keyPlaceNote(i, nowTicks);               // 押した瞬間：置く
+                }
+                if(!pressed && kbPrev[i]){
+                    kbReleaseTicks[i] = nowTicks;            // 離した瞬間：ビームを消し始める
+                    keyHolds[i].active = false;              // ロングはここで長さが決まる
+                }
+                kbPrev[i] = pressed;
+                kbHeld[i] = pressed;
+            }
+
+            updateKeyHolds();   // 押している間のロングを伸ばす
+        }
 
         //オートプレイ : プレビュー
         if(isPlaying){
@@ -1072,6 +1884,38 @@ GameScene chartCreateScene(SDL_Window* window, SDL_Renderer* renderer, std::stri
                 }
             }
         }
+        // ----- メトロノーム：前のフレームから今のフレームまでに過ぎた拍で鳴らす -----
+        //   拍 = 拍子の分母の音符（4/4 なら 4 分、7/8 なら 8 分）。区切り（曲の始まり・BPM イベント）ごとに小節を数え直す
+        if(isPlaying && metronomeOn){
+            const double t0 = metronomePrevMs;
+            const double t1 = static_cast<double>(scrollTimeMs);
+            // 進んでいない、または大きく飛んだ（再生中にホイールで動かした）ときは鳴らさない
+            if(t1 > t0 && t1 - t0 < 250.0){
+                const TempoMap tm = currentTempoMap();
+                const std::vector<SigSeg> segs = buildSigSegs(currentDiff(), tm);
+                const double b0 = tempoBeatAt(tm, t0);
+                const double b1 = tempoBeatAt(tm, t1);
+                for(size_t si = 0; si < segs.size(); si++){
+                    const SigSeg& sg = segs[si];
+                    const double segEnd = (si + 1 < segs.size()) ? segs[si + 1].beat : std::numeric_limits<double>::infinity();
+                    if(segEnd <= b0 || sg.beat > b1) continue;
+
+                    const double unit = 4.0 / sg.den;   // 1 拍が 4 分音符いくつ分か
+                    // (b0, b1] に入る拍だけ
+                    long j = std::max(0L, static_cast<long>(std::floor((b0 - sg.beat) / unit + 1.0e-9)) + 1);
+                    if(b0 < sg.beat) j = 0;
+                    for(; ; j++){
+                        const double beat = sg.beat + j * unit;
+                        if(beat > b1 + 1.0e-9 || beat >= segEnd - 1.0e-9) break;
+                        if(beat <= b0 + 1.0e-9) continue;
+                        const bool barHead = (j % sg.num) == 0;
+                        metronome.play(MetronomeSounds::kindFor(sg.den), barHead, metronomeVolume);
+                    }
+                }
+            }
+        }
+        metronomePrevMs = static_cast<double>(scrollTimeMs);
+
         std::erase_if(flashEffects, [nowTicks](const FlashEffect& fx){
             return (nowTicks - fx.spawnTime) > 200;
         });
@@ -1142,17 +1986,22 @@ GameScene chartCreateScene(SDL_Window* window, SDL_Renderer* renderer, std::stri
             ImGui::TextColored(ImVec4(0.31f, 0.86f, 1.0f, 1.0f), "BPM");
             ImGui::InputDouble("BPM##ctx", &eventMenuBpm, 1.0, 10.0, "%.3f");
             if(eventMenuBpm <= 0.0) eventMenuBpm = 1.0;
+            timeSigInput("sig##ctx", eventMenuSigNum, eventMenuSigDen);
 
             if(ImGui::Button("BPM を追加", ImVec2(200.0f, 0.0f))){
                 auto& evs = currentDiff().bpmEvents;
                 auto it = std::find_if(evs.begin(), evs.end(), [&](const EditorBpmEvent& b){ return b.time == eventMenuTime; });
                 if(it != evs.end()){
                     it->bpm = eventMenuBpm;
+                    it->sigNum = eventMenuSigNum;
+                    it->sigDen = eventMenuSigDen;
                 }
                 else{
                     EditorBpmEvent b;
                     b.time = eventMenuTime;
                     b.bpm = eventMenuBpm;
+                    b.sigNum = eventMenuSigNum;
+                    b.sigDen = eventMenuSigDen;
                     evs.push_back(b);
                 }
                 std::sort(evs.begin(), evs.end(), [](const EditorBpmEvent& a, const EditorBpmEvent& b){ return a.time < b.time; });
@@ -1180,9 +2029,6 @@ GameScene chartCreateScene(SDL_Window* window, SDL_Renderer* renderer, std::stri
         }
         eventMenuCloseRequest = false;
 
-        // =================================================================
-        //  左上：TOOL（新しく置くノーツの設定）
-        // =================================================================
         // =================================================================
         //  レーンの左：NOTES（ノーツのパレット）
         //    中身が欄より縦に長いので、ImGui が自動でスクロールできる窓にしてくれる。
@@ -1212,6 +2058,74 @@ GameScene chartCreateScene(SDL_Window* window, SDL_Renderer* renderer, std::stri
         toolIsLong = editorui::PALETTE[paletteIndex].isLong;
 
         // =================================================================
+        //  範囲選択のメニュー（右クリックメニューと同じ出方）
+        //    ・Shift+ドラッグを離した位置／選んだノーツを右クリックした位置にポップアップで出る
+        //    ・メニューの外をクリックする、Esc を押す、ボタンを押すと閉じる
+        //    ※ ImGui のウィンドウなので、必ず NewFrame 〜 Render の間（ここ）で作る
+        // =================================================================
+        if(selectMenuRequest){
+            ImGui::OpenPopup("##selectmenu");
+            ImGui::SetNextWindowPos(selectMenuPos, ImGuiCond_Always);   // マウスの位置に出す
+            selectMenuRequest = false;
+        }
+        ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, ImVec2(16.0f, 14.0f));
+        selectMenuOpen = ImGui::BeginPopup("##selectmenu");
+        ImGui::PopStyleVar();
+        if(selectMenuOpen){
+            // 右クリックメニューと同じシアンの枠
+            {
+                ImDrawList* dl = ImGui::GetWindowDrawList();
+                const ImVec2 wp = ImGui::GetWindowPos();
+                const ImVec2 ws = ImGui::GetWindowSize();
+                dl->PushClipRectFullScreen();
+                dl->AddRect(ImVec2(wp.x + 1.5f, wp.y + 1.5f), ImVec2(wp.x + ws.x - 1.5f, wp.y + ws.y - 1.5f),
+                            editorui::COL_ACCENT, 0.0f, 0, 3.0f);
+                dl->PopClipRect();
+            }
+
+            const int selCount = countSelected();
+
+            // Esc が押された／キー操作（Delete など）で選択がなくなった → 閉じる
+            if(selectMenuCloseRequest || selCount == 0){
+                ImGui::CloseCurrentPopup();
+            }
+
+            ImGui::Text("%d 個を選択中", selCount);
+            ImGui::Separator();
+
+            ImGui::TextColored(ImVec4(0.0f, 0.86f, 1.0f, 1.0f), "SELECT");
+
+            // ボタン＋右にキーの説明。押せないときは灰色にする。押したらメニューを閉じる
+            auto opButton = [&](const char* label, const char* keyHint, bool enabled) -> bool {
+                if(!enabled) ImGui::BeginDisabled();
+                const bool pressed = ImGui::Button(label, ImVec2(200.0f, 0.0f));
+                if(!enabled) ImGui::EndDisabled();
+                ImGui::SameLine();
+                ImGui::TextDisabled("%s", keyHint);
+                if(pressed) ImGui::CloseCurrentPopup();
+                return pressed;
+            };
+
+            if(opButton("コピー",   "Ctrl+C", true))               copySelection();
+            if(opButton("貼り付け", "Ctrl+V", !clipboard.empty())) pasteClipboard();
+            if(opButton("左右反転", "Ctrl+R", true))               mirrorSelection();
+            if(opButton("削除",     "Delete", true))               deleteSelection();
+
+            ImGui::Separator();
+            if(ImGui::Button("選択解除", ImVec2(200.0f, 0.0f))){
+                clearSelection();
+                ImGui::CloseCurrentPopup();
+            }
+
+            ImGui::TextDisabled("貼り付けは判定ラインの位置に入ります");
+            ImGui::TextDisabled("選んだノーツはドラッグでまとめて移動");
+            ImGui::TextDisabled("選んだノーツを右クリックで再表示");
+
+            ImGui::EndPopup();
+        }
+        selectMenuCloseRequest = false;
+
+        // =================================================================
         //  左上：TOOL（新しく置くノーツの設定）
         // =================================================================
         editorui::beginPanel("##tool", "TOOL", editorui::TOOL_RECT);
@@ -1229,16 +2143,58 @@ GameScene chartCreateScene(SDL_Window* window, SDL_Renderer* renderer, std::stri
                 ImGui::InputDouble("速度##tool", &toolCustomSpeed, 0.1, 1.0, "%.2f");
             }
 
-            const char* gridNames[] = {"4", "6", "8", "12", "16","24", "32", "48", "64", "96", "128", "1920"};
-            int gridValue[] = {4, 6, 8, 12, 16, 24, 32, 48, 64, 96, 128, 1920};
-            int gridComboIndex = 0;
-            for(int gi = 0; gi < 12; gi++) if(gridValue[gi] == gridDivisor) gridComboIndex = gi;
-            if(ImGui::Combo("スナップ（分）##tool", &gridComboIndex, gridNames, 12)){
-                gridDivisor = gridValue[gridComboIndex];
+            // ----- スナップ：一覧から選ぶ ＋ 一番下の「自由入力」で好きな分割数を打てる -----
+            //   コンボの一番下（1920 の下）が「自由入力」。選ぶと右に数字の入力欄が出る
+            //   入力欄は +/- ボタンなし（パネルの横幅に収めるため）。キーボードで打つ
+            {
+                static const char* gridNames[] = {"4", "6", "8", "12", "16", "24", "32", "48", "64", "96", "128", "1920", "自由入力"};
+                static const int   gridValue[] = {4, 6, 8, 12, 16, 24, 32, 48, 64, 96, 128, 1920};
+                constexpr int GRID_PRESET_COUNT = static_cast<int>(sizeof(gridValue) / sizeof(gridValue[0]));
+                constexpr int GRID_CUSTOM_INDEX = GRID_PRESET_COUNT;   // 「自由入力」の番号（一覧の一番下）
+
+                // 今のコンボの位置：自由入力中ならいちばん下。そうでなければ一覧から同じ値を探す
+                int gridComboIndex = GRID_CUSTOM_INDEX;
+                if(!gridCustom){
+                    for(int gi = 0; gi < GRID_PRESET_COUNT; gi++){
+                        if(gridValue[gi] == gridDivisor){
+                            gridComboIndex = gi;
+                            break;
+                        }
+                    }
+                }
+
+                ImGui::SetNextItemWidth(gridCustom ? 120.0f : 160.0f);
+                if(ImGui::Combo("##snapcombo", &gridComboIndex, gridNames, GRID_PRESET_COUNT + 1)){
+                    if(gridComboIndex == GRID_CUSTOM_INDEX){
+                        gridCustom = true;
+                        gridDivisor = customGridDivisor;   // 前に打った値から始める
+                    }
+                    else{
+                        gridCustom = false;
+                        gridDivisor = gridValue[gridComboIndex];
+                    }
+                }
+
+                if(gridCustom){
+                    ImGui::SameLine();
+                    ImGui::SetNextItemWidth(80.0f);
+                    ImGui::InputInt("##snapcustom", &customGridDivisor, 0, 0);
+                    customGridDivisor = std::clamp(customGridDivisor, 1, GRID_DIVISOR_MAX);
+                    gridDivisor = customGridDivisor;   // 打った値をそのままスナップに使う
+                }
+
+                ImGui::SameLine();
+                ImGui::TextUnformatted("分スナップ");
             }
 
-            ImGui::TextDisabled("左クリック: 置く/選ぶ  右: 消す");
-            ImGui::TextDisabled("1〜7: ノーツ  Ctrl+ホイール: 拡大");
+            // キーボード配置モード（Ctrl+K と同じ）
+            bool kbModeCheck = keyboardMode;
+            if(ImGui::Checkbox("キーボード配置 (Ctrl+K)##tool", &kbModeCheck)){
+                setKeyboardMode(kbModeCheck);
+            }
+
+            ImGui::TextDisabled("左:置く/選ぶ 右:消す 1〜7:ノーツ");
+            ImGui::TextDisabled("Shift+ドラッグ:範囲選択 Ctrl+ホイール:拡大");
         }
         ImGui::End();
 
@@ -1252,7 +2208,26 @@ GameScene chartCreateScene(SDL_Window* window, SDL_Renderer* renderer, std::stri
                 newDiff.name = "NEW";
                 newDiff.level = "0";
                 newDiff.chartCreator = currentDiff().chartCreator;
+
+                // テンポは親（今編集している難易度）と同じにする
+                //   ・曲頭の BPM と拍子
+                //   ・BPM イベント（時刻・BPM・拍子をそのまま写す → 同じ位置に小節線・グリッドが来る）
+                //   ノーツと SPEED イベントは写さない（子の譜面は空から作る）
                 newDiff.bpm = currentDiff().bpm;
+                newDiff.sigNum = currentDiff().sigNum;
+                newDiff.sigDen = currentDiff().sigDen;
+                newDiff.bpmEvents = currentDiff().bpmEvents;
+                std::stable_sort(newDiff.bpmEvents.begin(), newDiff.bpmEvents.end(),
+                    [](const EditorBpmEvent& a, const EditorBpmEvent& b){ return a.time < b.time; });
+
+                // 「今のテンポ表 = 合わせ済み」にしておく（写した直後にノーツ追従の処理が走らないように）
+                {
+                    std::vector<TempoPoint> pts;
+                    for(const auto& b : newDiff.bpmEvents) pts.push_back({static_cast<double>(b.time), b.bpm});
+                    newDiff.alignedMap = makeTempoMap(newDiff.bpm, pts);
+                    newDiff.tempoAligned = true;
+                }
+
                 difficulties.push_back(newDiff);
 
                 currentDiffIndex = static_cast<int>(difficulties.size()) - 1;
@@ -1308,6 +2283,7 @@ GameScene chartCreateScene(SDL_Window* window, SDL_Renderer* renderer, std::stri
 
             ImGui::InputDouble("BPM##diff", &currentDiff().bpm, 1.0, 10.0, "%.3f");
             if(currentDiff().bpm <= 0.0) currentDiff().bpm = 1.0;
+            timeSigInput("sig##diff", currentDiff().sigNum, currentDiff().sigDen);
         }
         ImGui::End();
 
@@ -1348,6 +2324,11 @@ GameScene chartCreateScene(SDL_Window* window, SDL_Renderer* renderer, std::stri
             ImGui::InputDouble("拡大率##play", &pixelsPerMs, 0.01, 0.1, "%.3f");
             if(pixelsPerMs < 0.02) pixelsPerMs = 0.02;
             if(pixelsPerMs > 3.0) pixelsPerMs = 3.0;
+
+            ImGui::Checkbox("メトロノーム (M)##play", &metronomeOn);
+            ImGui::SameLine();
+            ImGui::SetNextItemWidth(140.0f);
+            ImGui::SliderInt("音量##metronome", &metronomeVolume, 0, 100);
 
             ImGui::InputInt("再生開始の遅れ(ms)##play", &editorAudioLatencyMs, 1, 10);
             ImGui::TextDisabled("「先頭へ」から再生したときだけ使います");
@@ -1539,7 +2520,8 @@ GameScene chartCreateScene(SDL_Window* window, SDL_Renderer* renderer, std::stri
                 if(ImGui::Button("追加##bpm")){
                     EditorBpmEvent b;
                     b.time = scrollTimeMs;
-                    b.bpm = currentDiff().bpm;
+                    b.bpm = getCurrentBpm(scrollTimeMs);                        // 今の位置の BPM と拍子を初期値に
+                    timeSigAt(currentDiff(), scrollTimeMs, b.sigNum, b.sigDen);
                     currentDiff().bpmEvents.push_back(b);
                 }
 
@@ -1552,6 +2534,7 @@ GameScene chartCreateScene(SDL_Window* window, SDL_Renderer* renderer, std::stri
                     ImGui::InputInt("時刻(ms)##bpm", &b.time);
                     ImGui::InputDouble("BPM##bpm", &b.bpm, 1.0, 10.0, "%.3f");
                     if(b.bpm <= 0.0) b.bpm = 1.0;
+                    timeSigInput("sig##bpm", b.sigNum, b.sigDen);
                     if(ImGui::Button("削除##bpm")){
                         removeBpmIndex = static_cast<int>(idx);
                     }
@@ -1576,6 +2559,22 @@ GameScene chartCreateScene(SDL_Window* window, SDL_Renderer* renderer, std::stri
                 ImGui::InputDouble("オフセット(ms)##file", &meta.offsetMs, 1.0, 10.0, "%.1f");
                 ImGui::TextDisabled("- : 遅く  + : 早く");
 
+                // ----- 選曲画面の試聴 -----
+                ImGui::Separator();
+                ImGui::TextColored(ImVec4(0.31f, 1.0f, 0.55f, 1.0f), "PREVIEW（選曲画面の試聴）");
+                ImGui::InputDouble("試聴の開始(ms)##file", &meta.previewStartMs, 100.0, 1000.0, "%.0f");
+                if(meta.previewStartMs < 0.0) meta.previewStartMs = 0.0;
+
+                if(ImGui::Button("判定ラインの位置を試聴の開始にする##file")){
+                    // 譜面上の時刻 → 曲ファイル上の位置（seekMusicIfNeeded と同じ「音声位置 = 譜面時刻 + オフセット」）
+                    meta.previewStartMs = std::max(0.0, std::round(scrollTimeMs + meta.offsetMs));
+                }
+                if(ImGui::Button("試聴の開始へ移動##file")){
+                    scrollTimeMs = std::max<int32_t>(0, static_cast<int32_t>(std::lround(meta.previewStartMs - meta.offsetMs)));
+                    if(bgm) seekMusicIfNeeded(scrollTimeMs);
+                }
+                ImGui::TextDisabled("ここから %d 秒、フェードしながら繰り返し流れます", songpreview::LENGTH_MS / 1000);
+
                 ImGui::Separator();
                 ImGui::InputText("保存先##file", savePathBuf, sizeof(savePathBuf));
 
@@ -1593,6 +2592,54 @@ GameScene chartCreateScene(SDL_Window* window, SDL_Renderer* renderer, std::stri
                     selectedNoteIndex = -1;
                     dragMode = DragMode::None;
                     dragNoteIndex = -1;
+                }
+
+                // ----- Music Settings：オフセット → 曲全体の BPM → 途中の BPM 変化 を自動で設定（拍子は変えない） -----
+                ImGui::Separator();
+                ImGui::TextColored(ImVec4(0.0f, 0.86f, 1.0f, 1.0f), "MUSIC SETTINGS");
+                if(ImGui::Button("Music Settings（オフセットと BPM を自動設定）", ImVec2(-1.0f, 0.0f))){
+                    if(meta.bgm.empty()){
+                        musicResult = MusicAnalysis{};
+                        musicResult.error = "曲ファイル名が空です";
+                    }
+                    else{
+                        musicResult = analyzeMusic("sounds/" + meta.bgm);
+                        if(musicResult.ok){
+                            applyMusicAnalysis(musicResult, meta, difficulties);
+                            selectedNoteIndex = -1;
+                            dragMode = DragMode::None;
+                            dragNoteIndex = -1;
+                        }
+                    }
+                    hasMusicResult = true;
+                }
+                ImGui::TextDisabled("曲全体を解析します（数秒止まります）");
+                ImGui::TextDisabled("すべての難易度に反映され、元に戻せません");
+
+                if(hasMusicResult){
+                    if(!musicResult.ok){
+                        ImGui::TextColored(ImVec4(1.0f, 0.4f, 0.4f, 1.0f), "%s", musicResult.error.c_str());
+                    }
+                    else{
+                        ImGui::Text("オフセット: %.1f ms", meta.offsetMs);
+                        ImGui::Text("BPM: %.3f（拍のはっきりさ %.0f%%）", currentDiff().bpm, musicResult.clarity * 100.0);
+                        ImGui::TextDisabled("拍子は変えていません（今: %d/%d）", currentDiff().sigNum, currentDiff().sigDen);
+                        ImGui::TextDisabled("拍の間の音の型: %s", musicResult.pattern.c_str());
+                        if(currentDiff().bpmEvents.empty()){
+                            ImGui::Text("BPM の変化: なし");
+                        }
+                        else{
+                            ImGui::Text("BPM の変化: %zu か所", currentDiff().bpmEvents.size());
+                            for(const auto& b : currentDiff().bpmEvents){
+                                ImGui::Text("  %7d ms : %.3f BPM  %d/%d", b.time, b.bpm, b.sigNum, b.sigDen);
+                            }
+                        }
+
+                        // 倍テン・半テンの直し：ノーツの位置（ms）は変えずに、BPM の数え方だけ変える
+                        if(ImGui::SmallButton("BPM をすべて x2##music")) scaleAllBpm(2.0, difficulties);
+                        ImGui::SameLine();
+                        if(ImGui::SmallButton("BPM をすべて /2##music")) scaleAllBpm(0.5, difficulties);
+                    }
                 }
 
                 ImGui::Separator();
@@ -1707,31 +2754,24 @@ GameScene chartCreateScene(SDL_Window* window, SDL_Renderer* renderer, std::stri
                 const bool stillEditing = ImGui::IsAnyItemActive() || dragMode != DragMode::None;
                 if(!stillEditing){
                     if(moveNotesOnBpmChange){
-                        // BPMイベントの「時刻」自体が変わったかどうかで方針を分ける
-                        const bool timesUnchanged = tempoBreakpointsSameTimes(d.alignedMap, nowMap);
+                        // 1. BPM イベント自身を、拍の位置を保ったまま動かし、変えたあとのテンポ表を作る
+                        //    （値を変えた・追加した・時刻を直接変えた、のどの場合も同じ計算でよい）
+                        const TempoMap newMap = realignBpmEvents(d.alignedMap, d.bpm, d.bpmEvents);
 
+                        // 2. ノーツ：変える前の拍の位置 → 変えたあとのテンポ表での時刻
                         for(auto& n : d.notes){
-                            const int32_t newStart = remapTime(d.alignedMap, nowMap, n.time);
+                            const int32_t newStart = remapTime(d.alignedMap, newMap, n.time);
                             if(n.duration > 0){
-                                const int32_t newEnd = remapTime(d.alignedMap, nowMap, n.time + n.duration);
+                                const int32_t newEnd = remapTime(d.alignedMap, newMap, n.time + n.duration);
                                 n.duration = std::max<int32_t>(1, newEnd - newStart);
                             }
-                            for(auto& k : n.path) k.time = remapTime(d.alignedMap, nowMap, k.time);
+                            for(auto& k : n.path) k.time = remapTime(d.alignedMap, newMap, k.time);
                             n.time = newStart;
                         }
 
-                        // SpeedEventもノーツと同じように拍位置を保って追従させる
-                        for(auto& s : d.speedEvents){
-                            s.time = remapTime(d.alignedMap, nowMap, s.time);
-                        }
-
-                        // BPMイベント自身の時刻は、「値だけが変わった」場合に限って追従させる。
-                        // 時刻そのものが変わった(ドラッグ・直接入力)場合は、
-                        // その新しい時刻がユーザーの意図した位置そのものなので触らない。
-                        if(timesUnchanged){
-                            for(auto& b : d.bpmEvents){
-                                b.time = remapTime(d.alignedMap, nowMap, b.time);
-                            }
+                        // 3. SPEED イベントも同じように拍の位置を保って動かす
+                        for(auto& sev : d.speedEvents){
+                            sev.time = remapTime(d.alignedMap, newMap, sev.time);
                         }
                     }
 
@@ -1764,27 +2804,87 @@ GameScene chartCreateScene(SDL_Window* window, SDL_Renderer* renderer, std::stri
             SDL_RenderDrawLine(renderer, lx, 0, lx, SCREEN_H);
         }
 
-        // グリッド線（拍の線は明るく）
+        // グリッド線・小節線
+        //   どちらも区切り（曲の始まり・各 BPM イベント）ごとに、その先頭から数え直す
         {
             const TempoMap tm = currentTempoMap();
+            const std::vector<SigSeg> segs = buildSigSegs(currentDiff(), tm);
             const double gb = 4.0 / gridDivisor;   // グリッド1マスの拍数
 
             const double viewStartTime = scrollTimeMs - (SCREEN_H - judgeY) / effectivePixelsPerMs;
             const double viewEndTime   = scrollTimeMs + judgeY / effectivePixelsPerMs;
+            const double beat0 = tempoBeatAt(tm, viewStartTime);
+            const double beat1 = tempoBeatAt(tm, viewEndTime);
 
-            const long kFirst = static_cast<long>(std::floor(tempoBeatAt(tm, viewStartTime) / gb));
-            const long kLast  = static_cast<long>(std::ceil(tempoBeatAt(tm, viewEndTime) / gb));
-            if(kLast - kFirst < 20000){
+            // ----- グリッド線（拍の線は明るく） -----
+            long drawn = 0;
+            for(size_t si = 0; si < segs.size(); si++){
+                const SigSeg& sg = segs[si];
+                const double segEnd = sigSegEnd(segs, si);
+                if(segEnd <= beat0) continue;             // この区切りは画面より下（過去）
+                if(si > 0 && sg.beat > beat1) break;      // ここから先は画面より上（未来）
+
+                const double unit = 4.0 / sg.den;         // 拍子の 1 拍（4/4 なら 4 分、3/8 なら 8 分）
+                long kFirst = static_cast<long>(std::floor((beat0 - sg.beat) / gb));
+                if(si > 0) kFirst = std::max(0L, kFirst); // 曲の始まりより前（負の拍）は最初の区切りだけで描く
+                const long kLast = static_cast<long>(std::ceil((std::min(beat1, segEnd) - sg.beat) / gb));
+
                 for(long k = kFirst; k <= kLast; k++){
-                    const double beat = k * gb;
+                    if(++drawn > 20000) break;            // 拡大しすぎたときの保険
+                    const double beat = sg.beat + k * gb;
+                    if(beat >= segEnd - 1.0e-9) break;    // 境目の線は次の区切りが引く
+
                     const double t = tempoTimeAt(tm, beat);
                     const int gy = judgeY - static_cast<int>((t - scrollTimeMs) * effectivePixelsPerMs);
 
-                    const bool isBeatLine = std::abs(beat - std::round(beat)) < 1.0e-6;
+                    const double r = (beat - sg.beat) / unit;   // 区切りの先頭から何拍目か
+                    const bool isBeatLine = std::abs(r - std::round(r)) < 1.0e-6;
                     if(isBeatLine) SDL_SetRenderDrawColor(renderer, 120, 120, 140, 255);
                     else SDL_SetRenderDrawColor(renderer, 50, 50, 60, 255);
 
                     SDL_RenderDrawLine(renderer, startX, gy, lanesRight, gy);
+                }
+            }
+
+            // ----- 小節線（拍の線より明るく太く、左に小節番号） -----
+            {
+                ImFont* f = ImGui::GetFont();
+                long measureNo = 1;   // その区切りの最初の小節の番号
+                for(size_t si = 0; si < segs.size(); si++){
+                    const SigSeg& sg = segs[si];
+                    const double len = sg.num * 4.0 / sg.den;                    // 1 小節が 4 分音符いくつ分か
+                    const bool last = (si + 1 == segs.size());
+                    const double segEnd = last ? std::numeric_limits<double>::infinity() : segs[si + 1].beat;
+
+                    // この区切りに入る小節の数（最後の区切りは終わりなし）
+                    long count = last ? std::numeric_limits<long>::max()
+                                      : static_cast<long>(std::ceil((segEnd - sg.beat) / len - 1.0e-6));
+                    if(count < 1) count = 1;
+
+                    const long kMin = std::max(0L, static_cast<long>(std::floor((beat0 - sg.beat) / len)));
+                    const long kMax = std::min(count - 1, static_cast<long>(std::ceil((beat1 - sg.beat) / len)));
+                    if(kMax - kMin <= 5000){
+                        for(long k = kMin; k <= kMax; k++){
+                            const double beat = sg.beat + k * len;
+                            if(beat >= segEnd - 1.0e-9) break;
+                            const double t = tempoTimeAt(tm, beat);
+                            const int gy = judgeY - static_cast<int>((t - scrollTimeMs) * effectivePixelsPerMs);
+                            if(gy < -30 || gy > SCREEN_H + 30) continue;
+
+                            SDL_SetRenderDrawColor(renderer, 200, 200, 235, 255);
+                            SDL_Rect bar = {startX, gy - 1, lanesRight - startX, 2};
+                            SDL_RenderFillRect(renderer, &bar);
+
+                            // 小節番号。区切りの最初の小節には拍子も書く
+                            char label[32];
+                            if(k == 0) std::snprintf(label, sizeof(label), "%ld  %d/%d", measureNo + k, sg.num, sg.den);
+                            else       std::snprintf(label, sizeof(label), "%ld", measureNo + k);
+                            ImGui::GetBackgroundDrawList()->AddText(f, 15.0f,
+                                ImVec2(static_cast<float>(startX + 4), static_cast<float>(gy - 18)),
+                                IM_COL32(170, 170, 205, 255), label);
+                        }
+                    }
+                    if(!last) measureNo += count;
                 }
             }
         }
@@ -1829,10 +2929,34 @@ GameScene chartCreateScene(SDL_Window* window, SDL_Renderer* renderer, std::stri
             SDL_RenderFillRect(renderer, &thick);
 
             char buf[64];
-            snprintf(buf, sizeof(buf), "BPM %.1f", b.bpm);
+            snprintf(buf, sizeof(buf), "BPM %.1f  %d/%d", b.bpm, b.sigNum, b.sigDen);
             ImVec2 textSize = ImGui::CalcTextSize(buf);
             bgDraw->AddText(ImVec2(static_cast<float>(lanesRight - 6) - textSize.x, static_cast<float>(ly - 24)),
                             IM_COL32(80, 220, 255, 255), buf);
+        }
+
+        // ----- 選曲画面の試聴範囲：レーンの左に緑の縦帯、開始位置に線 -----
+        {
+            const double pStart = meta.previewStartMs - meta.offsetMs;   // 曲ファイル上の位置 → 譜面上の時刻
+            const double pEnd   = pStart + songpreview::LENGTH_MS;
+            const double yS = judgeY - (pStart - scrollTimeMs) * effectivePixelsPerMs;   // 開始（下側）
+            const double yE = judgeY - (pEnd   - scrollTimeMs) * effectivePixelsPerMs;   // 終了（上側）
+
+            if(yS > -20.0 && yE < SCREEN_H + 20.0){   // 一部でも画面に入っていれば描く
+                const int top    = static_cast<int>(std::clamp(yE, -20.0, static_cast<double>(SCREEN_H + 20)));
+                const int bottom = static_cast<int>(std::clamp(yS, -20.0, static_cast<double>(SCREEN_H + 20)));
+                SDL_SetRenderDrawColor(renderer, 80, 255, 140, 160);
+                SDL_Rect band = {startX - 12, top, 6, bottom - top};
+                SDL_RenderFillRect(renderer, &band);
+
+                if(yS <= SCREEN_H + 20.0){
+                    SDL_SetRenderDrawColor(renderer, 80, 255, 140, 200);
+                    SDL_Rect line = {startX, bottom - 1, lanesRight - startX, 2};
+                    SDL_RenderFillRect(renderer, &line);
+                    bgDraw->AddText(ImVec2(static_cast<float>(startX + 6), static_cast<float>(bottom + 4)),
+                                    IM_COL32(80, 255, 140, 255), "PREVIEW");
+                }
+            }
         }
 
         // ----- レーンノーツで消えている区間を暗くする -----
@@ -1911,6 +3035,39 @@ GameScene chartCreateScene(SDL_Window* window, SDL_Renderer* renderer, std::stri
                         SDL_RenderFillRect(renderer, &edge);
                     }
                 }
+            }
+        }
+
+        // ----- キーボード配置モード：キービーム -----
+        //   押している間、そのレーンの判定ラインから上へ、下が濃く上に行くほど透明になる光の柱を出す
+        //   離したら KEY_BEAM_FADE_MS かけて消える
+        //   色を頂点ごとに変えて GPU に混ぜてもらうため、SDL_RenderGeometry（4頂点＝2つの三角形）で描く
+        if(keyboardMode){
+            const float beamH = 420.0f;
+            for(int l = 0; l < 6; l++){
+                float a = 0.0f;
+                if(kbHeld[l]) a = 1.0f;
+                else if(kbReleaseTicks[l] != 0 && nowTicks - kbReleaseTicks[l] < KEY_BEAM_FADE_MS){
+                    a = 1.0f - static_cast<float>(nowTicks - kbReleaseTicks[l]) / KEY_BEAM_FADE_MS;
+                }
+                if(a <= 0.0f) continue;
+
+                const float x0 = static_cast<float>(laneX[l]) + NOTE_SIDE_MARGIN;
+                const float x1 = static_cast<float>(laneX[l] + laneWidth) - NOTE_SIDE_MARGIN;
+                const float yBottom = static_cast<float>(judgeY);
+                const float yTop = yBottom - beamH;
+                const Uint8 bottomAlpha = static_cast<Uint8>(90.0f * a);   // 「薄い」ビーム：一番濃いところでも 90/255
+
+                const SDL_Color top = {150, 230, 255, 0};
+                const SDL_Color bottom = {150, 230, 255, bottomAlpha};
+                SDL_Vertex v[4] = {
+                    {SDL_FPoint{x0, yTop},    top,    SDL_FPoint{0.0f, 0.0f}},
+                    {SDL_FPoint{x1, yTop},    top,    SDL_FPoint{0.0f, 0.0f}},
+                    {SDL_FPoint{x0, yBottom}, bottom, SDL_FPoint{0.0f, 0.0f}},
+                    {SDL_FPoint{x1, yBottom}, bottom, SDL_FPoint{0.0f, 0.0f}},
+                };
+                const int idx[6] = {0, 1, 2, 2, 1, 3};
+                SDL_RenderGeometry(renderer, nullptr, v, 4, idx, 6);
             }
         }
 
@@ -2001,7 +3158,7 @@ GameScene chartCreateScene(SDL_Window* window, SDL_Renderer* renderer, std::stri
                 const float noteW = static_cast<float>(laneWidth * n.width) - NOTE_SIDE_MARGIN * 2.0f;
                 const float noteH = NOTE_HEAD_H;
                 const float headTop = static_cast<float>(noteY) - noteH * 0.5f;
-                const bool selected = (static_cast<int>(idx) == selectedNoteIndex);
+                const bool selected = (static_cast<int>(idx) == selectedNoteIndex) || n.selected;
 
                 float bodyTop = headTop;   // 選択の縁取りの上端（ロングなら帯の上端）
 
@@ -2059,6 +3216,65 @@ GameScene chartCreateScene(SDL_Window* window, SDL_Renderer* renderer, std::stri
             handleBatch.flush(renderer);
             noteBatch.flush(renderer);
             selectBatch.flush(renderer);
+        }
+
+        // ----- キーボード配置モード：レーンの下にキーの名前 -----
+        //   判定ラインの少し下に、レーンごとの小さな枠を並べてキーの名前を書く
+        //   押している間は枠をシアンで塗り、文字を暗くする（キー設定画面の「色反転」と同じ考え方）
+        //   文字は ImGui の背景に描く（日本語フォントがそのまま使える。パネルより奥になる）
+        if(keyboardMode){
+            const int boxY = judgeY + 60;
+            const int boxH = 48;
+            ImFont* f = ImGui::GetFont();
+            for(int l = 0; l < 6; l++){
+                const SDL_Rect r = {laneX[l] + 6, boxY, laneWidth - 12, boxH};
+                if(kbHeld[l]){
+                    SDL_SetRenderDrawColor(renderer, 0, 200, 255, 200);
+                    SDL_RenderFillRect(renderer, &r);
+                    SDL_SetRenderDrawColor(renderer, 0, 255, 255, 255);
+                }
+                else{
+                    SDL_SetRenderDrawColor(renderer, 30, 30, 50, 200);
+                    SDL_RenderFillRect(renderer, &r);
+                    SDL_SetRenderDrawColor(renderer, 110, 110, 150, 255);
+                }
+                SDL_RenderDrawRect(renderer, &r);
+
+                // 長い名前（Left Shift など）は枠の幅に収まるまで文字を小さくする
+                const char* name = kbKeyNames[l].c_str();
+                float fs = 26.0f;
+                ImVec2 ts = f->CalcTextSizeA(fs, FLT_MAX, 0.0f, name);
+                const float maxW = static_cast<float>(r.w - 8);
+                if(ts.x > maxW && ts.x > 0.0f){
+                    fs *= maxW / ts.x;
+                    ts = f->CalcTextSizeA(fs, FLT_MAX, 0.0f, name);
+                }
+                bgDraw->AddText(f, fs,
+                                ImVec2(r.x + r.w * 0.5f - ts.x * 0.5f, r.y + r.h * 0.5f - ts.y * 0.5f),
+                                kbHeld[l] ? IM_COL32(15, 15, 25, 255) : IM_COL32(235, 235, 245, 255), name);
+            }
+
+            // モード中であることの表示
+            const char* modeText = "キーボード配置モード   Ctrl+K で終了";
+            const ImVec2 mts = f->CalcTextSizeA(18.0f, FLT_MAX, 0.0f, modeText);
+            bgDraw->AddText(f, 18.0f,
+                            ImVec2((startX + lanesRight) * 0.5f - mts.x * 0.5f, static_cast<float>(boxY + boxH + 14)),
+                            IM_COL32(0, 220, 255, 255), modeText);
+        }
+
+        // ----- 範囲選択の四角 -----
+        if(boxSelecting){
+            // 始点は時刻で覚えているので、今のスクロール位置で y に直す（int があふれないよう丸める）
+            const double y0d = judgeY - (boxStartTime - scrollTimeMs) * effectivePixelsPerMs;
+            const int y0 = static_cast<int>(std::clamp(y0d, -10000.0, 10000.0));
+            SDL_Rect r = {
+                std::min(boxStartX, boxNowX), std::min(y0, boxNowY),
+                std::abs(boxNowX - boxStartX), std::abs(boxNowY - y0)
+            };
+            SDL_SetRenderDrawColor(renderer, 0, 200, 255, 40);    // 中を薄いシアンで塗る
+            SDL_RenderFillRect(renderer, &r);
+            SDL_SetRenderDrawColor(renderer, 0, 255, 255, 220);   // 枠
+            SDL_RenderDrawRect(renderer, &r);
         }
 
         //ImGui描画をSDL描画に合成
@@ -2134,6 +3350,9 @@ GameScene chartCreateScene(SDL_Window* window, SDL_Renderer* renderer, std::stri
             //    プレイ中の時間が「1フレームの経過時間」として足されないように、時計を今に合わせる
             lastFrameticks = SDL_GetTicks();
             SDL_ShowCursor(SDL_ENABLE);
+
+            // テストプレイ中に押していたキーを「エディタに戻った瞬間に押された」と数えないように、今の状態に合わせ直す
+            if(keyboardMode) setKeyboardMode(true);
         }
     }
 
@@ -2147,6 +3366,8 @@ GameScene chartCreateScene(SDL_Window* window, SDL_Renderer* renderer, std::stri
     ImGui::DestroyContext();
     if(tap_sound) Mix_FreeChunk(tap_sound);
     if(tap_sound_c) Mix_FreeChunk(tap_sound_c);
+    Mix_HaltChannel(-1);   // 鳴っている途中のメトロノームの音を止めてから解放する
+    metronome.destroy();
 
     return nextScene;
 }

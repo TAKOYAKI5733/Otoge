@@ -2,8 +2,10 @@
 
 #include "GameCommon.h"
 #include "type.h"
+#include "Editortempo.h"   // 拍 ⇔ 時刻の変換（エディタのグリッド線と同じ計算を使う）
 #include <nlohmann/json.hpp>
 #include <utility>
+#include <cmath>
 
 using json = nlohmann::json;
 
@@ -54,34 +56,33 @@ inline std::vector<DifficultyInfo> listDifficulties(const std::string& filename)
 
 // =====================================================================
 //  ロングの中継点
-//    ・BPM の2倍の細かさ（= 8分音符、半拍）ごとに、ロングの始点から数えて置く
+//    ・曲全体で共通の 16分グリッド（時刻 0ms = 拍 0 から、BPM で刻んだ線）の上に置く
+//      → 同時に押しているロングは、同じ瞬間に中継点を取る
+//      → エディタの 16分のグリッド線と同じ位置になる（同じ Editortempo.h の計算を使う）
+//    ・BPM が途中で変わる譜面でも、拍で数えるので線の位置がずれない
 //    ・時刻は「譜面の時刻」で決めるので、いつ押し始めても数は変わらない
-//      → 全部つなげたときのコンボ数が、押すタイミングに関係なく一定になる
-//    ・BPM が途中で変わる譜面でも、その時点の BPM で次の間隔を決める
+//    ・始点・終点から半マス以内の線は使わない
+//      （始点の判定・終点の判定と、ほぼ同時に重ならないように）
 // =====================================================================
-inline constexpr double LONG_TICKS_PER_BEAT = 4.0;   // 1拍に何回（2 = BPM の2倍）
+inline constexpr double LONG_TICKS_PER_BEAT = 4.0;   // 1拍に何回（4 = 16分音符 = BPM の4倍）
 
-inline void buildLongTicks(Note& n, double baseBpm, const std::vector<std::pair<int32_t, double>>& bpmEvents){
+inline void buildLongTicks(Note& n, const TempoMap& tempo){
     n.tickTimes.clear();
     n.nextTick = 0;
     if(n.type != NoteType::Long || n.durationMs <= 0) return;
 
-    auto bpmAt = [&](double t){
-        double b = baseBpm;
-        for(const auto& e : bpmEvents){
-            if(e.first <= t) b = e.second;
-            else break;
-        }
-        return (b > 0.0) ? b : 120.0;
-    };
+    const double grid = 1.0 / LONG_TICKS_PER_BEAT;   // グリッド1マスの長さ（拍）
 
-    const double end = static_cast<double>(n.targetTime) + n.durationMs;
-    double t = n.targetTime;
-    for(int guard = 0; guard < 100000; guard++){
-        const double step = 60000.0 / (bpmAt(t) * LONG_TICKS_PER_BEAT);
-        t += step;
-        // 終点に近すぎる中継点は作らない（終点の判定と、ほぼ同時に重ならないように）
-        if(t > end - step * 0.5) break;
+    // 始点と終点を「何マス目か」に直す（小数になることもある：3連符の位置など）
+    const double startK = tempoBeatAt(tempo, static_cast<double>(n.targetTime)) / grid;
+    const double endK   = tempoBeatAt(tempo, static_cast<double>(n.targetTime) + n.durationMs) / grid;
+
+    // 使う線の番号 k は「始点より半マス以上あと」かつ「終点より半マス以上まえ」
+    //   ・始点がちょうど線の上（startK が整数）なら、次の線から
+    //   ・時刻は整数 ms なので startK が 7.9999 のようになっても、半マスの余裕で同じ結果になる
+    long k = static_cast<long>(std::floor(startK + 0.5)) + 1;
+    for(int guard = 0; guard < 100000 && k < endK - 0.5; guard++, k++){
+        const double t = tempoTimeAt(tempo, k * grid);
         n.tickTimes.push_back(static_cast<int32_t>(std::lround(t)));
     }
 }
@@ -132,13 +133,14 @@ inline bool loadScore(const std::string& filename, std::string& bgmName, std::ve
     // 中継点の計算用に、この難易度の BPM と BPM の変化を読む
     double chartBpm = j.value("bpm", 120.0);
     chartBpm = chartRoot->value("bpm", chartBpm);
-    std::vector<std::pair<int32_t, double>> bpmEvents;
+    std::vector<TempoPoint> bpmPoints;
     if(chartRoot->contains("bpmEvents") && chartRoot->at("bpmEvents").is_array()){
         for(const auto& b : chartRoot->at("bpmEvents")){
-            bpmEvents.push_back({b.value("time", 0), b.value("bpm", chartBpm)});
+            bpmPoints.push_back({b.value("time", 0.0), b.value("bpm", chartBpm)});
         }
-        std::sort(bpmEvents.begin(), bpmEvents.end());
     }
+    // 並べ替えと、BPM が 0 以下のイベントの除外は makeTempoMap がやってくれる
+    const TempoMap tempo = makeTempoMap(chartBpm, bpmPoints);
 
     if(!chartRoot->contains("notes") || !chartRoot->at("notes").is_array()){
         printf("JSON / notes error\n");
@@ -187,7 +189,7 @@ inline bool loadScore(const std::string& filename, std::string& bgmName, std::ve
                 });
             }
 
-            buildLongTicks(newNote, chartBpm, bpmEvents);   // ロングなら中継点を置く
+            buildLongTicks(newNote, tempo);   // ロングなら中継点を置く
 
             notes.push_back(newNote);
         }

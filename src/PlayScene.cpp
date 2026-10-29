@@ -5,6 +5,8 @@
 #include "Play/Autoplay.h"
 #include "TapSound.h"
 #include "Play/LongHoldSound.h"
+#include "Play/JudgeStatsPanel.h"   // 右の JUDGE ウィンドウ（判定の数をリアルタイムに出す）
+#include "Play/RankGaugePanel.h"    // 右上の RANK ウィンドウ（今の評価とスコアのバー）
 
 //グローバル変数
 double bpm = 120;
@@ -144,7 +146,7 @@ GameScene playGame(SDL_Window* window, SDL_Renderer* renderer, const std::string
     }
 
     Mix_VolumeMusic(static_cast<int>(playerSettings.bgmVolume * MIX_MAX_VOLUME / 100.0));
-    
+
     Mix_Chunk* tap_sound   = loadTapSound(playerSettings.tapSound);
     Mix_Chunk* tap_sound_c = loadTapSound(playerSettings.tapSound);
     if(!tap_sound || !tap_sound_c){
@@ -180,7 +182,7 @@ GameScene playGame(SDL_Window* window, SDL_Renderer* renderer, const std::string
     {
         std::string keyLabels[6];
         for(int i = 0; i < 6; i++) keyLabels[i] = bindingName(playerSettings.laneBindings[i]);
-        
+
         waku_init = SDL_CreateRGBSurfaceWithFormat(0, laneWidth * 6, TTF_FontHeight(font_init_waku),
                                                    32, SDL_PIXELFORMAT_RGBA32);
         for(int i = 0; i < 6; i++){
@@ -195,7 +197,7 @@ GameScene playGame(SDL_Window* window, SDL_Renderer* renderer, const std::string
     }
 
     if(judgeFont != font) TTF_CloseFont(judgeFont);   // 画像にしたらフォントは不要
-    
+
     SDL_Texture *comboTexture, *scoreTexture;
     Tex tex;
     tex.perfect = SDL_CreateTextureFromSurface(renderer, perfect);
@@ -269,8 +271,16 @@ GameScene playGame(SDL_Window* window, SDL_Renderer* renderer, const std::string
         return static_cast<double>(SDL_GetPerformanceCounter() - perfStart) * 1000.0 / perfFreq;
     };
 
-    const double delayTimeMs = 1500.0;
-    double musicStartTimeMs = nowMs() + delayTimeMs;
+    // ===== 始まってから曲が鳴るまで =====
+    //   0ms ─ 100ms：何も出ない
+    //   100ms ─ 550ms：右上の RANK ウィンドウが出てくる
+    //   230ms ─ 680ms：その下の JUDGE ウィンドウが出てくる（judgestats::STAGGER_MS だけ遅れて）
+    //   全部出きってから（judgestats::ALL_APPEARED_MS）PLAY_LEAD_AFTER_PANEL_MS 後に曲が始まる
+    //     ※ この待ちの間に、最初のノーツが画面の上から流れてくる。短くしすぎると最初のノーツが途中から現れる
+    const double PLAY_LEAD_AFTER_PANEL_MS = 820.0;
+    const double delayTimeMs = judgestats::ALL_APPEARED_MS + PLAY_LEAD_AFTER_PANEL_MS;   // = 1500ms
+    const double sceneStartMs = nowMs();   // ウィンドウのアニメーションの基準
+    double musicStartTimeMs = sceneStartMs + delayTimeMs;
 
     double testSeekMs = 0.0;
     if(testStartMs > 0){
@@ -308,6 +318,17 @@ GameScene playGame(SDL_Window* window, SDL_Renderer* renderer, const std::string
     DigitFont digitFont;
     if(!digitFont.init(renderer, font, " COMBO")){
         printf("数字テクスチャの作成失敗: %s\n", TTF_GetError());
+    }
+
+    // 右の JUDGE ウィンドウ（文字は先にテクスチャにしておく）
+    JudgeStatsPanel judgePanel;
+    if(!judgePanel.init(renderer)){
+        printf("JUDGE ウィンドウのフォント読込失敗: %s\n", TTF_GetError());
+    }
+    // 右上の RANK ウィンドウ（評価の文字・評価名も先にテクスチャにしておく）
+    RankGaugePanel rankPanel;
+    if(!rankPanel.init(renderer)){
+        printf("RANK ウィンドウのフォント読込失敗: %s\n", TTF_GetError());
     }
 
     // ===== 処理落ち調査用（原因が分かったら 0 にしてよい） =====
@@ -434,7 +455,7 @@ GameScene playGame(SDL_Window* window, SDL_Renderer* renderer, const std::string
             if(bgmStarted) Mix_ResumeMusic();
         }
         bool paused = pauseMenu.isActive();
-        
+
         InputDevices::get().refresh();   // コントローラーの抜き差しに合わせる
         const Uint8* currentKeyState = SDL_GetKeyboardState(NULL);
         bool currentPressed[7] = {};
@@ -510,7 +531,7 @@ GameScene playGame(SDL_Window* window, SDL_Renderer* renderer, const std::string
                 }
             }
 
-            //ノーツの判定処理 noteJudge.h    
+            //ノーツの判定処理 noteJudge.h
             NoteJudge(ctx, tex, sq);
 
             //ノーツの消去処理 renderGame.h
@@ -521,6 +542,9 @@ GameScene playGame(SDL_Window* window, SDL_Renderer* renderer, const std::string
                 nextScene = GameScene::Result;
             }
         }
+
+        // JUDGE ウィンドウの数を、今のフレームの判定まで反映する
+        judgePanel.update(scoreTracker, timingLog);
 
         holdSound.update(notes, paused);
 
@@ -538,6 +562,18 @@ GameScene playGame(SDL_Window* window, SDL_Renderer* renderer, const std::string
 
         //ノーツの描画・アニメーション処理（この中で SDL_RenderPresent している）
                 renderGamePlayScreen(ctx, tex, sq, currentNoteSpeed, laneX, false, &boxFx);
+
+        // 右の RANK / JUDGE ウィンドウ（ポーズメニューより奥に描く）
+        //   時計は globalMs（ポーズ中は止まる）なので、出てくる途中でポーズしてもアニメーションが止まる
+        //   RANK は「画面に出しているスコア」（右上の数字のカウントアップ）で評価とバーを決める
+        //   → 数字・評価・バーの3つがずれない
+        {
+            const double sceneMs = globalMs - sceneStartMs;
+            rankPanel.update(lastDisplayScoreValue, sceneMs);
+            rankPanel.draw(renderer, sceneMs);
+            judgePanel.draw(renderer, sceneMs);
+        }
+
         pauseMenu.draw(renderer, menuFont, font, labelFont, realMs);
         SDL_RenderPresent(renderer);
 
@@ -581,6 +617,8 @@ GameScene playGame(SDL_Window* window, SDL_Renderer* renderer, const std::string
 
     Mix_HaltMusic();
     digitFont.destroy();
+    judgePanel.destroy();
+    rankPanel.destroy();
     TTF_CloseFont(font);
     TTF_CloseFont(font_init_waku);
     TTF_CloseFont(menuFont);

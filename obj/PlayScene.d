@@ -3,10 +3,11 @@ obj/PlayScene.o: src/PlayScene.cpp src/GameCommon.h src/Scene.h \
  src/Play/PlaySceneManager.h src/Play/drawFrame.h src/Play/GameContext.h \
  src/Play/type.h src/Play/scoreTracker.h src/Play/DigitRenderer.h \
  src/Play/Timingdisplay.h src/Play/roundedRect.h src/Play/loadScore.h \
- src/Play/updateAndRenderTexture.h src/Play/renderGame.h \
- src/Play/tutorialOverlay.h src/Play/tutorialAnim.h src/Play/visualizer.h \
- src/Play/updateSpeed.h src/Play/noteJudge.h src/Play/Autoplay.h \
- src/TapSound.h src/Play/LongHoldSound.h
+ src/Editortempo.h src/Play/updateAndRenderTexture.h \
+ src/Play/renderGame.h src/Play/tutorialOverlay.h src/Play/tutorialAnim.h \
+ src/Play/visualizer.h src/Play/updateSpeed.h src/Play/noteJudge.h \
+ src/Play/Autoplay.h src/TapSound.h src/Play/LongHoldSound.h \
+ src/Play/JudgeStatsPanel.h src/Play/RankGaugePanel.h
 src/GameCommon.h:
 src/Scene.h:
 src/InputBinding.h:
@@ -22,6 +23,7 @@ src/Play/DigitRenderer.h:
 src/Play/Timingdisplay.h:
 src/Play/roundedRect.h:
 src/Play/loadScore.h:
+src/Editortempo.h:
 src/Play/updateAndRenderTexture.h:
 src/Play/renderGame.h:
 src/Play/tutorialOverlay.h:
@@ -32,3 +34,5 @@ src/Play/noteJudge.h:
 src/Play/Autoplay.h:
 src/TapSound.h:
 src/Play/LongHoldSound.h:
+src/Play/JudgeStatsPanel.h:
+src/Play/RankGaugePanel.h:

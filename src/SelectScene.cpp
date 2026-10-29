@@ -5,6 +5,7 @@
 #include "Settingspanel.h"
 #include "TapSound.h"
 #include "SelectRanking.h"   // 🌟 追加: ランキング表示（上位3位 / F5 で上位50位）
+#include "SongPreview.h"     // 試聴：開始位置から10秒、フェードで繰り返し
 #include <algorithm>
 #include <unordered_map>
 #include <cmath>
@@ -28,6 +29,7 @@ struct SongInfo{
     std::string level = "0";
     std::string audioExtName = "";
     std::string ChartCreator = "Unknown";
+    double previewStartMs = 0.0;   // 試聴の開始位置（曲ファイル上の ms）
 
     double currentScale = 1.0;
     double currentY = -1.0;
@@ -173,6 +175,8 @@ GameScene selectSongScene(SDL_Window* window, SDL_Renderer* renderer, std::strin
 
     Mix_Music* bgm = nullptr;
     std::string currentPlayPath = "";
+    double currentPreviewMs = -1.0;   // 今鳴らしている試聴の開始位置（-1 = 試聴ではない）
+    SongPreview preview;
     std::string dafaultBgmPath = "sounds/十番街、雨【シティ探索BGM】.mp3";
         Mix_VolumeMusic(static_cast<int>(playerSettings.bgmVolume * MIX_MAX_VOLUME / 100.0));
 
@@ -227,6 +231,7 @@ GameScene selectSongScene(SDL_Window* window, SDL_Renderer* renderer, std::strin
 
     while(running){
         std::string targetMusicPath = dafaultBgmPath;
+        double targetPreviewMs = -1.0;   // -1 = 試聴しない（デフォルト BGM を普通にループ）
 
         if(currentMode == SelectMode::SelectSong){
             const SongInfo& currentSong = categories[genreCursor].songList[songCursor];
@@ -245,6 +250,10 @@ GameScene selectSongScene(SDL_Window* window, SDL_Renderer* renderer, std::strin
                 }
             }
 
+            if(targetMusicPath != dafaultBgmPath){
+                targetPreviewMs = currentSong.previewStartMs;   // 曲が見つかったときだけ試聴
+            }
+
             detailAnimation += (1.0 - detailAnimation) * 0.12;
         }
         else{
@@ -256,7 +265,9 @@ GameScene selectSongScene(SDL_Window* window, SDL_Renderer* renderer, std::strin
         chartAnimation += (chartTarget - chartAnimation) * 0.15;
         diffSlide += (0.0 - diffSlide) * 0.2;
 
-        if(targetMusicPath != currentPlayPath){
+        // 曲が変わった、または同じ音源でも試聴位置が違う譜面に移ったら鳴らし直す
+        if(targetMusicPath != currentPlayPath || targetPreviewMs != currentPreviewMs){
+            preview.stop();   // 解放する曲を試聴が触らないように、先に止める
             if(bgm){
                 Mix_HaltMusic();
                 Mix_FreeMusic(bgm);
@@ -265,13 +276,20 @@ GameScene selectSongScene(SDL_Window* window, SDL_Renderer* renderer, std::strin
 
             bgm = Mix_LoadMUS(targetMusicPath.c_str());
             if(bgm){
-                Mix_PlayMusic(bgm, -1);
+                if(targetPreviewMs >= 0.0){
+                    preview.start(bgm, targetPreviewMs);   // 開始位置からフェードイン
+                }
+                else{
+                    Mix_PlayMusic(bgm, -1);                // デフォルト BGM は今まで通り
+                }
                 currentPlayPath = targetMusicPath;
+                currentPreviewMs = targetPreviewMs;
             }
             else{
                 std::cout << "[警告]音楽の読込失敗: " << targetMusicPath << "\n";
             }
         }
+        preview.update();   // 10秒たったらフェードアウト → 止まったら開始位置から再開
 
         while(SDL_PollEvent(&e) != 0){
             if(e.type == SDL_QUIT){
@@ -502,6 +520,7 @@ GameScene selectSongScene(SDL_Window* window, SDL_Renderer* renderer, std::strin
     ranking.destroy();   // 🌟 追加
 
     visualizer.stop();   // BGM を止める前に音声の受け取りを止める
+    preview.stop();      // 曲を解放する前に試聴を止める
     if(bgm){
         Mix_HaltMusic();
         Mix_FreeMusic(bgm);
@@ -992,6 +1011,7 @@ SongInfo parseScoreFile(const std::filesystem::path& filePath){
     song.level = j.value("level", std::string("0"));
     song.ChartCreator = j.value("chartCreator", std::string("Unknown"));
     song.jacket = j.value("jacket", std::string(""));
+    song.previewStartMs = j.value("previewStart", 0.0);   // 試聴の開始位置（無ければ曲の頭）
 
     song.difficulties = listDifficulties(song.scorePath);
 

@@ -51,6 +51,7 @@ struct PlayerSettings{
     bool showFastLate = true;    // FAST/LATE 表示
     bool showTimingMs = false;   // ±ms 表示
     LaneBindings laneBindings = defaultLaneBindings();
+    bool fpsAuto = false;
 };
 
 struct PlayTestOptions{

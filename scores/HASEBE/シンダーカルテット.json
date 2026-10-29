@@ -8601,6 +8601,8 @@
           "type": 0
         }
       ],
+      "sigDen": 4,
+      "sigNum": 4,
       "speedEvents": [
         {
           "duration": 0,
@@ -12279,15 +12281,8 @@
           "type": 0
         }
       ],
-      "speedEvents": []
-    },
-    {
-      "bpm": 194.0,
-      "bpmEvents": [],
-      "chartCreator": "TKYK.env",
-      "level": "0",
-      "name": "NORMAL",
-      "notes": [],
+      "sigDen": 4,
+      "sigNum": 4,
       "speedEvents": []
     },
     {
@@ -13996,6 +13991,8 @@
           "type": 0
         }
       ],
+      "sigDen": 4,
+      "sigNum": 4,
       "speedEvents": [
         {
           "duration": 0,
@@ -14006,5 +14003,6 @@
       ]
     }
   ],
-  "offset": 85.0
+  "offset": 85.0,
+  "previewStart": 34415.0
 }
