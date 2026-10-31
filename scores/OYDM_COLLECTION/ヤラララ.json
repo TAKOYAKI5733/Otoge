@@ -5723,17 +5723,6 @@
       "bpm": 125.0,
       "bpmEvents": [],
       "chartCreator": "TKYK.env",
-      "level": "0",
-      "name": "HARD",
-      "notes": [],
-      "sigDen": 4,
-      "sigNum": 4,
-      "speedEvents": []
-    },
-    {
-      "bpm": 125.0,
-      "bpmEvents": [],
-      "chartCreator": "TKYK.env",
       "level": "1",
       "name": "EASY",
       "notes": [

@@ -10628,28 +10628,6 @@
           "time": 216500
         }
       ]
-    },
-    {
-      "bpm": 180.0,
-      "bpmEvents": [],
-      "chartCreator": "Unknown",
-      "level": "0",
-      "name": "HARD",
-      "notes": [],
-      "sigDen": 4,
-      "sigNum": 4,
-      "speedEvents": []
-    },
-    {
-      "bpm": 180.0,
-      "bpmEvents": [],
-      "chartCreator": "Unknown",
-      "level": "0",
-      "name": "EASY",
-      "notes": [],
-      "sigDen": 4,
-      "sigNum": 4,
-      "speedEvents": []
     }
   ],
   "offset": 60.0,
