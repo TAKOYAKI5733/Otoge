@@ -6,12 +6,28 @@
 #    pacman -S mingw-w64-ucrt-x86_64-gcc mingw-w64-ucrt-x86_64-SDL2 \
 #              mingw-w64-ucrt-x86_64-SDL2_ttf mingw-w64-ucrt-x86_64-SDL2_mixer \
 #              mingw-w64-ucrt-x86_64-SDL2_image mingw-w64-ucrt-x86_64-nlohmann-json \
-#              mingw-w64-ucrt-x86_64-curl
+#              mingw-w64-ucrt-x86_64-curl mingw-w64-ucrt-x86_64-pkgconf
+#
+#  他のデバイスで動かすには:
+#    make -f Makefile.windows            → bin_w/ に otoge.exe・必要な DLL 全部（通信用も）・素材がそろう
+#    make -f Makefile.windows check      → bin_w/ の DLL だけで足りているか、exe と DLL の中身を見て確かめる
+#    make -f Makefile.windows run_clean  → MSYS2 を使わない状態で bin_w/otoge.exe を起動してみる
+#                                          （他の PC と同じ条件。ここで動けば他の PC でも動く）
+#    bin_w/ をフォルダごとコピーすれば、MSYS2 を入れていない PC でも動く（Windows 10 / 11 の 64bit）
+#
+#  オプション（make -f Makefile.windows ONLINE=0 のように付ける）:
+#    ONLINE=0  … ランキング通信なしの版。libcurl・config/・save/ を入れない      → bin_w_offline/
+#    STATIC=1  … DLL を使わず、全部 exe に入れる                              → bin_w_static/
+#    CONSOLE=0 … 黒いコンソール窓を出さない（printf のログは見えなくなる）
 # ====================================================================
+
+ONLINE  ?= 1
+STATIC  ?= 0
+CONSOLE ?= 1
 
 CXX      := g++
 # sdl2-config --cflags で /ucrt64/include/SDL2 を検索場所に入れる（ImGui の <SDL.h> 用）
-CXXFLAGS := -std=c++20 -Wall -Wextra -MMD -MP $(shell sdl2-config --cflags)
+CXXFLAGS := -std=c++20 -Wall -Wextra -O2 -MMD -MP $(shell sdl2-config --cflags)
 
 # SDL2main は「WinMain → SDL_main」の橋渡しをする。
 # main.cpp の extern "C" int SDL_main を見つけさせるため、オブジェクトより前に置く
@@ -21,9 +37,15 @@ SDL_MAIN_LIBS := -lmingw32 -lSDL2main
 # -lwinmm: main.cpp の timeBeginPeriod / timeEndPeriod 用
 LIBS     := -lSDL2 -lSDL2_ttf -lSDL2_mixer -lSDL2_image -lcurl -lwinmm
 
+# libgcc / libstdc++ は exe の中に入れる（配る DLL を減らす）
+LDFLAGS  := -static-libgcc -static-libstdc++
+
+# 版ごとにフォルダを分ける（.o や DLL が混ざらないように）
+SUFFIX   := $(if $(filter 0,$(ONLINE)),_offline)$(if $(filter 1,$(STATIC)),_static)
+
 SRC_DIR  := src
-OBJ_DIR  := obj_w
-BIN_DIR  := bin_w
+OBJ_DIR  := obj_w$(SUFFIX)
+BIN_DIR  := bin_w$(SUFFIX)
 
 TARGET   := $(BIN_DIR)/otoge.exe
 
@@ -31,21 +53,85 @@ SRCS     := $(wildcard $(SRC_DIR)/*.cpp) $(wildcard $(SRC_DIR)/imgui/*.cpp)
 OBJS     := $(patsubst $(SRC_DIR)/%.cpp,$(OBJ_DIR)/%.o,$(SRCS))
 DEPS     := $(OBJS:.o=.d)
 
-ASSET_DIRS := sounds scores fonts images config
+# DLL を取ってくる場所（MSYS2 UCRT64 の DLL 置き場）
+DLL_SRC  := $(or $(MSYSTEM_PREFIX),/ucrt64)/bin
+
+# Windows 自身の DLL 置き場（ここにある DLL はどの PC にもあるのでコピーしない）
+SYS32    := $(shell cygpath -u "$$SYSTEMROOT" 2>/dev/null || echo /c/Windows)/System32
+
+# 素材（ゲームが実行中に読むフォルダ）。無いフォルダは飛ばす
+#   scores: 譜面 / fonts: フォント / sounds: 曲と打鍵音
+#   jackets: 選曲画面のジャケット / tutorial: チュートリアルの台本と譜面
+#   （ONLINE=1 のときは下で config/ も足す）
+# settings.json・imgui.ini は、ゲームが最初に保存したときに exe の隣に自動で作られる
+ASSET_DIRS  := scores fonts sounds jackets tutorial
+
+# SDL2_mixer / SDL2_image が「実行中に必要になったら」読み込むことがある DLL。
+# exe の中には名前が書かれていないので、下の自動の調べ方では見つからないことがある。
+# 入っていれば必ずコピーしておく（他の PC で mp3 が鳴らない・jpg が出ない、を防ぐ）
+EXTRA_DLLS  := libmpg123-0.dll libvorbisfile-3.dll libvorbis-0.dll libogg-0.dll \
+               libopusfile-0.dll libopus-0.dll libFLAC.dll libxmp.dll libwavpack-1.dll \
+               libgme.dll libmodplug-1.dll libfluidsynth-3.dll \
+               libpng16-16.dll libjpeg-8.dll libtiff-6.dll libwebp-7.dll libwebpdemux-2.dll \
+               libavif-16.dll libjxl.dll
+
+# ---------------------------------------------------
+# オプションの反映
+# ---------------------------------------------------
+# ONLINE=1（標準）: 通信あり。-lcurl でリンクし、libcurl-4.dll とそれが使う DLL
+#           （libssl・libcrypto・libnghttp2・zlib など）も copy_dlls が自動で bin_w/ に入れる。
+#           通信に必要な config/online.json（URL と API キー）と、save/（送れなかったスコアの保存先）も入れる
+# ONLINE=0: ScoreSync.cpp を「通信しない版」にして、libcurl を外す
+ifeq ($(ONLINE),0)
+    CXXFLAGS   += -DSIMPLE_NOTES_OFFLINE
+    LIBS       := $(filter-out -lcurl,$(LIBS))
+else
+    ASSET_DIRS += config
+endif
+
+# STATIC=1: 使うライブラリと、その先で使われているライブラリを全部 exe に入れる
+#           何が必要かは pkg-config --static が教えてくれる（png・freetype・mpg123 など）
+ifeq ($(STATIC),1)
+    PKGS := sdl2 SDL2_ttf SDL2_mixer SDL2_image $(if $(filter 1,$(ONLINE)),libcurl)
+    LIBS := $(filter-out -mwindows -mconsole,$(shell pkg-config --static --libs $(PKGS))) -lwinmm
+    LDFLAGS += -static
+    ifeq ($(ONLINE),1)
+        CXXFLAGS += -DCURL_STATICLIB
+    endif
+endif
+
+# CONSOLE=0: コンソール窓なし
+ifeq ($(CONSOLE),0)
+    LDFLAGS += -mwindows
+else
+    LDFLAGS += -mconsole
+endif
+
+# exe に埋め込む情報（バージョン情報・マニフェスト・アイコン）
+#   res/otoge.rc と res/otoge.manifest があるときだけ。icon.ico があればアイコンも入れる
+ifneq ($(and $(wildcard res/otoge.rc),$(wildcard res/otoge.manifest)),)
+    RES_OBJ := $(OBJ_DIR)/otoge_res.o
+endif
 
 # ---------------------------------------------------
 # メインタスク
 # ---------------------------------------------------
-all: $(TARGET) copy_assets copy_dlls
+# DLL 版は、DLL をコピーし終わってから check で足りているかを確かめる（順番を守るため $(MAKE) で呼ぶ）
+all: $(TARGET) copy_assets $(if $(filter 1,$(STATIC)),,copy_dlls)
+	$(if $(filter 1,$(STATIC)),,@$(MAKE) --no-print-directory -f $(firstword $(MAKEFILE_LIST)) check)
+	@echo "==> 完成: $(BIN_DIR)/ をフォルダごとコピーすれば、他の PC でも動きます"
 
 # 1. リンク
-$(TARGET): $(OBJS)
+$(TARGET): $(OBJS) $(RES_OBJ)
 	@mkdir -p $(BIN_DIR)
-	$(CXX) $(CXXFLAGS) $(SDL_MAIN_LIBS) $^ -o $@ $(LIBS)
+	$(CXX) $(CXXFLAGS) $(SDL_MAIN_LIBS) $^ -o $@ $(LDFLAGS) $(LIBS)
 
 # 2. 素材フォルダのコピー
+#   通信ありなのに config/online.json が無いと、ゲームは動くがランキングが使えないので警告を出す
 copy_assets:
 	@mkdir -p $(BIN_DIR)
+	$(if $(filter 1,$(ONLINE)),@[ -f config/online.json ] || echo "⚠ config/online.json がありません。このままだとランキング通信は使えません")
+	$(if $(filter 1,$(ONLINE)),@mkdir -p $(BIN_DIR)/save)
 	@for dir in $(ASSET_DIRS); do \
 	    if [ -d $$dir ]; then \
 	        echo "Copying $$dir to $(BIN_DIR)/..."; \
@@ -53,26 +139,75 @@ copy_assets:
 	    fi; \
 	done
 
-# 3. 必要な DLL を exe の隣に自動コピー
-# ldd で otoge.exe が読み込む DLL を調べ、MSYS2 (ucrt64) のものだけをコピーする。
-# libcurl を追加すると libcurl-4.dll・libssl・libcrypto・libnghttp2 などが増えるが、
-# これで手作業なしに全部そろう（Windows 標準の DLL は system32 にあるのでコピーしない）
+# 3. 必要な DLL を全部 bin_w/ にコピー
+#   exe や DLL の中には「使う DLL の名前の一覧」が書かれている。objdump -p でそれを読み、
+#     ① otoge.exe と EXTRA_DLLS が使う DLL を /ucrt64/bin からコピー
+#     ② コピーした DLL がさらに使う DLL もコピー … を、新しい DLL が出てこなくなるまでくり返す
+#   ldd と違って exe を実際には読み込まないので、PATH の状態に左右されず、毎回同じ結果になる。
+#   /ucrt64/bin に無い名前（KERNEL32.dll などの Windows 標準）はコピーしない
 copy_dlls: $(TARGET)
 	@echo "Copying DLLs to $(BIN_DIR)/..."
-	@ldd $(TARGET) | grep -i '/ucrt64/' | awk '{print $$3}' | sort -u | \
-	    while read dll; do cp -u "$$dll" $(BIN_DIR)/; done
+	@for d in $(EXTRA_DLLS); do \
+	    if [ -f "$(DLL_SRC)/$$d" ]; then cp -u "$(DLL_SRC)/$$d" $(BIN_DIR)/; fi; \
+	done
+	@todo="$(TARGET) $$(ls $(BIN_DIR)/*.dll 2>/dev/null)"; seen=" "; \
+	while [ -n "$$todo" ]; do \
+	    next=""; \
+	    for f in $$todo; do \
+	        for dll in $$(objdump -p "$$f" | awk '/DLL Name:/{print $$3}' | tr -d '\r'); do \
+	            key=$$(echo "$$dll" | tr 'A-Z' 'a-z'); \
+	            case "$$seen" in *" $$key "*) continue ;; esac; \
+	            seen="$$seen$$key "; \
+	            if [ -f "$(DLL_SRC)/$$dll" ]; then \
+	                cp -u "$(DLL_SRC)/$$dll" $(BIN_DIR)/; \
+	                next="$$next $(BIN_DIR)/$$dll"; \
+	            fi; \
+	        done; \
+	    done; \
+	    todo="$$next"; \
+	done
+	@echo "DLL: $$(ls $(BIN_DIR)/*.dll 2>/dev/null | wc -l) 個"
 
 # 4. コンパイル
 $(OBJ_DIR)/%.o: $(SRC_DIR)/%.cpp
 	@mkdir -p $(dir $@)
-	$(CXX) $(CXXFLAGS) -I$(SRC_DIR) -I$(SRC_DIR)/imgui -c $< -o $@
+	$(CXX) $(CXXFLAGS) -I$(SRC_DIR) -I$(SRC_DIR)/imgui -I. -c $< -o $@
 
-# 5. 削除
-# ⚠ bin_w ごと消すので、bin_w/save/pending_scores.json（未送信のスコア）も消える。
-#    DLL は次の make で copy_dlls が入れ直す
+# 4'. exe に埋め込む情報のコンパイル
+$(OBJ_DIR)/otoge_res.o: res/otoge.rc res/otoge.manifest $(wildcard icon.ico)
+	@mkdir -p $(OBJ_DIR)
+	windres -I. $(if $(wildcard icon.ico),-DHAVE_ICON) res/otoge.rc -O coff -o $@
+
+# 5. 他のデバイスで動くかの確認（make のたびに自動で行う）
+#   otoge.exe と bin_w/ の全 DLL について「使う DLL の名前」を読み、それぞれが
+#     ・bin_w/ にある  ・Windows の System32 にある  ・api-ms-win-… / ext-ms-…（Windows が自動で用意する名前）
+#   のどれかなら OK。どれでもなければ、他の PC では「DLL が見つかりません」になるので失敗にする
+check:
+	@if [ ! -f $(TARGET) ]; then echo "$(TARGET) がありません。先に make してください"; exit 1; fi
+	@missing=""; \
+	for f in $(TARGET) $(BIN_DIR)/*.dll; do \
+	    [ -f "$$f" ] || continue; \
+	    for dll in $$(objdump -p "$$f" | awk '/DLL Name:/{print $$3}' | tr -d '\r'); do \
+	        case "$$(echo "$$dll" | tr 'A-Z' 'a-z')" in api-ms-win-*|ext-ms-*) continue ;; esac; \
+	        if [ -f "$(BIN_DIR)/$$dll" ] || [ -f "$(SYS32)/$$dll" ]; then continue; fi; \
+	        missing="$$missing\n  $$dll（$$(basename $$f) が使う）"; \
+	    done; \
+	done; \
+	if [ -z "$$missing" ]; then echo "OK: $(BIN_DIR)/ の $$(ls $(BIN_DIR)/*.dll 2>/dev/null | wc -l) 個の DLL だけで動きます"; \
+	else printf "NG: 次の DLL が足りません$$missing\n"; \
+	     echo "  → make -f Makefile.windows copy_dlls をやり直すか、上の DLL を $(DLL_SRC) から $(BIN_DIR)/ にコピーしてください"; exit 1; fi
+
+# 6. 他の PC と同じ条件で起動してみる
+#   PATH を Windows のフォルダだけにして起動する。こうすると MSYS2 の DLL は見えないので、
+#   bin_w/ の DLL が足りていなければ、ここで「DLL が見つかりません」が出る
+run_clean: $(TARGET)
+	cd $(BIN_DIR) && PATH="$(SYS32):$(dir $(SYS32))" ./otoge.exe
+
+# 7. 削除
+# ⚠ bin_w ごと消すので、bin_w の settings.json（設定）なども消える
 clean:
 	rm -rf $(OBJ_DIR) $(BIN_DIR)
 
 -include $(DEPS)
 
-.PHONY: all clean copy_assets copy_dlls
+.PHONY: all clean copy_assets copy_dlls check run_clean
