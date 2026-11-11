@@ -48,6 +48,53 @@ inline LaneBindings defaultLaneBindings(){
 }
 
 // =====================================================================
+//  レーンに割り当てられないキー（特殊キー）
+//    ・ゲームの操作に使うキー        : Esc（ポーズ・戻る）、F1〜F24（F2 = 設定 など）
+//    ・押すと OS が反応してしまうキー : Windows キー、メニューキー、PrintScreen、ScrollLock、Pause、
+//                                      電源・音量・メディアのキーなど
+//    ・押すと状態が切り替わるキー     : NumLock、CapsLock（英数）、半角/全角、かな、LANG1〜5
+//                                      （日本語入力が ON になったりして、プレイ中に困る）
+//  ここに入っていないキー（文字・数字・記号・Space・Enter・Tab・BS・矢印・テンキー・
+//  Shift・Ctrl・Alt・変換・無変換 など）と、コントローラーのボタン・十字キー・軸はすべて割り当てられる
+// =====================================================================
+inline bool isReservedKey(SDL_Scancode sc){
+    if(sc <= SDL_SCANCODE_UNKNOWN || sc >= SDL_NUM_SCANCODES) return true;
+    if(sc >= SDL_SCANCODE_F1  && sc <= SDL_SCANCODE_F12) return true;
+    if(sc >= SDL_SCANCODE_F13 && sc <= SDL_SCANCODE_F24) return true;
+    if(sc >= SDL_SCANCODE_EXECUTE && sc <= SDL_SCANCODE_VOLUMEDOWN) return true;   // Help・Copy・音量 など
+    if(sc >= SDL_SCANCODE_MODE) return true;                                       // 257 以降：メディア・ブラウザ・電源 などの特別なキー
+    switch(sc){
+        case SDL_SCANCODE_ESCAPE:
+        case SDL_SCANCODE_LGUI:           // Windows キー
+        case SDL_SCANCODE_RGUI:
+        case SDL_SCANCODE_APPLICATION:    // メニューキー
+        case SDL_SCANCODE_PRINTSCREEN:
+        case SDL_SCANCODE_SCROLLLOCK:
+        case SDL_SCANCODE_PAUSE:
+        case SDL_SCANCODE_POWER:
+        case SDL_SCANCODE_NUMLOCKCLEAR:
+        case SDL_SCANCODE_CAPSLOCK:       // 日本語配列では「英数」
+        case SDL_SCANCODE_GRAVE:          // 日本語配列では「半角/全角」
+        case SDL_SCANCODE_INTERNATIONAL2: // かな
+        case SDL_SCANCODE_LANG1:
+        case SDL_SCANCODE_LANG2:
+        case SDL_SCANCODE_LANG3:
+        case SDL_SCANCODE_LANG4:
+        case SDL_SCANCODE_LANG5:
+            return true;
+        default:
+            return false;
+    }
+}
+
+// その割り当てがレーンに使えるか（キーなら特殊キーでないこと。コントローラーは全部使える）
+inline bool isAssignableBinding(const InputBinding& b){
+    if(b.type == InputBinding::Type::None) return false;
+    if(b.type == InputBinding::Type::Key) return !isReservedKey(static_cast<SDL_Scancode>(b.code));
+    return true;
+}
+
+// =====================================================================
 //  つながっているコントローラーを開いておく
 //    ・SDL は「開いた」コントローラーのボタンしか読めない
 //    ・毎フレーム refresh() を呼べば、途中で抜き差ししても自動で開き直す（軽い処理）
@@ -225,7 +272,13 @@ inline std::string bindingToString(const InputBinding& b){
 
 inline bool bindingFromString(const std::string& s, InputBinding& out){
     int a = 0, v = 0;
-    if(std::sscanf(s.c_str(), "key:%d", &a) == 1 && a > 0 && a < SDL_NUM_SCANCODES){ out = InputBinding::key(static_cast<SDL_Scancode>(a)); return true; }
+    // 特殊キー（isReservedKey）が書かれていたら読まない → そのレーンは初期設定のキーのまま
+    //   （前のバージョンで Esc や F キーを割り当てていた人も、ゲームの操作ができなくならないように）
+    if(std::sscanf(s.c_str(), "key:%d", &a) == 1){
+        if(a <= 0 || a >= SDL_NUM_SCANCODES || isReservedKey(static_cast<SDL_Scancode>(a))) return false;
+        out = InputBinding::key(static_cast<SDL_Scancode>(a));
+        return true;
+    }
     if(std::sscanf(s.c_str(), "btn:%d", &a) == 1 && a >= 0){ out = InputBinding::button(a); return true; }
     if(std::sscanf(s.c_str(), "hat:%d:%d", &a, &v) == 2 && a >= 0){ out = InputBinding::hat(a, v); return true; }
     if(std::sscanf(s.c_str(), "axis:%d:%d", &a, &v) == 2 && a >= 0){ out = InputBinding::axis(a, v >= 0 ? +1 : -1); return true; }

@@ -4,7 +4,6 @@
 #include "JacketSpectrum.h"
 #include "Settingspanel.h"
 #include "TapSound.h"
-#include "SelectRanking.h"   // 🌟 追加: ランキング表示（上位3位 / F5 で上位50位）
 #include "SongPreview.h"     // 試聴：開始位置から10秒、フェードで繰り返し
 #include <algorithm>
 #include <unordered_map>
@@ -226,8 +225,6 @@ GameScene selectSongScene(SDL_Window* window, SDL_Renderer* renderer, std::strin
     settings.init(playerSettings);
 
     // 🌟 追加: ランキング表示
-    SelectRanking ranking;
-    ranking.init();
 
     while(running){
         std::string targetMusicPath = dafaultBgmPath;
@@ -301,12 +298,6 @@ GameScene selectSongScene(SDL_Window* window, SDL_Renderer* renderer, std::strin
                 int wheelY = e.wheel.y;
                 if(e.wheel.direction == SDL_MOUSEWHEEL_FLIPPED) wheelY = -wheelY;   // ナチュラルスクロール対策
 
-                // 🌟 追加: ランキングのウィンドウを開いている間は、ホイールでランキングをスクロール
-                if(ranking.isOpen()){
-                    ranking.handleWheel(wheelY);
-                    continue;
-                }
-
                 if(wheelY > 0)      moveCursor(-1);   // 奥に回す = 上へ
                 else if(wheelY < 0) moveCursor(+1);   // 手前に回す = 下へ
             }
@@ -322,13 +313,10 @@ GameScene selectSongScene(SDL_Window* window, SDL_Renderer* renderer, std::strin
                         nextScene = GameScene::KeyConfig;
                         running = false;
                     }
-                    continue;
-                }
-
-                // ランキングのウィンドウを開いている間は、キーをすべてランキングに渡す
-                //          （↑↓ で曲が動いたり、ENTER でプレイが始まったりしないように）
-                if(ranking.isOpen()){
-                    ranking.handleKey(e.key);
+                    if(settings.consumeNoteSettingRequest()){    // 「ノーツの詳細設定」で ENTER
+                        nextScene = GameScene::NoteSetting;
+                        running = false;
+                    }
                     continue;
                 }
 
@@ -432,13 +420,7 @@ GameScene selectSongScene(SDL_Window* window, SDL_Renderer* renderer, std::strin
                         break;
                     }
 
-                    // 🌟 追加: 曲を選んでいるときだけ、上位50位のウィンドウを開く
-                    case SDLK_F5:{
-                        if(!e.key.repeat && currentMode == SelectMode::SelectSong) ranking.open();
-                        break;
-                    }
-
-                                        case SDLK_F3:
+                    case SDLK_F3:
                     case SDLK_F4:{
                         // ALL の曲選択中だけ有効
                         if(currentMode != SelectMode::SelectSong || !categories[genreCursor].isAll) break;
@@ -459,20 +441,6 @@ GameScene selectSongScene(SDL_Window* window, SDL_Renderer* renderer, std::strin
                 }
             }
         }
-
-        // 🌟 追加: いま選んでいる曲・難易度をランキングに教え、必要なら取得を依頼する
-        if(currentMode == SelectMode::SelectSong){
-            const SongInfo& song = categories[genreCursor].songList[songCursor];
-            int fileIndex = 0;
-            if(!song.difficulties.empty()){
-                fileIndex = song.difficulties[clampDifficulty(difficultyCursor, song.difficulties.size())].fileIndex;
-            }
-            ranking.setTarget(song.scorePath, fileIndex, song.title);
-        }
-        else{
-            ranking.clearTarget();
-        }
-        ranking.update();
 
         SDL_SetRenderDrawColor(renderer, 15, 15, 25, 255);
         SDL_RenderClear(renderer);
@@ -501,10 +469,34 @@ GameScene selectSongScene(SDL_Window* window, SDL_Renderer* renderer, std::strin
 
             draw_DifficultyBadge(renderer, font, label_font, song.difficulties, diffIndex, detailAnimation, diffSlide);
             draw_songDetail(renderer, font, label_font, song, detailAnimation, diff, chartAnimation);
-            ranking.drawTop3(renderer, detailAnimation);   // 🌟 追加: 上位3位
         }
 
-        ranking.drawWindow(renderer);   // 🌟 追加: 上位50位（開いているときだけ描かれる）
+        // 右下の操作説明（今のモードで使えるキーだけを出す）
+        //   右端をそろえて2行で出す。設定ウィンドウを開いているときは、その下に隠れる
+        {
+            const bool songMode = (currentMode == SelectMode::SelectSong);
+            const bool sortable = songMode && categories[genreCursor].isAll;
+            const std::string line1 = songMode
+                ? "[↑↓]:曲を選ぶ   [←→]:難易度   [ENTER]:プレイ   [Ctrl+ENTER]:オートプレイ"
+                : "[↑↓]:ジャンルを選ぶ   [ENTER]:決定";
+            //   [F1]:譜面作成 は曲を選んでいるときだけ出す（選んでいる曲の譜面を開くため）
+            const std::string line2 = std::string(sortable ? "[F3/F4]:並べ替え   " : "")
+                + (songMode ? "[F1]:譜面作成   " : "") + "[F2]:設定   " + (songMode ? "[ESC]:戻る" : "[ESC]:終了");
+
+            auto drawRight = [&](const std::string& text, int rightX, int centerY){
+                SDL_Surface* surf = TTF_RenderUTF8_Blended(label_font, text.c_str(), SDL_Color{150, 150, 170, 255});
+                if(!surf) return;
+                SDL_Texture* tex = SDL_CreateTextureFromSurface(renderer, surf);
+                if(tex){
+                    SDL_Rect dst = {rightX - surf->w, centerY - surf->h / 2, surf->w, surf->h};
+                    SDL_RenderCopy(renderer, tex, nullptr, &dst);
+                    SDL_DestroyTexture(tex);
+                }
+                SDL_FreeSurface(surf);
+            };
+            drawRight(line1, SCREEN_W - 30, SCREEN_H - 72);
+            drawRight(line2, SCREEN_W - 30, SCREEN_H - 36);
+        }
 
         settings.update();
         settings.draw(renderer, font, label_font, playerSettings);   // 一番手前に描く
@@ -517,7 +509,6 @@ GameScene selectSongScene(SDL_Window* window, SDL_Renderer* renderer, std::strin
 
     if(settings.isOpen()) settings.close(window, playerSettings);
     settings.destroy();
-    ranking.destroy();   // 🌟 追加
 
     visualizer.stop();   // BGM を止める前に音声の受け取りを止める
     preview.stop();      // 曲を解放する前に試聴を止める
@@ -603,10 +594,10 @@ static const SDL_Color PANEL_BORDER_NORMAL = { 90,  90, 120, 255};  // それ以
 static const int PANEL_BORDER_W = 3;
 
 // 各モードでのウィンドウの目標矩形 {x, y, w, h}
-static const SDL_Rect GENRE_PANEL_LIST   = {150, 140,  620, 800};  // ジャンル選択中：一覧全体
+static const SDL_Rect GENRE_PANEL_LIST   = {150, 140,  620, 790};  // ジャンル選択中：一覧全体（下を 10px 詰めた 800 → 790）
 static const SDL_Rect GENRE_PANEL_HEADER = { 70,  88,  720, 108};  // 曲選択中：選んだジャンルだけ
-static const SDL_Rect SONG_PANEL_PREVIEW = {860, 140,  960, 800};  // ジャンル選択中：右側プレビュー
-static const SDL_Rect SONG_PANEL_LIST    = {150, 236,  960, 764};  // 曲選択中：一覧全体
+static const SDL_Rect SONG_PANEL_PREVIEW = {860, 140,  960, 790};  // ジャンル選択中：右側プレビュー（800 → 790）
+static const SDL_Rect SONG_PANEL_LIST    = {150, 236,  960, 754};  // 曲選択中：一覧全体（764 → 754）
 
 static SDL_Rect panelRect(const PanelWindow& p){
     return SDL_Rect{static_cast<int>(p.x), static_cast<int>(p.y), static_cast<int>(p.w), static_cast<int>(p.h)};
@@ -879,7 +870,7 @@ void draw_songDetail(SDL_Renderer* renderer, TTF_Font* font, TTF_Font* labelFont
     int offsetX = static_cast<int>((1.0 - animation) * 100);
 
     int baseX = 1350 + offsetX;
-    int baseY = 940;   // 🌟 896→940：RANKING ウィンドウの下に置く
+    int baseY = 730;   // 難易度ウィンドウ（y = 575〜665）のすぐ下。ランキングを無くしたので 940 → 730 に上げた
     int lineGap = 50;
 
     // 各行の「文字・色・表示量」。表示量 0.0〜1.0 で行の高さと透明度が変わる
@@ -1026,7 +1017,7 @@ SongInfo parseScoreFile(const std::filesystem::path& filePath){
 
 // ===== ジャケット =====
 static const char*  JACKET_FALLBACK_PATH = "jackets/default.png";  // 専用のジャケット絵
-static const int    JACKET_SIZE       = 380;     // ジャケットの表示サイズ（正方形の枠）🌟 480→380：RANKING ウィンドウの場所を空けるため
+static const int    JACKET_SIZE       = 380;     // ジャケットの表示サイズ（正方形の枠）
 static const int    JACKET_X          = 1340;    // ジャケット左上（INFO ウィンドウと左端を揃える）
 static const int    JACKET_Y          = 130;     // 🌟 180→130
 static const int    JACKET_PANEL_PAD  = 20;      // ジャケットとウィンドウの余白

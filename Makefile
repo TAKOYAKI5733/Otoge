@@ -1,75 +1,128 @@
 # ====================================================================
-#  Otoge Project - Advanced Makefile (Header Dependency Resolution)
-#  Linux (Ubuntu) 用
+#  Otoge Project - Makefile for Ubuntu (Linux)
+#  使い方: プロジェクトのフォルダ（src/ がある所）で  make
+#          起動は                                      make run
+#
+#  事前に必要なパッケージ（初回だけ。make install-deps でも入れられる）:
+#    sudo apt install build-essential pkg-config \
+#                     libsdl2-dev libsdl2-ttf-dev libsdl2-mixer-dev libsdl2-image-dev \
+#                     nlohmann-json3-dev
+#
+#  ⚠ Ubuntu 24.04 以降が必要です
+#    このゲームは Mix_GetMusicPosition（SDL2_mixer 2.6 から）を使っています。
+#    Ubuntu 22.04 の SDL2_mixer は 2.0.4 なので、そのままではビルドできません。
+#    （make を実行すると、最初にバージョンを確かめて、足りなければ止めて知らせます）
+#
+#  コマンド:
+#    make              → bin/otoge を作る
+#    make run          → プロジェクトのフォルダで bin/otoge を起動する
+#                        （scores/ fonts/ sounds/ jackets/ tutorial/ をそのまま使う。譜面エディタの保存もここに入る）
+#    make DEBUG=1      → デバッグ用（最適化なし・gdb で追える）。obj_debug/ と bin/otoge_debug に分けて作る
+#    make check-deps   → 必要なライブラリとバージョンがそろっているか確かめるだけ
+#    make install-deps → 必要なパッケージを apt で入れる（sudo のパスワードを聞かれる）
+#    make clean        → 作ったもの（obj*/ と bin/）を消す。譜面や設定は消さない
 # ====================================================================
 
-# コンパイラと基本フラグ
+DEBUG ?= 0
+
 CXX      := g++
-# -MMD -MP フラグ：コンパイル時にヘッダーの依存関係(.dファイル)を自動生成する
-# 🌟 追加: $(shell sdl2-config --cflags) で /usr/include/SDL2 を検索場所に入れる
-#          （ImGui の imgui_impl_sdl2.cpp は <SDL.h> と書いているため、これが無いと見つからない）
-CXXFLAGS := -std=c++20 -Wall -Wextra -MMD -MP $(shell sdl2-config --cflags)
 
-# SDL2 などのライブラリ設定
-# 🌟 修正: -lSDL2_image を追加(.png画像の読込に必要)
-# 🌟 追加: -lcurl（ScoreSync.cpp がランキングサーバ(GAS)と通信するのに使う）
-#          事前に sudo apt install libcurl4-openssl-dev が必要
-LIBS     := -lSDL2 -lSDL2_ttf -lSDL2_mixer -lSDL2_image -lcurl
+# 使うライブラリ（pkg-config の名前）
+PKGS     := sdl2 SDL2_ttf SDL2_mixer SDL2_image
 
-# ディレクトリの定義
+# pkg-config --cflags で /usr/include/SDL2 を検索場所に入れる（ImGui の <SDL.h> 用）
+#   ※ Windows 版と違い -Dmain=SDL_main は付けない（main.cpp は Linux ではふつうの main() になる）
+PKG_CFLAGS := $(shell pkg-config --cflags $(PKGS) 2>/dev/null)
+PKG_LIBS   := $(shell pkg-config --libs $(PKGS) 2>/dev/null)
+
+ifeq ($(DEBUG),1)
+    OPTFLAGS := -O0 -g
+    SUFFIX   := _debug
+else
+    OPTFLAGS := -O2
+    SUFFIX   :=
+endif
+
+# -pthread: PreciseInput.h（キーを押した時刻を別スレッドで記録）などで std::thread を使うため
+CXXFLAGS := -std=c++20 -Wall -Wextra $(OPTFLAGS) -MMD -MP -pthread $(PKG_CFLAGS)
+LIBS     := $(PKG_LIBS) -pthread
+
 SRC_DIR  := src
-OBJ_DIR  := obj
+OBJ_DIR  := obj$(SUFFIX)
 BIN_DIR  := bin
+TARGET   := $(BIN_DIR)/otoge$(SUFFIX)
 
-# 最終的な実行ファイルの出力パス
-TARGET   := $(BIN_DIR)/otoge
-
-# src/ 内のすべての .cpp ファイルと、src/imgui/ 内の .cpp ファイルを自動検知
-# （ScoreSync.cpp / NameEntryScene.cpp も src/ に置けば自動で入る）
+# src/ 直下の .cpp と、src/imgui/ の .cpp（ImGui 本体と SDL2 用の部品）を全部ビルドする
+#   ※ src/ から消したファイル（ScoreSync.cpp など）が残っていると一緒にビルドされるので、要らないものは消しておく
 SRCS     := $(wildcard $(SRC_DIR)/*.cpp) $(wildcard $(SRC_DIR)/imgui/*.cpp)
 OBJS     := $(patsubst $(SRC_DIR)/%.cpp,$(OBJ_DIR)/%.o,$(SRCS))
-
-# 依存関係ファイル(.d)のリストを自動作成
 DEPS     := $(OBJS:.o=.d)
 
-# コピーしたい素材フォルダのリスト
-# 🌟 修正: images を追加(ノーツの.png画像フォルダ)
-# 🌟 追加: config（config/online.json = ランキングサーバの URL・合言葉）
-ASSET_DIRS := sounds scores fonts images config
+# 必要な最低バージョン（これより古いと、使っている関数が無くてビルドできない）
+#   SDL2       2.0.18: SDL_RenderGeometry（角丸・傾けたレーン）、SDL_RenderCopyF など
+#   SDL2_mixer 2.6.0 : Mix_GetMusicPosition（曲とのずれ直し）
+#   SDL2_ttf   2.0.15: TTF_RenderUTF8_Blended_Wrapped など
+#   SDL2_image 2.0.5 : IMG_LoadTexture など
+MIN_SDL2   := 2.0.18
+MIN_MIXER  := 2.6.0
+MIN_TTF    := 2.0.15
+MIN_IMAGE  := 2.0.5
 
 # ---------------------------------------------------
 # メインタスク
 # ---------------------------------------------------
-all: $(TARGET) copy_assets
+all: check-deps $(TARGET)
+	@echo "==> 完成: $(TARGET)（make run で起動）"
 
-# 1. 最終的な実行ファイルのリンク処理
+# 1. リンク
 $(TARGET): $(OBJS)
 	@mkdir -p $(BIN_DIR)
 	$(CXX) $(CXXFLAGS) $^ -o $@ $(LIBS)
 
-# 2. 素材フォルダを実行ファイルと同じ場所に自動コピーする処理
-copy_assets:
-	@mkdir -p $(BIN_DIR)
-	@for dir in $(ASSET_DIRS); do \
-	    if [ -d $$dir ]; then \
-	        echo "Copying $$dir to $(BIN_DIR)/..."; \
-	        cp -r $$dir $(BIN_DIR)/; \
-	    fi; \
-	done
-
-# 3. 各 .cpp ファイルを .o ファイルにコンパイルする処理
-# -I$(SRC_DIR) / -I$(SRC_DIR)/imgui で自作ヘッダー・ImGuiヘッダーを解決
-# $(dir $@) で、obj/imgui/ のようなサブディレクトリも自動作成する
-$(OBJ_DIR)/%.o: $(SRC_DIR)/%.cpp
+# 2. コンパイル（-I. はプロジェクト直下、-Isrc は "Play/xxx.h" などの検索場所）
+$(OBJ_DIR)/%.o: $(SRC_DIR)/%.cpp | check-deps
 	@mkdir -p $(dir $@)
-	$(CXX) $(CXXFLAGS) -I$(SRC_DIR) -I$(SRC_DIR)/imgui -c $< -o $@
+	$(CXX) $(CXXFLAGS) -I$(SRC_DIR) -I$(SRC_DIR)/imgui -I. -c $< -o $@
 
-# 4. 生成されたフォルダやファイルをすべて削除するコマンド
-# ⚠ bin/save/pending_scores.json（未送信のスコア）も消えるので、文化祭の当日は使わないこと
+# 3. 起動：プロジェクトのフォルダを作業フォルダにして起動する
+#   ゲームは scores/ fonts/ sounds/ などを「今いるフォルダ」から読むので、ここで起動すれば素材をコピーしなくてよい
+#   settings.json も、このフォルダに作られる
+run: all
+	./$(TARGET)
+
+# 4. 必要なライブラリとバージョンの確認
+#   pkg-config で「入っているか」「最低バージョン以上か」を見る。足りなければ、何を入れればよいかを出して止める
+check-deps:
+	@command -v pkg-config >/dev/null 2>&1 || { echo "NG: pkg-config がありません → sudo apt install pkg-config"; exit 1; }
+	@ng=""; \
+	check(){ \
+	    if ! pkg-config --exists $$1; then ng="$$ng\n  $$1 が入っていません（apt: $$3）"; \
+	    elif ! pkg-config --atleast-version=$$2 $$1; then ng="$$ng\n  $$1 が古いです（今: $$(pkg-config --modversion $$1)、必要: $$2 以上）"; fi; \
+	}; \
+	check sdl2       $(MIN_SDL2)  libsdl2-dev; \
+	check SDL2_mixer $(MIN_MIXER) libsdl2-mixer-dev; \
+	check SDL2_ttf   $(MIN_TTF)   libsdl2-ttf-dev; \
+	check SDL2_image $(MIN_IMAGE) libsdl2-image-dev; \
+	if [ ! -f /usr/include/nlohmann/json.hpp ] && [ ! -f /usr/local/include/nlohmann/json.hpp ]; then \
+	    ng="$$ng\n  nlohmann/json.hpp がありません（apt: nlohmann-json3-dev）"; fi; \
+	if [ -n "$$ng" ]; then \
+	    printf "NG: ビルドに必要なものが足りません$$ng\n"; \
+	    echo "  → make install-deps で入れられます"; \
+	    echo "  ※ SDL2_mixer 2.6 以上は Ubuntu 24.04 以降の apt にあります（22.04 では古い版しか入りません）"; \
+	    exit 1; \
+	fi
+
+# 5. 必要なパッケージを入れる
+install-deps:
+	sudo apt update
+	sudo apt install -y build-essential pkg-config \
+	    libsdl2-dev libsdl2-ttf-dev libsdl2-mixer-dev libsdl2-image-dev \
+	    nlohmann-json3-dev
+
+# 6. 削除（譜面・素材・settings.json は消さない）
 clean:
-	rm -rf $(OBJ_DIR) $(BIN_DIR)
+	rm -rf obj obj_debug $(BIN_DIR)
 
-# 依存関係ファイルをインクルードして、ヘッダーの変更をMakefileに教える
 -include $(DEPS)
 
-.PHONY: all clean copy_assets
+.PHONY: all run check-deps install-deps clean

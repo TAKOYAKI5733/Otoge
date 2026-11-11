@@ -1,14 +1,15 @@
 #include "GameCommon.h"
 #include "Play/tutorialOverlay.h"
 #include "Displaymode.h"
-#include "NameEntryScene.h"
 
 #define SCREEN_W 1920
 #define SCREEN_H 1080
 
 #if defined(_WIN32)
 #define WIN32_LEAN_AND_MEAN
+#ifndef NOMINMAX            // C++ の標準ヘッダが先に定義していることがあるので、二重に定義しない（warning 対策）
 #define NOMINMAX
+#endif
 #include <windows.h>
 #include <timeapi.h>
 #endif
@@ -27,9 +28,20 @@ extern "C" int SDL_main(int argc, char* argv[]){
 int main(){
 #endif
 
+    // 🌟 設定は一番最初に読む（ファイルを読むだけなので、SDL を初期化する前でよい）
+    //    配信モードかどうかで、下の「描き方（レンダラー）」を決めるため。
+    //    loadPlayerSettings の中で g_streamMode（Displaymode.h）も設定される
+    PlayerSettings playerSettings;
+    loadPlayerSettings(playerSettings);
+
     #if defined(_WIN32)
         SDL_SetHint(SDL_HINT_WINDOWS_DPI_AWARENESS, "permonitorv2");
-        SDL_SetHint(SDL_HINT_RENDER_DRIVER, "opengl");   // D3D9のバッファリング遅延を回避
+        // 🌟 配信モード：Direct3D 11 で描く
+        //      画面いっぱいの OpenGL は、Windows がデスクトップの合成を通さずに直接モニターへ出すことがあり、
+        //      そうなると OBS の画面キャプチャには最初の1枚しか届かない。Direct3D 11 は必ず合成を通るので、どのキャプチャでも映る
+        //    それ以外：今まで通り OpenGL（D3D9のバッファリング遅延を回避）
+        //    ※ 描き方は起動のときにしか決められないので、配信モードを切り替えたら、ゲームを起動し直すと反映される
+        SDL_SetHint(SDL_HINT_RENDER_DRIVER, playerSettings.streamMode ? "direct3d11" : "opengl");
     #endif
 
     // ドライバを明示指定するとSDL2はバッチ描画を既定でOFFにするため、明示的にONにする
@@ -67,6 +79,14 @@ int main(){
     SDL_Window* window = SDL_CreateWindow("Otoge test --- Scene_Manager",SDL_WINDOWPOS_UNDEFINED, SDL_WINDOWPOS_UNDEFINED, SCREEN_W, SCREEN_H, SDL_WINDOW_SHOWN | SDL_WINDOW_RESIZABLE);
     SDL_Renderer* renderer = SDL_CreateRenderer(window, -1, SDL_RENDERER_ACCELERATED | SDL_RENDERER_PRESENTVSYNC);
 
+    // 🌟 どの描き方になったかを表示する（配信モードで direct3d11 になっているかの確認用）
+    {
+        SDL_RendererInfo info;
+        if(renderer && SDL_GetRendererInfo(renderer, &info) == 0){
+            std::cout << "描き方（レンダラー）: " << info.name << (playerSettings.streamMode ? "（配信モード）" : "") << "\n";
+        }
+    }
+
     SDL_RenderSetLogicalSize(renderer, SCREEN_W, SCREEN_H);
 
     GameScene currentScene = GameScene::Title;
@@ -76,9 +96,6 @@ int main(){
     ResultData resultData;
     bool autoplay = false;
 
-    PlayerSettings playerSettings;
-    loadPlayerSettings(playerSettings);
-        ScoreSync::instance().start("config/online.json", "save/pending_scores.json");
     applyWindowMode(window, playerSettings.windowMode);
 
     // 設定ファイルの値でVSyncとFPS上限を反映
@@ -149,19 +166,9 @@ int main(){
                 currentScene = playGame(window, renderer, selectedScore, selectedDifficulty, resultData, playerSettings, autoplay, nullptr);
                 break;
             }
-            
+
             case GameScene::Result:{
                 currentScene = resultScene(window, renderer, resultData);
-                // 自分のプレイで、オンライン設定があるときだけ名前入力へ
-                if(currentScene == GameScene::Select && !resultData.isAutoplay && ScoreSync::instance().enabled()){
-                    currentScene = GameScene::NameEntry;
-                }
-                break;
-            }
-
-            case GameScene::NameEntry:{
-                ScoreRecord rec = makeScoreRecord(selectedScore, selectedDifficulty, resultData);
-                currentScene = nameEntryScene(window, renderer, rec);
                 break;
             }
 
@@ -212,6 +219,11 @@ int main(){
                 break;
             }
 
+            case GameScene::NoteSetting:{
+                currentScene = noteSettingScene(window, renderer, playerSettings);
+                break;
+            }
+
             default:{
                 currentScene = GameScene::Shutdown;
                 break;
@@ -219,7 +231,6 @@ int main(){
         }
     }
 
-    ScoreSync::instance().stop();
     releaseGraphicsCache();
     SDL_DestroyTexture(prev);
     SDL_DestroyTexture(nex);

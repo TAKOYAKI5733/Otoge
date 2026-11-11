@@ -1,5 +1,7 @@
 #include "GameCommon.h"
+#include "InputBinding.h"
 #include <vector>
+#include <unordered_map>
 #include <string>
 #include <algorithm>
 #include <cmath>
@@ -11,6 +13,8 @@
 //    ・叩く回数は自由。ENTER を押した時点の値で次へ進む（叩かなければ今の値のまま）
 //    ・値は常に「+12 ms」のように表示し、←→ で 1ms（Shift で 10ms）ずつ微調整できる
 //    ・確認で ENTER を押すと settings.json に保存して選曲画面へ戻る
+//    ・叩くのは、特殊キー（InputBinding.h の isReservedKey）と操作に使うキーを除いた、すべてのキー
+//      ＋ コントローラーのボタン・十字キー・スティック（軸）
 // =====================================================================
 
 namespace {
@@ -38,6 +42,74 @@ constexpr double NOTE_SPEED = 0.9;          // px/ms
 constexpr SDL_Rect INFO_RECT = {1060, 220, 640, 640};
 
 enum class Step{ Audio, Visual, Confirm };
+
+// この画面の操作に使うキー（叩いたことにはしない）
+//   ←→↑↓：値を動かす   Shift：±10ms にする   ENTER：決定   Backspace：やり直し   ESC：戻る（ESC は特殊キーでもある）
+bool isCalibrationControlKey(SDL_Scancode sc){
+    switch(sc){
+        case SDL_SCANCODE_LEFT:
+        case SDL_SCANCODE_RIGHT:
+        case SDL_SCANCODE_UP:
+        case SDL_SCANCODE_DOWN:
+        case SDL_SCANCODE_LSHIFT:
+        case SDL_SCANCODE_RSHIFT:
+        case SDL_SCANCODE_RETURN:
+        case SDL_SCANCODE_KP_ENTER:
+        case SDL_SCANCODE_BACKSPACE:
+        case SDL_SCANCODE_ESCAPE:
+            return true;
+        default:
+            return false;
+    }
+}
+
+// ---------------------------------------------------------------------
+// 「叩いた」かどうか（キーボード・コントローラー共通）
+//   ・キー        : 押した瞬間（押しっぱなしの連打 = repeat は数えない）
+//   ・ボタン      : 押した瞬間
+//   ・十字キー    : 新しい向きが入った瞬間（↑ → ↑＋→ のように向きが増えたとき。離したときは数えない）
+//   ・スティック  : 倒しきった瞬間。軸のイベントは動かしている間ずっと来るので、
+//                   「倒した」状態を覚えておき、半分以上戻すまでは次を数えない
+// ---------------------------------------------------------------------
+class TapInput{
+public:
+    bool isTap(const SDL_Event& e){
+        switch(e.type){
+            case SDL_KEYDOWN:{
+                if(e.key.repeat) return false;
+                const SDL_Scancode sc = e.key.keysym.scancode;
+                return !isReservedKey(sc) && !isCalibrationControlKey(sc);
+            }
+            case SDL_JOYBUTTONDOWN:
+                return true;
+
+            case SDL_JOYHATMOTION:{
+                Uint8& prev = hats_[key(e.jhat.which, e.jhat.hat)];
+                const Uint8 added = static_cast<Uint8>(e.jhat.value & ~prev);   // 新しく入った向き
+                prev = e.jhat.value;
+                return added != 0;
+            }
+
+            case SDL_JOYAXISMOTION:{
+                SDL_Joystick* j = SDL_JoystickFromInstanceID(e.jaxis.which);
+                const int rest = j ? axisRestValue(j, e.jaxis.axis) : 0;
+                const int d = std::abs(e.jaxis.value - rest);
+                bool& held = axes_[key(e.jaxis.which, e.jaxis.axis)];
+                if(!held && d > AXIS_PRESS_THRESHOLD){ held = true; return true; }
+                if(held && d < AXIS_PRESS_THRESHOLD / 2) held = false;   // 半分以上戻したら、次を数えられる
+                return false;
+            }
+
+            default:
+                return false;
+        }
+    }
+
+private:
+    static long long key(SDL_JoystickID which, int index){ return static_cast<long long>(which) * 256 + index; }
+    std::unordered_map<long long, Uint8> hats_;
+    std::unordered_map<long long, bool>  axes_;
+};
 
 // ---------------------------------------------------------------------
 // メトロノーム：1拍分（クリック音＋無音）の音を作り、ループ再生する
@@ -298,8 +370,10 @@ GameScene calibrationScene(SDL_Window* window, SDL_Renderer* renderer, PlayerSet
     bool running = true;
     GameScene nextScene = GameScene::Select;
     SDL_Event e;
+    TapInput tapInput;
 
     while(running){
+        InputDevices::get().refresh();    // コントローラーの抜き差しに合わせる（開いているコントローラーしかイベントが来ない）
         const double frameMs = nowMs();   // このフレームの時刻（PlayScene と同じく、フレームの頭で1回だけ取る）
 
         // メトロノームを鳴らし始める。実際に鳴らした瞬間を拍の基準にする
@@ -320,15 +394,8 @@ GameScene calibrationScene(SDL_Window* window, SDL_Renderer* renderer, PlayerSet
                 nextScene = GameScene::Shutdown;
                 continue;
             }
-            if(e.type != SDL_KEYDOWN) continue;
-
-            SDL_Keycode sym = e.key.keysym.sym;
-            bool shift = (e.key.keysym.mod & KMOD_SHIFT) != 0;
-            bool isTapKey = (sym == SDLK_w || sym == SDLK_e || sym == SDLK_r || sym == SDLK_u ||
-                             sym == SDLK_i || sym == SDLK_o || sym == SDLK_SPACE);
-
-            if(isTapKey){
-                if(e.key.repeat) continue;
+            // 叩いたか（特殊キー・操作のキー以外のキー、コントローラーのボタン・十字キー・スティック）
+            if(tapInput.isTap(e)){
                 if(step == Step::Visual) continue;   // 表示調整は叩かずに目で合わせる
 
                 double err;
@@ -350,6 +417,11 @@ GameScene calibrationScene(SDL_Window* window, SDL_Renderer* renderer, PlayerSet
                 lastTapMs = frameMs;
                 continue;
             }
+
+            if(e.type != SDL_KEYDOWN) continue;   // ここから下は操作のキー
+
+            SDL_Keycode sym = e.key.keysym.sym;
+            bool shift = (e.key.keysym.mod & KMOD_SHIFT) != 0;
 
             switch(sym){
                 case SDLK_LEFT:
@@ -437,7 +509,7 @@ GameScene calibrationScene(SDL_Window* window, SDL_Renderer* renderer, PlayerSet
 
         // 2. 説明文
         const char* instruction =
-            (step == Step::Audio)  ? "拍の音に合わせて W E R U I O / Space を叩いてください" :
+            (step == Step::Audio)  ? "拍の音に合わせて、好きなキー（コントローラーのボタンでも可）を叩いてください" :
             (step == Step::Visual) ? "叩かずに見てください。ノーツが破裂する瞬間と重なるように ←→ で合わせます" :
                                      "音とノーツに合わせて叩いてください。ズレが ±0 に近ければ調整完了です";
         drawText(renderer, smallFont, instruction, SDL_Color{200, 200, 220, 255}, SW / 2, 140, Align::Center);
@@ -585,9 +657,9 @@ GameScene calibrationScene(SDL_Window* window, SDL_Renderer* renderer, PlayerSet
 
         // 5. 操作方法
         const char* help =
-            (step == Step::Confirm) ? "叩く: W E R U I O / Space    上下: 調整する値    左右: ±1ms（Shift: ±10ms）    Backspace: 記録を消す    ENTER: 保存    ESC: 戻る" :
+            (step == Step::Confirm) ? "叩く: 好きなキー・ボタン    上下: 調整する値    左右: ±1ms（Shift: ±10ms）    Backspace: 記録を消す    ENTER: 保存    ESC: 戻る" :
             (step == Step::Visual)  ? "左右: ±1ms（Shift: ±10ms）    Backspace: 元の値に戻す    ENTER: 決定して次へ    ESC: 戻る" :
-                                      "叩く: W E R U I O / Space    左右: ±1ms（Shift: ±10ms）    Backspace: やり直し    ENTER: 決定して次へ    ESC: 戻る";
+                                      "叩く: 好きなキー・ボタン    左右: ±1ms（Shift: ±10ms）    Backspace: やり直し    ENTER: 決定して次へ    ESC: 戻る";
         drawText(renderer, smallFont, help, SDL_Color{130, 130, 150, 255}, SW / 2, SH - 50, Align::Center);
 
         SDL_RenderPresent(renderer);

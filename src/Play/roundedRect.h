@@ -11,9 +11,15 @@
 //    batch.flush(renderer);                                      // 1回の描画で全部出す
 //
 //  ・SDL_RenderGeometry は SDL 2.0.18 以降で使える
+//
+//  ■ レーンを傾けているとき（g_tiltProj が入っているとき。Play/TiltProjection.h）
+//    角丸の外周の点を作ったすぐ後に、点の位置を「傾けた画面の位置」に変換する。
+//    縁のなめらかにする帯（1px）は、変換した後の画面の上で付けるので、奥の小さいノーツでも縁がくっきり・なめらか。
+//    ※ add などを呼ぶ時点で変換するので、傾けている間に add して、そのまま flush すること
 // ====================================================================
 
 #include "GameCommon.h"
+#include "Play/TiltProjection.h"
 #include <vector>
 #include <cmath>
 #include <algorithm>
@@ -32,13 +38,16 @@ struct RoundedRectBatch{
         if(w <= 0.0f || h <= 0.0f || c.a == 0) return;
         const float r = clampRadius(radius, w, h);
         buildRing(ring_, x, y, w, h, r, segsFor(r, cornerSegs));
+        projectRing(ring_);
         const int n = static_cast<int>(ring_.size());
 
         const int base = static_cast<int>(verts.size());
 
         // 0: 中心 / 1..n: 外周
-        verts.push_back({ { x + w * 0.5f, y + h * 0.5f }, c, { 0.0f, 0.0f } });
-        for(const P& p : ring_) verts.push_back({ { p.x, p.y }, c, { 0.0f, 0.0f } });
+        float cxp = x + w * 0.5f, cyp = y + h * 0.5f, ca = 1.0f;
+        projectPoint(cxp, cyp, ca);
+        verts.push_back({ { cxp, cyp }, fadeColor(c, ca), { 0.0f, 0.0f } });
+        for(const P& p : ring_) verts.push_back({ { p.x, p.y }, fadeColor(c, p.a), { 0.0f, 0.0f } });
 
         for(int i = 0; i < n; i++){
             idx.push_back(base);
@@ -54,10 +63,11 @@ struct RoundedRectBatch{
         if(w <= 0.0f || h <= 0.0f || spread <= 0.0f || c.a == 0) return;
         const float r = clampRadius(radius, w, h);
         buildRing(ring_, x, y, w, h, r, segsFor(r, cornerSegs));
+        projectRing(ring_);
         const int n = static_cast<int>(ring_.size());
 
         const int innerBase = static_cast<int>(verts.size());
-        for(const P& p : ring_) verts.push_back({ { p.x, p.y }, c, { 0.0f, 0.0f } });
+        for(const P& p : ring_) verts.push_back({ { p.x, p.y }, fadeColor(c, p.a), { 0.0f, 0.0f } });
 
         pushFeather(innerBase, n, c, spread);
     }
@@ -73,13 +83,15 @@ struct RoundedRectBatch{
         // 外周(縁) と、そこから s だけ内側に縮めた角丸四角の外周を、同じ点数で作る
         buildRing(ring_,      x,     y,     w,         h,         r,                     segs);
         buildRing(innerRing_, x + s, y + s, w - 2 * s, h - 2 * s, std::max(0.0f, r - s), segs);
+        projectRing(ring_);
+        projectRing(innerRing_);
         const int n = static_cast<int>(ring_.size());
 
         SDL_Color clear = c;
         clear.a = 0;
 
         const int edgeBase  = static_cast<int>(verts.size());
-        for(const P& p : ring_)      verts.push_back({ { p.x, p.y }, c,     { 0.0f, 0.0f } });
+        for(const P& p : ring_)      verts.push_back({ { p.x, p.y }, fadeColor(c, p.a), { 0.0f, 0.0f } });
         const int innerBase = static_cast<int>(verts.size());
         for(const P& p : innerRing_) verts.push_back({ { p.x, p.y }, clear, { 0.0f, 0.0f } });
 
@@ -101,12 +113,14 @@ struct RoundedRectBatch{
         // 外周と、t だけ内側に縮めた外周を、同じ点数で作る
         buildRing(ring_,      x,     y,     w,         h,         r,                     segs);
         buildRing(innerRing_, x + t, y + t, w - 2 * t, h - 2 * t, std::max(0.0f, r - t), segs);
+        projectRing(ring_);
+        projectRing(innerRing_);
         const int n = static_cast<int>(ring_.size());
 
         const int outerBase = static_cast<int>(verts.size());
-        for(const P& p : ring_)      verts.push_back({ { p.x, p.y }, c, { 0.0f, 0.0f } });
+        for(const P& p : ring_)      verts.push_back({ { p.x, p.y }, fadeColor(c, p.a), { 0.0f, 0.0f } });
         const int innerBase = static_cast<int>(verts.size());
-        for(const P& p : innerRing_) verts.push_back({ { p.x, p.y }, c, { 0.0f, 0.0f } });
+        for(const P& p : innerRing_) verts.push_back({ { p.x, p.y }, fadeColor(c, p.a), { 0.0f, 0.0f } });
 
         // 外周と内周の間（帯）を三角形で埋める
         for(int i = 0; i < n; i++){
@@ -129,7 +143,7 @@ struct RoundedRectBatch{
     }
 
 private:
-    struct P{ float x, y, nx, ny; };   // 外周の点と、その点の外向き法線
+    struct P{ float x, y, nx, ny; float a = 1.0f; };   // 外周の点・その点の外向き法線・ぼかしの濃さ
     std::vector<P> ring_;              // 使い回し用(毎回のメモリ確保を避ける)
     std::vector<P> innerRing_;         // 内側の影用
 
@@ -138,6 +152,37 @@ private:
     }
     static int segsFor(float r, int cornerSegs){
         return (r < 0.5f) ? 1 : std::max(1, cornerSegs);
+    }
+
+    static SDL_Color fadeColor(SDL_Color c, float a){
+        if(a >= 0.999f) return c;
+        c.a = static_cast<Uint8>(c.a * a);
+        return c;
+    }
+
+    // 1点を傾けた画面の位置に変換する（傾けていないときは何もしない）
+    static void projectPoint(float& x, float& y, float& a){
+        if(!g_tiltProj) return;
+        float X, Y, s;
+        g_tiltProj->map(x, y, X, Y, s, a);
+        x = X;
+        y = Y;
+    }
+
+    // 外周の点を全部、傾けた画面の位置に変換する。外向きの向き（法線）も画面の上で計算し直す
+    //   → pushFeather の 1px の帯が、画面の上でちょうど 1px になる（奥でも細くなりすぎない）
+    static void projectRing(std::vector<P>& ring){
+        if(!g_tiltProj) return;
+        for(P& p : ring){
+            float X, Y, s, a, X2, Y2, s2, a2;
+            g_tiltProj->map(p.x, p.y, X, Y, s, a);
+            g_tiltProj->map(p.x + p.nx, p.y + p.ny, X2, Y2, s2, a2);   // 法線の先の点も変換して、向きを求める
+            float nx = X2 - X, ny = Y2 - Y;
+            const float len = std::sqrt(nx * nx + ny * ny);
+            if(len > 1e-6f){ nx /= len; ny /= len; }
+            else{ nx = p.nx; ny = p.ny; }
+            p.x = X; p.y = Y; p.nx = nx; p.ny = ny; p.a = a;
+        }
     }
 
     // 外周の点を out に作る(時計回り: 右上の角 → 右下 → 左下 → 左上)
@@ -154,12 +199,13 @@ private:
             for(int s = 0; s <= segs; s++){
                 const float ang = a0[k] + (0.5f * kPi) * static_cast<float>(s) / static_cast<float>(segs);
                 const float nx = std::cos(ang), ny = std::sin(ang);
-                out.push_back({ cx[k] + r * nx, cy[k] + r * ny, nx, ny });
+                out.push_back({ cx[k] + r * nx, cy[k] + r * ny, nx, ny, 1.0f });
             }
         }
     }
 
     // innerBase から並ぶ n 個の外周頂点の外側に、幅 width の「色 → 透明」の帯を張る
+    //   ring_ の点（傾けているときは変換後の画面の点）から、画面の上で width だけ外に出す
     void pushFeather(int innerBase, int n, SDL_Color c, float width){
         const int outerBase = static_cast<int>(verts.size());
         SDL_Color edge = c;

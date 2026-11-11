@@ -3,6 +3,7 @@
 #include "GameCommon.h"
 #include <nlohmann/json.hpp>
 #include "Play/roundedRect.h"
+#include "Play/drawFrame.h"      // ノーツの形（NOTE_HEAD_H など）・隠れているノーツ・ロングの芯の値を、プレイ画面と共通で使う
 #include "Play/tutorialAnim.h"
 
 #include <vector>
@@ -158,7 +159,7 @@ public:
 
 private:
     enum class Kind{ Text, Note };
-    enum class NoteKind{ Normal, Drag, Lane, Long };
+    enum class NoteKind{ Normal, Drag, Lane, Long, DragLong };
 
     struct Tex{
         SDL_Texture* t = nullptr;
@@ -176,7 +177,8 @@ private:
 
         NoteKind noteKind = NoteKind::Normal;
         int widthLanes = 1;
-        float length = 220.0f;    // long の帯の長さ(px)
+        float length = 220.0f;    // long / dragLong の長さ(px)：ヘッドの中心から終点の中心まで
+        bool hidden = false;      // true = レーンが隠れているときの見た目（半透明＋縁取り）
     };
 
     std::vector<Item> items_;
@@ -255,7 +257,7 @@ private:
             warnUnknownKeys(item, {"type", "start", "end", "text", "x", "y", "size", "color", "wrap", "anim", "in", "out", "panel"}, where);
         }
         else{
-            warnUnknownKeys(item, {"type", "start", "end", "noteType", "x", "y", "width", "length", "label", "size", "color", "wrap", "anim", "in", "out"}, where);
+            warnUnknownKeys(item, {"type", "start", "end", "noteType", "x", "y", "width", "length", "hidden", "label", "size", "color", "wrap", "anim", "in", "out"}, where);
         }
 
         if(!item.contains("start") || !item.contains("end")){
@@ -303,9 +305,16 @@ private:
             else if(nk == "drag")   it.noteKind = NoteKind::Drag;
             else if(nk == "lane")   it.noteKind = NoteKind::Lane;
             else if(nk == "long")   it.noteKind = NoteKind::Long;
+            else if(nk == "dragLong") it.noteKind = NoteKind::DragLong;
             else{
-                std::printf("[チュートリアル] 警告: %s の noteType \"%s\" が不明。normal にします(normal/drag/lane/long)\n", where.c_str(), nk.c_str());
+                std::printf("[チュートリアル] 警告: %s の noteType \"%s\" が不明。normal にします(normal/drag/lane/long/dragLong)\n", where.c_str(), nk.c_str());
                 it.noteKind = NoteKind::Normal;
+            }
+            it.hidden = item.value("hidden", false);
+            if(it.hidden && it.noteKind == NoteKind::Lane){
+                // ゲームでも LANE ノーツは隠れている見た目にならない（レーンを開け閉めするノーツなので、いつもはっきり見える）
+                std::printf("[チュートリアル] 警告: %s の lane ノーツに hidden は使えません（ふつうの見た目で出します）\n", where.c_str());
+                it.hidden = false;
             }
             it.widthLanes = std::max(1, std::min(6, item.value("width", 1)));
             it.length = static_cast<float>(std::max(1.0, item.value("length", 220.0)));
@@ -351,31 +360,78 @@ private:
         blit(renderer, it.text, cx, cy, s.scale, s.alpha, s.reveal);
     }
 
+    // ノーツの図：プレイ画面（renderGame.h）と同じ形・色で描く
+    //   ・幅      ：レーン幅 × width から、左右 NOTE_SIDE_MARGIN ずつ空ける
+    //   ・ヘッド  ：高さ NOTE_HEAD_H、角の丸み NOTE_RADIUS。色は 通常=白 / ドラッグ=黄 / レーン=赤
+    //   ・ロング  ：ヘッドと同じ色の帯 ＋ 真ん中の芯（ノーツ色を 0.6 倍に暗くした色）。
+    //               帯はヘッドの中心から length だけ上の「終点」まで。芯は帯の端より内側で止める（LONG_CORE_*）
+    //   ・hidden  ：レーンが隠れているときの見た目。中身を半透明にして、同じ色の縁取りを付ける（HIDDEN_NOTE_*）
+    //   (x, y) はヘッドの中心。図全体を s.scale 倍・s.alpha の濃さで描く
     void drawNote(SDL_Renderer* renderer, const Item& it, const TutAnimState& s) const {
-        const float w = static_cast<float>(laneWidth_ * it.widthLanes) * s.scale;
-        const float h = 30.0f * s.scale;                       // ゲーム内のノーツと同じ高さ
+        const float k  = s.scale;
         const float cx = it.x + s.dx, cy = it.y + s.dy;
+        const float laneSpan = static_cast<float>(laneWidth_ * it.widthLanes) * k;
+        const float w  = std::max(4.0f * k, laneSpan - NOTE_SIDE_MARGIN * 2.0f * k);
+        const float h  = NOTE_HEAD_H * k;
+        const float r  = NOTE_RADIUS * k;
+        const float left = cx - w * 0.5f;
+        const float headTop = cy - h * 0.5f;
 
-        auto withAlpha = [&](SDL_Color c, float base) -> SDL_Color {
-            c.a = static_cast<Uint8>(std::lround(base * s.alpha));
+        // 色に、アニメーションの濃さ（s.alpha）を掛ける
+        auto fade = [&](SDL_Color c) -> SDL_Color {
+            c.a = static_cast<Uint8>(std::lround(c.a * s.alpha));
             return c;
         };
 
-        SDL_Color head{255, 255, 255, 255};                    // 通常・ロングの先端は白
-        if(it.noteKind == NoteKind::Drag)      head = SDL_Color{250, 250, 150, 255};
-        else if(it.noteKind == NoteKind::Lane) head = SDL_Color{255, 50, 50, 255};
+        const bool isLong = (it.noteKind == NoteKind::Long || it.noteKind == NoteKind::DragLong);
 
-        RoundedRectBatch batch;
-        if(it.noteKind == NoteKind::Long){
-            const float len = it.length * s.scale;             // 先端の中心から上へ伸びる帯
-            batch.add(cx - w * 0.5f, cy - len, w, len, 0.0f, withAlpha(SDL_Color{0, 150, 255, 255}, 140.0f));
+        // ① 色：ドラッグロングはドラッグと同じ黄色、ふつうのロングは通常ノーツと同じ白
+        SDL_Color col{255, 255, 255, 255};
+        if(it.noteKind == NoteKind::Drag || it.noteKind == NoteKind::DragLong) col = SDL_Color{250, 250, 150, 255};
+        else if(it.noteKind == NoteKind::Lane)                                  col = SDL_Color{255, 50, 50, 255};
+
+        const SDL_Color outlineCol{col.r, col.g, col.b, HIDDEN_NOTE_OUTLINE_ALPHA};
+        if(it.hidden) col.a = HIDDEN_NOTE_ALPHA;
+
+        RoundedRectBatch batch;   // 足した順に重なる：帯 → 芯 → ヘッド → 縁取り
+
+        // ② ロング：帯と芯（ヘッドより奥）
+        if(isLong){
+            const float len = it.length * k;
+            const float top = cy - len - h * 0.5f;   // 終点の丸い端も、ヘッドと同じ太さ
+            const float bottom = cy;                 // 帯はヘッドの中心まで（下半分はヘッドで隠れる）
+
+            batch.add(left, top, w, bottom - top, r, fade(col));
+            if(it.hidden){
+                // 帯の縁取りはヘッドの上の端までにする（ヘッドの真ん中を線が横切らないように）
+                const float outlineH = std::max(r * 2.0f, headTop - top);
+                batch.addOutline(left, top, w, outlineH, r, HIDDEN_NOTE_OUTLINE_W * k, fade(outlineCol));
+            }
+
+            // 芯：帯の横幅の LONG_CORE_WIDTH_RATIO、左右中央。上は帯の端から内側、下はヘッドから離して止める
+            const float innerW = w * LONG_CORE_WIDTH_RATIO;
+            const float innerX = cx - innerW * 0.5f;
+            const float innerTop = top + LONG_CORE_TAIL_MARGIN * k;
+            const float innerBottom = headTop - LONG_CORE_HEAD_GAP * k;
+            if(innerBottom - innerTop > 1.0f){
+                const SDL_Color innerCol = it.hidden
+                    ? SDL_Color{col.r, col.g, col.b, HIDDEN_NOTE_INNER_ALPHA}            // 隠れている：帯より薄く
+                    : SDL_Color{static_cast<Uint8>(col.r * 0.6), static_cast<Uint8>(col.g * 0.6),
+                                static_cast<Uint8>(col.b * 0.6), 200};                 // 叩く前の芯
+                batch.add(innerX, innerTop, innerW, innerBottom - innerTop, std::min(r, innerW * 0.5f), fade(innerCol));
+            }
         }
-        batch.add(cx - w * 0.5f, cy - h * 0.5f, w, h, 8.0f * s.scale, withAlpha(head, 255.0f));
+
+        // ③ ヘッド（＋隠れているときの縁取り）
+        batch.add(left, headTop, w, h, r, fade(col));
+        if(it.hidden){
+            batch.addOutline(left, headTop, w, h, r, HIDDEN_NOTE_OUTLINE_W * k, fade(outlineCol));
+        }
         batch.flush(renderer);
 
         if(it.text.t){                                         // ラベルはノーツの下に中央そろえ
-            const float ly = cy + h * 0.5f + 14.0f * s.scale + it.text.h * s.scale * 0.5f;
-            blit(renderer, it.text, cx, ly, s.scale, s.alpha, 1.0f);
+            const float ly = cy + h * 0.5f + 14.0f * k + it.text.h * k * 0.5f;
+            blit(renderer, it.text, cx, ly, k, s.alpha, 1.0f);
         }
     }
 };

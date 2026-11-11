@@ -2,15 +2,13 @@
 #include <nlohmann/json.hpp>
 #include <limits>
 #include <cfloat>
-#include <cctype>
-#include <atomic>
 #include <string>
 #include <vector>
+#include <ctime>       // ブループリントにコピーした時刻を出す
 #include "Editortempo.h"
 #include "bpmdetect.h"
 #include "musicAnalyze.h"   // Music Settings：オフセット・BPM・BPM の変化を自動で決める
 #include "InputBinding.h"   // キー設定（レーンのキー）を読む：キーボード配置モードで使う
-#include "SongPreview.h"    // 試聴の長さ（選曲画面と共通）
 #include "Play/drawFrame.h"      // NOTE_SIDE_MARGIN などノーツの形（プレイ画面と共通）
 #include "Play/roundedRect.h"    // 角丸の描画（プレイ画面と共通）
 #include "imgui.h"
@@ -21,11 +19,6 @@ using json = nlohmann::json;
 
 #define SCREEN_W 1920
 #define SCREEN_H 1080
-struct EditorPathKeyfrane{
-    int32_t time = 0;
-    double y = 0.0;
-    int easing = 1;
-};
 struct EditorNote{
     int noteTypeInt = 0;
     int lane;
@@ -35,16 +28,16 @@ struct EditorNote{
     bool hasCustomSpeed = false;
     double customSpeed = 1.0;
 
-    std::vector<EditorPathKeyfrane> path;
-
     bool selected = false;   // 範囲選択で選ばれているか（エディタ専用。JSONには保存しない）
+    bool tailSelected = false;   // ロングの「終端だけ」が範囲選択で選ばれているか（ドラッグで長さを変える。エディタ専用）
 
     bool isLong() const {return duration > 0;}
 };
 
-static const char* kNoteTypeNames[]  = {"Normal(0)", "Drag(3)", "Lane(4)", "Normal_c(5)"};
-static const int   kNoteTypeValues[] = {0, 3, 4, 5};
-static constexpr int kNoteTypeCount  = 4;
+// ノーツの種類のボタン（NOTE パネル）。シアンのノーツ（Normal_c = 5）は使わないことにしたので並べない
+static const char* kNoteTypeNames[]  = {"Normal(0)", "Drag(3)", "Lane(4)"};
+static const int   kNoteTypeValues[] = {0, 3, 4};
+static constexpr int kNoteTypeCount  = 3;
 
 inline int noteTypeToComboIndex(int typeValue){
     for(int i = 0; i < kNoteTypeCount; i++){
@@ -91,7 +84,7 @@ struct ChartMeta{
     std::string bgm;
     std::string composer = "Unknown";
     double offsetMs = 0.0;
-    double previewStartMs = 0.0;   // 選曲画面の試聴を始める位置（曲ファイル上の ms。オフセットの影響を受けない）
+    double previewStartMs = 0.0;   // 選曲画面の試聴を始める位置（曲ファイル上の ms。JSON の "previewStart"）
 };
 
 //JSON保存・読込
@@ -123,18 +116,6 @@ inline bool saveChart(const std::string& path, const ChartMeta& meta, const std:
             if(n.width != 1) item["width"] = n.width;
             if(n.duration > 0) item["duration"] = n.duration;
             if(n.hasCustomSpeed) item["speed"] = n.customSpeed;
-
-            if(!n.path.empty()){
-                json pathArr = json::array();
-                for(const auto& k : n.path){
-                    json kj;
-                    kj["time"] = k.time;
-                    kj["y"] = k.y;
-                    kj["easing"] = k.easing;
-                    pathArr.push_back(kj);
-                }
-                item["path"] = pathArr;
-            }
 
             notesArr.push_back(item);
         }
@@ -200,18 +181,7 @@ inline EditorDifficulty parseOneDifficulty(const json& src){
                 n.customSpeed = item.at("speed").get<double>();
             }
 
-            if(item.contains("path")){
-                for(const auto& kf : item.at("path")){
-                    EditorPathKeyfrane k;
-                    k.time = kf.value("time", 0);
-                    k.y = kf.value("y", 0.0);
-                    k.easing = kf.value("easing", 1);
-                    n.path.push_back(k);
-                }
-                std::sort(n.path.begin(), n.path.end(), [](const EditorPathKeyfrane& a, const EditorPathKeyfrane& b){
-                    return a.time < b.time;
-                });
-            }
+            // カスタムパス（"path"）は使わないことにしたので読まない（古い譜面に書いてあっても、保存し直すと消える）
 
             d.notes.push_back(n);
         }
@@ -274,30 +244,6 @@ inline bool loadChartForEdit(const std::string & path, ChartMeta& meta, std::vec
     }
 
     return true;
-}
-
-inline double evaluateEditorPathY(const EditorNote& n, int32_t musicTime){
-    const auto& path = n.path;
-    if(path.empty()) return 0.0;
-
-    if(musicTime == n.time) return 0.0;
-
-    if(musicTime <= path.front().time) return path.front().y;
-    if(musicTime >= path.back().time) return path.back().y;
-
-    for(size_t i = 1; i < path.size(); i++){
-        if(musicTime <= path[i].time){
-            const auto& k0 = path[i - 1];
-            const auto& k1 = path[i];
-            double t = static_cast<double>(musicTime - k0.time) / static_cast<double>(k1.time - k0.time);
-
-            if(k1.easing == 2) t = easeOutCubic(t);
-            else if(k1.easing == 3) t = easeInCubic(t);
-
-            return k0.y + (k1.y - k0.y) * t;
-        }
-    }
-    return path.back().y;
 }
 
 // =====================================================================
@@ -386,7 +332,6 @@ inline void applyMusicAnalysis(const MusicAnalysis& r, ChartMeta& meta, std::vec
                 const int32_t newEnd = remapTime(oldMap, newMap, n.time + n.duration);
                 n.duration = std::max<int32_t>(1, newEnd - newStart);
             }
-            for(auto& k : n.path) k.time = remapTime(oldMap, newMap, k.time);
             n.time = newStart;
         }
         for(auto& sev : d.speedEvents) sev.time = remapTime(oldMap, newMap, sev.time);
@@ -518,9 +463,13 @@ inline double gridStepBeat(const std::vector<SigSeg>& segs, double beat, double 
     const double c = s + k * gb;
     if(c >= s - 1.0e-9 || i == 0) return c;
     // この区切りの先頭より前 → 1つ前の区切りの、最後のグリッド線
+    //   🌟 修正：区切りの先頭（BPM イベント）から eps 以内の線は「区切りの先頭と同じ線」とみなして飛ばす。
+    //     BPM イベントの時刻は整数 ms に丸めて置かれるので、前の区切りのグリッド線が、イベントのほんの少し手前
+    //     （1ms 未満）に来ることがある。その線に戻ると、次の計算で sigSegIndexAt が eps のせいで
+    //     「もう後ろの区切りにいる」と判断し、また同じ線に戻される → BPM の変わり目から前に戻れなくなっていた
     const double ps = segs[i - 1].beat;
-    const long pk = static_cast<long>(std::ceil((s - ps - 1.0e-9) / gb)) - 1;
-    return ps + pk * gb;
+    const long pk = static_cast<long>(std::ceil((s - ps - eps) / gb)) - 1;
+    return std::max(ps, ps + pk * gb);   // 前の区切りがとても短い（1マスより短い）ときは、その先頭で止まる
 }
 
 // =====================================================================
@@ -602,202 +551,6 @@ inline void timeSigAt(const EditorDifficulty& d, int32_t t, int& num, int& den){
 }
 
 // =====================================================================
-//  エディタの曲の再生（EditorMusic）
-//
-//  なぜ必要か：
-//    この環境の SDL_mixer では、WAV を Mix_Music で読み込むと、Mix_SetMusicPosition が
-//    「1 秒単位」にしか動かない（2.372 秒を指定すると 2.000 秒から鳴る）。
-//    そのため、スクロールした位置と鳴っている位置が最大 1 秒ずれていた。
-//
-//  どうするか：
-//    ・WAV だけは Mix_LoadWAV で曲全体をメモリに読み込み（Mix_Chunk）、
-//      「曲の途中から始まるチャンク」を自分で作って鳴らす
-//      （波形の先頭アドレスを、始めたい位置のバイト数だけずらすだけ。コピーはしないので一瞬で終わる）
-//      → 1 サンプル単位で、好きな位置から鳴らせる
-//    ・WAV 以外（mp3 / ogg など）は今まで通り Mix_Music で鳴らす
-//    ・外からは Mix_Music と同じ感覚で使えるように、同じ名前の操作をそろえてある
-//
-//  WAV のときの注意：
-//    ・チャンネルを 1 つ（MUSIC_CHANNEL）予約して、タップ音やメトロノームに横取りされないようにする
-//    ・曲の位置は、チャンネルに付けた「エフェクト」で数える（countPlayedBytes）
-//      SDL_mixer は音を混ぜるたびに、そのチャンネルのエフェクトへ「今回混ぜたバイト数」を渡してくるので、
-//      それを足していけば「混ぜ終わった位置」が分かる。
-//      これは Mix_Music の Mix_GetMusicPosition（デコードし終わった位置）と同じ意味の値なので、
-//      WAV でも mp3 と同じ「ずれの補正」がかかる。
-//      → プレイ画面（PlayScene.cpp：Mix_Music ＋ Mix_GetMusicPosition で補正）と同じ基準で時刻が決まり、
-//        エディタとプレイ画面でオフセットの感じ方が変わらない
-// =====================================================================
-struct EditorMusic{
-    static constexpr int MUSIC_CHANNEL = 0;   // WAV を鳴らすチャンネル（予約する）
-
-    // 読み込む。拡張子が .wav ならチャンクで、それ以外は Mix_Music で
-    bool load(const std::string& path){
-        free();
-        if(isWavPath(path)){
-            int freq = 0, ch = 0;
-            Uint16 fmt = 0;
-            if(Mix_QuerySpec(&freq, &fmt, &ch) == 0) return false;
-            full_ = Mix_LoadWAV(path.c_str());   // 再生する形式（周波数・ビット数・チャンネル数）に変換して読む
-            if(!full_) return false;
-            freq_ = freq;
-            frameBytes_ = (SDL_AUDIO_BITSIZE(fmt) / 8) * ch;
-            Mix_ReserveChannels(MUSIC_CHANNEL + 1);   // チャンネル 0 を Mix_PlayChannel(-1, ...) に使わせない
-            reserved_ = true;
-            return true;
-        }
-        music_ = Mix_LoadMUS(path.c_str());
-        return music_ != nullptr;
-    }
-
-    void free(){
-        halt();
-        if(full_){ Mix_FreeChunk(full_); full_ = nullptr; }
-        if(music_){ Mix_FreeMusic(music_); music_ = nullptr; }
-        if(reserved_){ Mix_ReserveChannels(0); reserved_ = false; }
-    }
-
-    explicit operator bool() const { return full_ != nullptr || music_ != nullptr; }
-    bool isWav() const { return full_ != nullptr; }
-
-    // 頭から鳴らす（Mix_PlayMusic(bgm, 1) と同じ）
-    void play(){
-        if(music_){ Mix_PlayMusic(music_, 1); return; }
-        if(full_) startAt(0.0);
-    }
-
-    // 鳴らしているか（一時停止中も true。Mix_PlayingMusic と同じ）
-    bool playing() const {
-        if(music_) return Mix_PlayingMusic() != 0;
-        if(full_)  return started_ && (paused_ || Mix_Playing(MUSIC_CHANNEL) != 0);
-        return false;
-    }
-
-    // 一時停止中か（Mix_PausedMusic と同じ）
-    bool paused() const {
-        if(music_) return Mix_PausedMusic() != 0;
-        if(full_)  return started_ && paused_;
-        return false;
-    }
-
-    void pause(){
-        if(music_){ Mix_PauseMusic(); return; }
-        if(full_ && playing() && !paused_){
-            Mix_Pause(MUSIC_CHANNEL);
-            paused_ = true;
-        }
-    }
-
-    void resume(){
-        if(music_){ Mix_ResumeMusic(); return; }
-        if(!full_ || !paused_) return;
-        if(restartOnResume_){
-            // 一時停止中にシークされていた：その位置から鳴らし直す
-            restartOnResume_ = false;
-            Mix_HaltChannel(MUSIC_CHANNEL);
-            startAt(pendingSec_);
-        }
-        else{
-            Mix_Resume(MUSIC_CHANNEL);
-            paused_ = false;
-        }
-    }
-
-    void halt(){
-        if(music_){ Mix_HaltMusic(); return; }
-        if(full_){
-            Mix_HaltChannel(MUSIC_CHANNEL);
-            Mix_UnregisterAllEffects(MUSIC_CHANNEL);   // this を持ったエフェクトを残さない
-        }
-        started_ = false;
-        paused_ = false;
-        restartOnResume_ = false;
-    }
-
-    // 曲の sec 秒の位置へ（Mix_SetMusicPosition と同じ）。できたら true
-    bool seek(double sec){
-        if(music_) return Mix_SetMusicPosition(sec) == 0;
-        if(!full_ || !playing()) return false;
-        if(paused_){
-            // 一時停止中は鳴らさずに覚えておき、再開したときにその位置から鳴らす
-            pendingSec_ = sec;
-            restartOnResume_ = true;
-            return true;
-        }
-        Mix_HaltChannel(MUSIC_CHANNEL);
-        startAt(sec);
-        return true;
-    }
-
-    // 今の曲の位置（秒）。分からないときは -1
-    //   WAV：始めた位置 ＋ エフェクトで数えた「混ぜ終わったバイト数」
-    double position() const {
-        if(music_) return Mix_GetMusicPosition(music_);
-        if(full_ && started_){
-            const double bytes = static_cast<double>(startOffsetBytes_) + static_cast<double>(playedBytes_.load());
-            return bytes / (static_cast<double>(freq_) * frameBytes_);
-        }
-        return -1.0;
-    }
-
-private:
-    Mix_Music* music_ = nullptr;   // WAV 以外
-    Mix_Chunk* full_ = nullptr;    // WAV：曲全体
-    Mix_Chunk  view_{};            // WAV：途中から始まるチャンク（full_ の波形を指すだけ。解放しない）
-    int  freq_ = 44100;
-    int  frameBytes_ = 4;          // 1 サンプル（全チャンネル分）のバイト数
-    bool reserved_ = false;
-    bool started_ = false;
-    bool paused_ = false;
-    bool restartOnResume_ = false;
-    double pendingSec_ = 0.0;
-
-    Uint64 startOffsetBytes_ = 0;                  // 今のチャンクが曲のどこから始まったか（バイト）
-    std::atomic<Uint64> playedBytes_{0};           // そこから混ぜ終わったバイト数（音を混ぜるスレッドから足される）
-
-    // チャンネルのエフェクト：音を混ぜるたびに呼ばれる（音を混ぜるスレッドの中）。音は変えずに数えるだけ
-    static void countPlayedBytes(int /*chan*/, void* /*stream*/, int len, void* udata){
-        auto* self = static_cast<EditorMusic*>(udata);
-        if(len > 0) self->playedBytes_.fetch_add(static_cast<Uint64>(len));
-    }
-
-    static bool isWavPath(const std::string& p){
-        if(p.size() < 4) return false;
-        std::string ext = p.substr(p.size() - 4);
-        for(char& c : ext) c = static_cast<char>(std::tolower(static_cast<unsigned char>(c)));
-        return ext == ".wav";
-    }
-
-    // sec 秒の位置から鳴らす（WAV）
-    void startAt(double sec){
-        const Uint32 total = full_->alen;
-        Uint64 offset = static_cast<Uint64>(std::max(0.0, sec) * freq_) * static_cast<Uint64>(frameBytes_);   // サンプルの境目にそろえる
-        if(offset >= total){
-            // 曲の終わりより後：鳴らさない（最後まで流れたのと同じ扱い）
-            started_ = false;
-            paused_ = false;
-            return;
-        }
-        view_ = Mix_Chunk{};
-        view_.allocated = 0;                        // 自分では解放しない（波形は full_ のもの）
-        view_.abuf = full_->abuf + offset;          // 始めたい位置までずらす
-        view_.alen = total - static_cast<Uint32>(offset);
-        view_.volume = static_cast<Uint8>(std::clamp(Mix_VolumeMusic(-1), 0, MIX_MAX_VOLUME));   // 曲の音量の設定に合わせる
-        Mix_Volume(MUSIC_CHANNEL, MIX_MAX_VOLUME);
-
-        // 位置を数え直す。エフェクトはチャンネルが止まると外れるので、鳴らすたびに付け直す
-        //   鳴らし始めた直後の分も数えられるように、Mix_PlayChannel より「前」に付ける
-        startOffsetBytes_ = offset;
-        playedBytes_.store(0);
-        Mix_UnregisterAllEffects(MUSIC_CHANNEL);
-        Mix_RegisterEffect(MUSIC_CHANNEL, &EditorMusic::countPlayedBytes, nullptr, this);
-
-        Mix_PlayChannel(MUSIC_CHANNEL, &view_, 0);
-        started_ = true;
-        paused_ = false;
-    }
-};
-
-// =====================================================================
 //  エディタの見た目（選曲画面のウィンドウにそろえる）
 // =====================================================================
 namespace editorui {
@@ -807,8 +560,11 @@ constexpr SDL_Rect TOOL_RECT = {  20,  60, 400, 300};
 constexpr SDL_Rect DIFF_RECT = {  20, 410, 400, 330};
 constexpr SDL_Rect PLAY_RECT = {  20, 790, 400, 260};
 constexpr SDL_Rect PALETTE_RECT = {440, 60, 140, 470};   // ノーツのパレット（細い縦長。ホイールで送る）
-constexpr SDL_Rect NOTE_RECT = {1340,  60, 560, 440};
-constexpr SDL_Rect DATA_RECT = {1340, 550, 560, 500};
+constexpr SDL_Rect BLUEPRINT_RECT = {440, 640, 140, 130};  // ブループリントのマーク（NOTES の下。少し離して置く）
+constexpr SDL_Rect NOTE_RECT = {1340,  60, 560, 700};      // DATA を無くしたので縦に伸ばした
+constexpr SDL_Rect GEAR_RECT = {1852,   4,  60,  52};      // 右上の歯車（譜面のプロパティを開く）
+constexpr int      PROPS_W = 980, PROPS_H = 760;           // 譜面のプロパティのウィンドウ（画面の真ん中に出す）
+constexpr float    BP_SHEET_RATIO = 0.30f;                 // ブループリントの一覧：画面の下から何割の高さで出すか
 
 constexpr ImU32 COL_ACCENT   = IM_COL32(  0, 200, 255, 255);   // 枠・タブ（選曲画面のシアン）
 constexpr ImU32 COL_TAB_TEXT = IM_COL32( 15,  15,  25, 255);   // タブの文字（暗色）
@@ -896,11 +652,11 @@ inline void beginPanel(const char* id, const char* title, const SDL_Rect& r){
 inline SDL_Color noteColor(int type){
     if(type == 3) return SDL_Color{250, 250, 150, 255};   // Drag
     if(type == 4) return SDL_Color{255,  50,  50, 255};   // Lane
-    if(type == 5) return SDL_Color{ 80, 220, 255, 255};   // Normal_c
+    // Normal_c（5）は使わないことにしたので、古い譜面に残っていても通常と同じ白で出す
     return SDL_Color{255, 255, 255, 255};                  // Normal
 }
 
-// ノーツの上に出すマーク（例：「DRAG」「LANE / x1.5」「PATH」）。何もなければ空
+// ノーツの上に出すマーク（例：「DRAG」「LANE / x1.5」）。何もなければ空
 inline std::string noteMarker(const EditorNote& n){
     std::string s;
     auto add = [&](const std::string& part){
@@ -914,7 +670,6 @@ inline std::string noteMarker(const EditorNote& n){
         std::snprintf(buf, sizeof(buf), "x%.2g", n.customSpeed);
         add(buf);
     }
-    if(!n.path.empty()) add("PATH");
     return s;
 }
 
@@ -968,7 +723,77 @@ inline void drawNoteIcon(ImDrawList* dl, ImVec2 p0, ImVec2 p1, int type, bool is
     }
 }
 
-// パレットに並べるもの（上から順）。キーボードの 1〜7 もこの順
+// ---------------------------------------------------------------------
+//  ブループリントのマーク：青い紙に白い方眼、右上の角が折れている
+//    p0 = 左上、size = 1辺の長さ
+// ---------------------------------------------------------------------
+inline void drawBlueprintIcon(ImDrawList* dl, ImVec2 p0, float size){
+    const float fold = size * 0.28f;   // 折れた角の大きさ
+    const ImU32 paper = IM_COL32(40, 110, 220, 255);
+    const ImU32 line  = IM_COL32(220, 235, 255, 150);
+    // 紙（右上の角を切り落とした形）
+    const ImVec2 pts[5] = {
+        ImVec2(p0.x, p0.y), ImVec2(p0.x + size - fold, p0.y), ImVec2(p0.x + size, p0.y + fold),
+        ImVec2(p0.x + size, p0.y + size), ImVec2(p0.x, p0.y + size)
+    };
+    dl->AddConvexPolyFilled(pts, 5, paper);
+    // 方眼
+    for(int k = 1; k < 4; k++){
+        const float t = size * k / 4.0f;
+        dl->AddLine(ImVec2(p0.x + t, p0.y + (t > size - fold ? fold : 0.0f)), ImVec2(p0.x + t, p0.y + size), line, 1.0f);
+        dl->AddLine(ImVec2(p0.x, p0.y + t), ImVec2(p0.x + size - (t < fold ? fold - t : 0.0f), p0.y + t), line, 1.0f);
+    }
+    // 折れた角
+    dl->AddTriangleFilled(ImVec2(p0.x + size - fold, p0.y), ImVec2(p0.x + size - fold, p0.y + fold),
+                          ImVec2(p0.x + size, p0.y + fold), IM_COL32(150, 195, 255, 255));
+    dl->AddPolyline(pts, 5, IM_COL32(220, 235, 255, 255), ImDrawFlags_Closed, 1.5f);
+}
+
+// 歯車のマーク：中心 c、外側の半径 rOut。歯は 8 枚
+inline void drawGearIcon(ImDrawList* dl, ImVec2 c, float rOut, ImU32 col, ImU32 holeCol){
+    const int teeth = 8;
+    const float rBody = rOut * 0.74f;
+    const float kPi = 3.14159265f;
+    for(int i = 0; i < teeth; i++){
+        const float a = i * 2.0f * kPi / teeth;
+        const float hw = 0.22f;   // 歯の幅（角度）
+        const ImVec2 q[4] = {
+            ImVec2(c.x + std::cos(a - hw) * rBody * 0.95f, c.y + std::sin(a - hw) * rBody * 0.95f),
+            ImVec2(c.x + std::cos(a - hw * 0.7f) * rOut,   c.y + std::sin(a - hw * 0.7f) * rOut),
+            ImVec2(c.x + std::cos(a + hw * 0.7f) * rOut,   c.y + std::sin(a + hw * 0.7f) * rOut),
+            ImVec2(c.x + std::cos(a + hw) * rBody * 0.95f, c.y + std::sin(a + hw) * rBody * 0.95f)
+        };
+        dl->AddConvexPolyFilled(q, 4, col);
+    }
+    dl->AddCircleFilled(c, rBody, col, 32);
+    dl->AddCircleFilled(c, rOut * 0.32f, holeCol, 24);
+}
+
+// ブループリントの中身を小さな図にする（6 レーン、下が先頭のノーツ、上に行くほど後のノーツ）
+inline void drawBlueprintPreview(ImDrawList* dl, ImVec2 p0, ImVec2 p1, const std::vector<EditorNote>& notes, int32_t lengthMs){
+    dl->AddRectFilled(p0, p1, IM_COL32(10, 25, 55, 255));
+    const float w = p1.x - p0.x, h = p1.y - p0.y;
+    const float laneW = w / 6.0f;
+    for(int l = 1; l < 6; l++){
+        dl->AddLine(ImVec2(p0.x + laneW * l, p0.y), ImVec2(p0.x + laneW * l, p1.y), IM_COL32(60, 90, 140, 255), 1.0f);
+    }
+    const float span = static_cast<float>(std::max<int32_t>(1, lengthMs));
+    auto yAt = [&](int32_t t){ return p1.y - 3.0f - (h - 6.0f) * (static_cast<float>(t) / span); };
+    for(const auto& n : notes){
+        const SDL_Color c = noteColor(n.noteTypeInt);
+        const float x0 = p0.x + laneW * n.lane + 1.0f;
+        const float x1 = p0.x + laneW * (n.lane + n.width) - 1.0f;
+        const float y = yAt(n.time);
+        if(n.isLong()){
+            dl->AddRectFilled(ImVec2(x0 + 1.0f, yAt(n.time + n.duration)), ImVec2(x1 - 1.0f, y), toImU32(c, 110));
+        }
+        dl->AddRectFilled(ImVec2(x0, y - 1.5f), ImVec2(x1, y + 1.5f), toImU32(c));
+    }
+    dl->AddRect(p0, p1, IM_COL32(120, 170, 240, 255));
+}
+
+// パレットに並べるもの（上から順）。キーボードの 1〜5 もこの順
+//   シアンのノーツ（通常C・通常C ロング）は使わないことにしたので並べない
 struct PaletteItem{
     const char* name;
     int type;
@@ -980,8 +805,6 @@ constexpr PaletteItem PALETTE[] = {
     {"DRAG",   3, false},
     {"DRAG",   3, true },
     {"LANE",   4, false},
-    {"通常C",  5, false},
-    {"通常C",  5, true },
 };
 constexpr int PALETTE_COUNT = static_cast<int>(sizeof(PALETTE) / sizeof(PALETTE[0]));
 
@@ -1016,7 +839,7 @@ inline bool paletteButton(int index, bool selected){
     dl->AddText(f, fs, ImVec2((p0.x + p1.x) * 0.5f - ts.x * 0.5f, p0.y + 70.0f),
                 selected ? IM_COL32(0, 255, 255, 255) : IM_COL32(235, 235, 245, 255), label);
 
-    // 番号（左上）：キーボードの 1〜7 に対応
+    // 番号（左上）：キーボードの 1〜5 に対応
     char num[4];
     std::snprintf(num, sizeof(num), "%d", index + 1);
     dl->AddText(f, 13.0f, ImVec2(p0.x + 4.0f, p0.y + 2.0f), IM_COL32(150, 150, 170, 255), num);
@@ -1049,6 +872,19 @@ GameScene chartCreateScene(SDL_Window* window, SDL_Renderer* renderer, std::stri
         &font_cfg,
         io.Fonts->GetGlyphRangesJapanese()
     );
+
+    // 譜面のプロパティの「情報」で使う大きい文字（リザルト画面と同じ 56px / 36px）
+    //   日本語を全部入れると文字の画像がとても大きくなるので、使う文字だけを入れる
+    //   （英数字 ＋ 下の文字列に出てくる日本語）。ranges は文字の画像を作り終えるまで残しておく必要がある
+    ImVector<ImWchar> infoGlyphRanges;
+    {
+        ImFontGlyphRangesBuilder builder;
+        builder.AddRanges(io.Fonts->GetGlyphRangesDefault());
+        builder.AddText("合計ノーツ数個最大コンボ");
+        builder.BuildRanges(&infoGlyphRanges);
+    }
+    ImFont* infoFontBig = io.Fonts->AddFontFromFileTTF("fonts/prac.ttf", 56.0f, &font_cfg, infoGlyphRanges.Data);
+    ImFont* infoFontRow = io.Fonts->AddFontFromFileTTF("fonts/prac.ttf", 36.0f, &font_cfg, infoGlyphRanges.Data);
 
     // キーボードでの ImGui 操作（Nav）は使わない。
     // これを有効にすると、ウィンドウを一度触っただけで「ImGui がキーボードを使う」状態になり、
@@ -1096,24 +932,11 @@ GameScene chartCreateScene(SDL_Window* window, SDL_Renderer* renderer, std::stri
     syncMetaBuffers();
     syncDifficultyBuffers();
 
-    EditorMusic bgm;   // WAV はチャンクで、それ以外は Mix_Music で鳴らす（EditorMusic の説明を参照）
+    Mix_Music* bgm = nullptr;
     bool isPlaying = false;
     int32_t scrollTimeMs = 0;
     uint32_t lastFrameticks = SDL_GetTicks();
     uint32_t lastDriftCheckTicks = 0;
-
-    // ----- 曲の位置合わせ（シーク）とずれの補正 -----
-    //   ・シークした直後は、音の出口（デコーダ・オーディオ装置のバッファ）にシーク前の音が残っていて、
-    //     Mix_GetMusicPosition がしばらく「古い位置」や「先読みした位置」を返すことがある。
-    //     WAV はデコードが一瞬で終わるので、この影響がとくに出やすい。
-    //     → シークしてから SEEK_DRIFT_GRACE_MS の間は、ずれの補正をしない
-    //   ・ずれが DRIFT_RESEEK_MS より大きいときは「曲の位置が付いてこなかった」とみなし、
-    //     スクロールで決めた位置（譜面の位置）を正として、曲の方をその位置へシークし直す
-    //     （今までは逆に、譜面の位置を曲の位置へ引っぱっていたので、スクロールした ms がずれていった）
-    constexpr uint32_t SEEK_DRIFT_GRACE_MS = 300;
-    constexpr double   DRIFT_RESEEK_MS     = 300.0;
-    constexpr bool     EDITOR_AUDIO_DEBUG  = true;   // シークの結果をコンソールに出す（原因が分かったら false に）
-    uint32_t driftResumeTicks = 0;                    // この時刻までは、ずれの補正をしない
 
     int editorAudioLatencyMs = 40;
     int32_t pendingAudioLatencyMs = 0;
@@ -1127,34 +950,14 @@ GameScene chartCreateScene(SDL_Window* window, SDL_Renderer* renderer, std::stri
     double metronomePrevMs = 0.0; // 前のフレームの再生位置（ここから今の位置までに過ぎた拍で鳴らす）
 
     Mix_Chunk* tap_sound = Mix_LoadWAV("sounds/tapsound_2.wav");
-    Mix_Chunk* tap_sound_c = Mix_LoadWAV("sounds/tapsound_2.wav");
-    if(!tap_sound || !tap_sound_c){
+    if(!tap_sound){
         printf("効果音読込失敗\n");
     }
 
-    // 譜面上の時刻 chartTimeMs に、曲の位置を合わせる（音声位置 = 譜面時刻 + オフセット）
-    //   ・0 秒ちょうど（曲の頭）にも合わせる。今までは 0.001 秒以下だとシークしなかったので、
-    //     曲の頭へスクロールで戻しても、曲だけが前の位置のまま鳴り続けていた
-    //   ・曲を止めている（Mix_HaltMusic 後・最後まで流れた）ときはシークできない。
-    //     その場合は何もせず、次に再生したとき（togglePlayback）に合わせる
     auto seekMusicIfNeeded = [&](int32_t chartTimeMs){
-        if(!bgm || !bgm.playing()) return;   // 一時停止中は playing() が true なので、ここは通る
-
-        const double audioPosSec = std::max(0.0, (chartTimeMs + meta.offsetMs) / 1000.0);
-        const bool ok = bgm.seek(audioPosSec);
-
-        // シーク直後の古い位置で、ずれの補正が誤って働かないようにする
-        driftResumeTicks = SDL_GetTicks() + SEEK_DRIFT_GRACE_MS;
-
-        if(EDITOR_AUDIO_DEBUG){
-            if(bgm.isWav()){
-                printf("[譜面エディタ] シーク(WAV) 譜面 %d ms → 曲 %.3f s : %s / 直後の位置 %.3f s\n",
-                       chartTimeMs, audioPosSec, ok ? "成功" : "失敗", bgm.position());
-            }
-            else{
-                printf("[譜面エディタ] シーク 譜面 %d ms → 曲 %.3f s : %s / 直後の位置 %.3f s\n",
-                       chartTimeMs, audioPosSec, ok ? "成功" : Mix_GetError(), bgm.position());
-            }
+        double audioPosSec = std::max(0.0, (chartTimeMs + meta.offsetMs) / 1000.0);
+        if(audioPosSec > 0.001){
+            Mix_SetMusicPosition(audioPosSec);
         }
     };
 
@@ -1179,16 +982,17 @@ GameScene chartCreateScene(SDL_Window* window, SDL_Renderer* renderer, std::stri
 
             if(!bgm && !meta.bgm.empty()){
                 std::string fullPath = "sounds/" + meta.bgm;
-                bgm.load(fullPath);
+                bgm = Mix_LoadMUS(fullPath.c_str());
                 if(!bgm) printf("[譜面エディタ] BGM読込失敗 : %s\n", fullPath.c_str());
             }
 
             if(bgm){
-                if(!musicNeedsStart && bgm.paused()){
-                    bgm.resume();
+                // 一時停止しているだけ（曲がまだ残っている）なら続きから。鳴り終わっていたら鳴らし直す
+                if(!musicNeedsStart && Mix_PausedMusic() == 1 && Mix_PlayingMusic() == 1){
+                    Mix_ResumeMusic();
                 }
                 else{
-                    bgm.play();
+                    Mix_PlayMusic(bgm, 1);
                     musicNeedsStart = false;
 
                     if(editorAudioLatencyMs > 0) pendingAudioLatencyMs = editorAudioLatencyMs;
@@ -1204,7 +1008,7 @@ GameScene chartCreateScene(SDL_Window* window, SDL_Renderer* renderer, std::stri
             }
         }
         else{
-            if(bgm) bgm.pause();
+            if(bgm) Mix_PauseMusic();
         }
     };
 
@@ -1217,13 +1021,6 @@ GameScene chartCreateScene(SDL_Window* window, SDL_Renderer* renderer, std::stri
     const int lanesRight = startX + laneWidth * 6;   // レーン全体の右端
 
     int gridDivisor = 16; //標準で16分
-
-    // スナップの「自由入力」
-    //   一覧（4〜1920）にない分割数を、プレイヤーが数字で打って使えるようにする
-    //   gridDivisor = 「全音符をいくつに分けるか」なので、20 と打てば 20 分音符（1 拍を 5 等分）になる
-    constexpr int GRID_DIVISOR_MAX = 1920;   // 打てる上限（一覧の一番細かい値と同じ）
-    bool gridCustom = false;                 // 自由入力を選んでいるか
-    int  customGridDivisor = 20;             // 自由入力の値
 
     auto currentTempoMap = [&]() -> TempoMap {
         std::vector<TempoPoint> pts;
@@ -1275,6 +1072,15 @@ GameScene chartCreateScene(SDL_Window* window, SDL_Renderer* renderer, std::stri
     int     eventMenuSigNum = 4;            // 拍子の分子
     int     eventMenuSigDen = 4;            // 拍子の分母
 
+    // SPEED イベントの編集ウィンドウ（レーンの左の「SPD 1.00x」の枠をクリックで開く）
+    bool    speedEditRequest = false;
+    bool    speedEditOpen = false;
+    bool    speedEditCloseRequest = false;
+    int     speedEditIndex = -1;            // 編集する SPEED イベントの番号（currentDiff().speedEvents）
+    ImVec2  speedEditPos(0.0f, 0.0f);
+    struct LabelHit{ SDL_Rect rect; int index; };
+    std::vector<LabelHit> speedLabelHits;   // 前のフレームで描いた SPEED の枠（クリックの当たり判定に使う）
+
     // テストプレイ（右クリックメニューから）
     int     testPlayFrom = 0;               // 0 = 右クリックした位置から、1 = 最初から
     bool    testPlayAutoplay = false;       // オートプレイで確認する
@@ -1313,19 +1119,47 @@ GameScene chartCreateScene(SDL_Window* window, SDL_Renderer* renderer, std::stri
         size_t index;
         int32_t time;
         int lane;
-        std::vector<int32_t> pathTimes;
     };
     std::vector<MoveOrigin> moveOrigins;
     int32_t moveAnchorTime = 0;   // 掴んだ位置の時刻
     int     moveAnchorLane = 0;   // 掴んだ位置のレーン
 
-    std::vector<EditorNote> clipboard;   // コピーしたノーツ（先頭を 0ms とした相対時刻）
+    // 終端だけを選んだロングの長さをまとめて変える：掴んだ瞬間の長さ
+    struct TailOrigin{
+        size_t index;
+        int32_t duration;
+    };
+    std::vector<TailOrigin> tailOrigins;
+    bool selectionLaneLocked = false;   // true = 終端を掴んで動かしている（横には動かさない）
+
+    // =================================================================
+    //  ブループリント：コピーしたノーツの履歴
+    //    ・コピーするたびに、先頭（一番新しい所）に足していく。並びはいつも「新しい → 古い」
+    //    ・Ctrl+V・メニューの「貼り付け」で貼られるのは、先頭（最前）のブループリント
+    //    ・NOTES の欄の下のブループリントのマークから一覧を開き、選んだものを先頭に出せる
+    // =================================================================
+    struct Blueprint{
+        std::vector<EditorNote> notes;   // 先頭のノーツを 0ms とした相対時刻
+        std::string copiedAt;            // コピーした時刻（"13:05:42"）
+        int32_t lengthMs = 0;            // 最初のノーツから、最後のノーツ（ロングは終点）まで
+    };
+    std::vector<Blueprint> blueprints;
+    constexpr size_t MAX_BLUEPRINTS = 30;   // これより古いものは消す
+    bool   blueprintOpen = false;               // 一覧を出しているか（画面の下からスライドして出る）
+    double blueprintAnim = 0.0;                 // 0 = 隠れている、1 = 出きっている
+
+    // 譜面のプロパティ（右上の歯車から開く。画面の真ん中に、設定ウィンドウと同じようにアニメーションで出す）
+    bool   propsOpen = false;
+    double propsAnim = 0.0;                     // 0 = 隠れている、1 = 出きっている
+    int    propsCategory = 0;                   // 選んでいる分類（PROPS_CATEGORY_NAMES の番号）
+    bool   propsJustOpened = false;             // 開いた最初のフレーム（ウィンドウを一番手前にする）
 
     // 範囲選択のメニュー（右クリックメニューと同じく、マウスの位置にポップアップで出す）
     bool    selectMenuRequest = false;      // 次の ImGui フレームで開く
     bool    selectMenuOpen = false;         // 今開いているか（Esc の扱いに使う）
     bool    selectMenuCloseRequest = false; // Esc で閉じる
     ImVec2  selectMenuPos(0.0f, 0.0f);      // メニューを出す位置（マウスの位置）
+    ImVec2  selectMenuMin(0.0f, 0.0f), selectMenuMax(0.0f, 0.0f);   // 開いているメニューの範囲（外をクリックしたかの判定用）
 
     // 画面の x → レーン番号（レーンの外は端のレーンに丸める）
     auto laneAtX = [&](int x) -> int {
@@ -1335,8 +1169,20 @@ GameScene chartCreateScene(SDL_Window* window, SDL_Renderer* renderer, std::stri
 
     auto clearSelection = [&](){
         for(auto& d : difficulties){
-            for(auto& n : d.notes) n.selected = false;
+            for(auto& n : d.notes){
+                n.selected = false;
+                n.tailSelected = false;
+            }
         }
+    };
+
+    // 終端だけが選ばれているロングの数
+    auto countTailSelected = [&]() -> int {
+        int c = 0;
+        for(const auto& n : currentDiff().notes){
+            if(n.tailSelected) c++;
+        }
+        return c;
     };
 
     auto countSelected = [&]() -> int {
@@ -1371,6 +1217,11 @@ GameScene chartCreateScene(SDL_Window* window, SDL_Renderer* renderer, std::stri
             const bool laneHit = (n.lane <= lMax) && (n.lane + n.width - 1 >= lMin);   // 幅のあるノーツは一部でも重なればOK
             const bool timeHit = (n.time >= tMin) && (n.time <= tMax);
             n.selected = laneHit && timeHit;
+
+            // ロングの終端だけが四角に入っている（ヘッドは入っていない）→ 終端だけを選ぶ
+            //   ドラッグすると、終端を選んだロング全部の長さが、同じだけ伸び縮みする
+            const int32_t tailTime = n.time + n.duration;
+            n.tailSelected = !n.selected && laneHit && n.isLong() && tailTime >= tMin && tailTime <= tMax;
         }
     };
 
@@ -1382,31 +1233,46 @@ GameScene chartCreateScene(SDL_Window* window, SDL_Renderer* renderer, std::stri
         }
         if(base == std::numeric_limits<int32_t>::max()) return;   // 何も選ばれていない
 
-        clipboard.clear();
+        Blueprint bp;
         for(const auto& n : currentDiff().notes){
             if(!n.selected) continue;
             EditorNote c = n;
             c.time -= base;
-            for(auto& k : c.path) k.time -= base;   // パスもノーツと一緒にずらす
             c.selected = false;
-            clipboard.push_back(c);
+            c.tailSelected = false;
+            bp.notes.push_back(c);
+            bp.lengthMs = std::max(bp.lengthMs, c.time + c.duration);
         }
+        // 時刻順に並べておく（一覧の小さな図と、貼り付けの順番のため）
+        std::stable_sort(bp.notes.begin(), bp.notes.end(),
+                         [](const EditorNote& a, const EditorNote& b){ return a.time < b.time; });
+
+        char tbuf[16] = "--:--:--";
+        const std::time_t now = std::time(nullptr);
+        if(const std::tm* lt = std::localtime(&now)) std::strftime(tbuf, sizeof(tbuf), "%H:%M:%S", lt);
+        bp.copiedAt = tbuf;
+
+        blueprints.insert(blueprints.begin(), bp);                 // 一番新しいものを先頭（最前）に
+        if(blueprints.size() > MAX_BLUEPRINTS) blueprints.resize(MAX_BLUEPRINTS);
     };
 
-    // 判定ライン（今の再生位置）に一番近いグリッドへ貼り付ける。貼ったノーツが選ばれた状態になる
-    auto pasteClipboard = [&](){
-        if(clipboard.empty()) return;
+    // ブループリント index を、判定ライン（今の再生位置）に一番近いグリッド線へ貼り付ける
+    //   グリッド線は今のスナップ（16 分なら 16 分の線）。貼ったノーツが選ばれた状態になる（そのままドラッグで動かせる）
+    auto pasteBlueprint = [&](size_t index){
+        if(index >= blueprints.size()) return;
         clearSelection();
         const int32_t base = std::max<int32_t>(0, snapToGrid(scrollTimeMs));
-        for(const auto& c : clipboard){
+        for(const auto& c : blueprints[index].notes){
             EditorNote n = c;
             n.time += base;
-            for(auto& k : n.path) k.time += base;
             n.selected = true;
+            n.tailSelected = false;
             currentDiff().notes.push_back(n);
         }
         selectedNoteIndex = -1;
     };
+    // Ctrl+V・メニューの「貼り付け」：最前（一番新しい）のブループリントを貼る
+    auto pasteClipboard = [&](){ pasteBlueprint(0); };
 
     // 左右反転：レーン 0⇔5, 1⇔4, 2⇔3。幅のあるノーツは右端が左端になるように 6 - lane - width
     auto mirrorSelection = [&](){
@@ -1569,8 +1435,7 @@ GameScene chartCreateScene(SDL_Window* window, SDL_Renderer* renderer, std::stri
             fx.width = width;
             fx.spawnTime = nowTicks;
             flashEffects.push_back(fx);
-            Mix_Chunk* se = (pal.type == 5 && !pal.isLong && tap_sound_c) ? tap_sound_c : tap_sound;
-            if(se) Mix_PlayChannel(-1, se, 0);
+            if(tap_sound) Mix_PlayChannel(-1, tap_sound, 0);
         }
     };
 
@@ -1627,39 +1492,96 @@ GameScene chartCreateScene(SDL_Window* window, SDL_Renderer* renderer, std::stri
             }
         }
 
+        // 曲の終わり：曲が最後まで鳴り終わったら、再生を止める
+        //   musicNeedsStart を true にしておくと、次に再生したとき「続きから（Resume）」ではなく
+        //   「最初から鳴らし直して（PlayMusic）、今の位置まで飛ぶ（seek）」になる。
+        //   ※ 鳴り終わった曲に Pause → Resume をしても音は出ない（前はそのせいで、戻して再生しても無音だった）
+        if(isPlaying && bgm && !musicNeedsStart && pendingAudioLatencyMs == 0 && Mix_PlayingMusic() == 0){
+            isPlaying = false;
+            Mix_HaltMusic();
+            musicNeedsStart = true;
+        }
+
         if(isPlaying && bgm && pendingAudioLatencyMs == 0 &&
-        bgm.playing() && !bgm.paused() &&
-        SDL_TICKS_PASSED(nowTicks, driftResumeTicks) &&           // シーク直後は補正しない
+        Mix_PlayingMusic() && Mix_PausedMusic() == 0 &&
         (nowTicks - lastDriftCheckTicks) >= 200){
             lastDriftCheckTicks = nowTicks;
 
-            // 曲の位置：mp3 などは Mix_GetMusicPosition、WAV はエフェクトで数えた位置（どちらも「混ぜ終わった位置」）
-            const double posSec = bgm.position();
-            double actualAudioMs = posSec * 1000.0;
-            if(posSec >= 0.0){
-                // seekMusicIfNeededの「音声位置 = chartTime + offset」という関係式の逆算
+            double actualAudioMs = Mix_GetMusicPosition(bgm) * 1000.0;
+            if(actualAudioMs >= 0.0){
+                // seekMusicIfNeededの「音声位置 = chartTime - offset」という関係式の逆算
                 double predictedAudioMs = static_cast<double>(scrollTimeMs) + meta.offsetMs;
                 double drift = actualAudioMs - predictedAudioMs;
 
-                if(std::abs(drift) > DRIFT_RESEEK_MS){
-                    // 大きすぎるずれ：曲の位置がスクロールに付いてこなかった
-                    //   → 譜面の位置を動かさず、曲の方を譜面の位置へ合わせ直す
-                    if(EDITOR_AUDIO_DEBUG){
-                        printf("[譜面エディタ] 大きなずれ %.1f ms（曲 %.1f ms / 譜面 %d ms）→ 曲を合わせ直します\n",
-                               drift, actualAudioMs, scrollTimeMs);
-                    }
-                    seekMusicIfNeeded(scrollTimeMs);
-                }
-                else if(std::abs(drift) > 5.0){
-                    // 小さなずれ：今まで通り、譜面の位置を少しずつ曲に寄せる
+                if(std::abs(drift) > 5.0){
                     scrollTimeMs += static_cast<int32_t>(drift * 0.2);
-                    if(scrollTimeMs < 0) scrollTimeMs = 0;
                 }
             }
         }
 
         double currentBpmAtPlayhead = getCurrentBpm(scrollTimeMs);
         double effectivePixelsPerMs = pixelsPerMs * (currentBpmAtPlayhead / currentDiff().bpm);
+
+        // =================================================================
+        //  範囲選択したものを、マウスの位置 (mx, my) で掴めるか調べて、掴めたらまとめて動かし始める
+        //    当たり判定は画面の px で見る（拡大率やグリッドの細かさに関係なく、ノーツのあたりを押せば掴める）
+        //    ・選んだノーツ：ヘッドの上下 HIT_PAD_PX まで。ロングは帯（ヘッド〜終点）のどこでもよい
+        //    ・終端だけ選んだロング：終点の上下 HIT_PAD_PX まで
+        //    ・どちらを掴んでも、選んだもの全部を一緒に動かす（ヘッドごと選んだもの → 位置、終端だけ → 長さ）
+        //  戻り値：掴めたら true
+        // =================================================================
+        auto grabSelectionAt = [&](int mx, int my) -> bool {
+            int lane = -1;
+            for(int l = 0; l < 6; l++){
+                if(mx >= laneX[l] && mx < laneX[l] + laneWidth){ lane = l; break; }
+            }
+            if(lane < 0) return false;
+
+            const float HIT_PAD_PX = NOTE_HEAD_H * 0.5f + 10.0f;
+            auto yOf = [&](double t){ return static_cast<float>(judgeY - (t - scrollTimeMs) * effectivePixelsPerMs); };
+            const float fy = static_cast<float>(my);
+            auto& notes = currentDiff().notes;
+
+            bool grabbed = false, grabbedTail = false;
+            for(const auto& n : notes){
+                if(lane < n.lane || lane > n.lane + n.width - 1) continue;
+                if(n.tailSelected && std::abs(fy - yOf(n.time + n.duration)) <= HIT_PAD_PX){
+                    grabbed = grabbedTail = true;   // 終端を先に見る（終端を掴みやすくするため）
+                    break;
+                }
+            }
+            if(!grabbed){
+                for(const auto& n : notes){
+                    if(!n.selected || lane < n.lane || lane > n.lane + n.width - 1) continue;
+                    const float headY = yOf(n.time);
+                    const float topY  = n.isLong() ? yOf(n.time + n.duration) : headY;   // ロングは帯も当たり
+                    if(fy >= topY - HIT_PAD_PX && fy <= headY + HIT_PAD_PX){ grabbed = true; break; }
+                }
+            }
+            if(!grabbed) return false;
+
+            const double rawTime = scrollTimeMs + (judgeY - my) / effectivePixelsPerMs;
+            dragMode = DragMode::MoveSelection;
+            moveOrigins.clear();
+            tailOrigins.clear();
+            for(size_t j = 0; j < notes.size(); j++){
+                if(notes[j].selected){
+                    MoveOrigin o;
+                    o.index = j;
+                    o.time = notes[j].time;
+                    o.lane = notes[j].lane;
+                    moveOrigins.push_back(o);
+                }
+                else if(notes[j].tailSelected){
+                    tailOrigins.push_back({j, notes[j].duration});
+                }
+            }
+            moveAnchorTime = std::max<int32_t>(0, snapToGrid(rawTime));
+            moveAnchorLane = lane;
+            selectionLaneLocked = grabbedTail;   // 終端を掴んだときは、横（レーン）には動かさない
+            selectedNoteIndex = -1;
+            return true;
+        };
 
         //イベント処理
         while(SDL_PollEvent(&e) != 0){
@@ -1676,6 +1598,15 @@ GameScene chartCreateScene(SDL_Window* window, SDL_Renderer* renderer, std::stri
                 }
                 else if(selectMenuOpen){
                     selectMenuCloseRequest = true;  // 範囲選択のメニューも同じく、閉じるだけ
+                }
+                else if(speedEditOpen){
+                    speedEditCloseRequest = true;   // SPEED の編集ウィンドウも閉じるだけ
+                }
+                else if(propsOpen){
+                    propsOpen = false;              // 譜面のプロパティを閉じる
+                }
+                else if(blueprintOpen){
+                    blueprintOpen = false;          // ブループリントの一覧をしまう
                 }
                 else{
                     running = false;
@@ -1715,7 +1646,7 @@ GameScene chartCreateScene(SDL_Window* window, SDL_Renderer* renderer, std::stri
                 metronomeOn = !metronomeOn;
             }
 
-            // 1〜7 キー：パレットのマスを選ぶ
+            // 1〜5 キー：パレットのマスを選ぶ
             if(!imguiWantsKeyBoard && e.type == SDL_KEYDOWN && e.key.repeat == 0 &&
                e.key.keysym.sym >= SDLK_1 && e.key.keysym.sym < SDLK_1 + editorui::PALETTE_COUNT){
                 paletteIndex = e.key.keysym.sym - SDLK_1;
@@ -1776,9 +1707,41 @@ GameScene chartCreateScene(SDL_Window* window, SDL_Renderer* renderer, std::stri
                 }
             }
 
+            // 範囲選択のメニューが開いているときに、メニューの外を左クリック
+            //   ・選んだノーツのあたり → メニューを閉じて、そのままドラッグで動かせる
+            //   ・それ以外             → 選択を解除するだけ（ノーツは置かない）
+            //   メニュー（ポップアップ）が開いている間は ImGui がマウスを使う（WantCaptureMouse）ので、下の処理には来ない。
+            //   そのため、ここで先に「メニューの外か」を自分で調べる
+            if(e.type == SDL_MOUSEBUTTONDOWN && e.button.button == SDL_BUTTON_LEFT && selectMenuOpen){
+                const float fx = static_cast<float>(e.button.x), fy = static_cast<float>(e.button.y);
+                const bool insideMenu = fx >= selectMenuMin.x && fx < selectMenuMax.x && fy >= selectMenuMin.y && fy < selectMenuMax.y;
+                if(!insideMenu){
+                    if(!grabSelectionAt(e.button.x, e.button.y)) clearSelection();
+                    selectMenuCloseRequest = true;
+                    continue;
+                }
+            }
+
             if(!imguiWantsMouse && e.type == SDL_MOUSEBUTTONDOWN){
                 int mx = e.button.x;
                 int my = e.button.y;
+
+                // レーンの左の「SPD ○x」の枠を左クリック → その SPEED イベントの編集ウィンドウを開く
+                if(e.button.button == SDL_BUTTON_LEFT){
+                    int hit = -1;
+                    for(const auto& h : speedLabelHits){
+                        if(mx >= h.rect.x && mx < h.rect.x + h.rect.w && my >= h.rect.y && my < h.rect.y + h.rect.h){
+                            hit = h.index;
+                            break;
+                        }
+                    }
+                    if(hit >= 0){
+                        speedEditIndex = hit;
+                        speedEditRequest = true;
+                        speedEditPos = ImVec2(static_cast<float>(mx + 12), static_cast<float>(my));
+                        continue;
+                    }
+                }
 
                 // Shift + 左ドラッグ：範囲選択を始める（イベント線を掴む・ノーツを置くより優先）
                 const bool shiftHeld = (SDL_GetModState() & KMOD_SHIFT) != 0;
@@ -1790,6 +1753,17 @@ GameScene chartCreateScene(SDL_Window* window, SDL_Renderer* renderer, std::stri
                     boxNowY = my;
                     selectedNoteIndex = -1;
                     continue;   // このクリックではノーツを置かない
+                }
+
+                // ----- 範囲選択があるときの左クリック（grabSelectionAt）-----
+                //   ・選んだノーツのあたり（ロングは帯も） → 選んだノーツをまとめて動かす
+                //   ・選んだロングの終端のあたり           → 終端を選んだロングの長さをまとめて変える
+                //   ・それ以外の場所（空いているレーン・選ばれていないノーツ・レーンの外）→ 選択を解除するだけ
+                //     （このクリックでは、ノーツを置かない・ほかのノーツを掴まない・イベントの線を掴まない）
+                if(e.button.button == SDL_BUTTON_LEFT && (countSelected() > 0 || countTailSelected() > 0)){
+                    if(!grabSelectionAt(mx, my)) clearSelection();   // 選んだもの以外の場所 → 解除だけ
+                    selectedNoteIndex = -1;
+                    continue;
                 }
 
                 bool grabbedEventLine = false;
@@ -1877,13 +1851,14 @@ GameScene chartCreateScene(SDL_Window* window, SDL_Renderer* renderer, std::stri
                                         // 範囲選択に入っているノーツを掴んだ → 選んだもの全部を動かす
                                         dragMode = DragMode::MoveSelection;
                                         moveOrigins.clear();
+                                        tailOrigins.clear();
+                                        selectionLaneLocked = false;
                                         for(size_t i = 0; i < notesRef.size(); i++){
                                             if(!notesRef[i].selected) continue;
                                             MoveOrigin o;
                                             o.index = i;
                                             o.time = notesRef[i].time;
                                             o.lane = notesRef[i].lane;
-                                            for(const auto& k : notesRef[i].path) o.pathTimes.push_back(k.time);
                                             moveOrigins.push_back(o);
                                         }
                                         moveAnchorTime = snappedTime;
@@ -1982,13 +1957,6 @@ GameScene chartCreateScene(SDL_Window* window, SDL_Renderer* renderer, std::stri
                         EditorNote& n = currentDiff().notes[dragNoteIndex];
 
                         if(dragMode == DragMode::MoveNote){
-                            if(!n.path.empty()){
-                                int32_t delta = snappedTime - n.time;
-                                for(auto& k : n.path){
-                                    k.time += delta;
-                                }
-                            }
-
                             n.time = snappedTime;
                             if(hoverLane >= 0){
                                 int maxLane = 6 - n.width;
@@ -2025,27 +1993,35 @@ GameScene chartCreateScene(SDL_Window* window, SDL_Renderer* renderer, std::stri
                     }
                 }
                 else if(dragMode == DragMode::MoveSelection){
+                    // 選んだノーツの位置と、終端だけ選んだロングの長さを、同じずれ量（dt）で一緒に変える
                     auto& notes = currentDiff().notes;
                     int32_t dt = snappedTime - moveAnchorTime;
-                    int dl = laneAtX(e.motion.x) - moveAnchorLane;
+                    int dl = selectionLaneLocked ? 0 : laneAtX(e.motion.x) - moveAnchorLane;
 
-                    // 1個でもはみ出すなら、ずれ量を減らす → 全体が形を保ったまま端で止まる
+                    // 1個でもはみ出す・短くなりすぎるなら、ずれ量を減らす → 全体が形を保ったまま端で止まる
                     for(const auto& o : moveOrigins){
                         if(o.index >= notes.size()) continue;
                         const int w = notes[o.index].width;
                         dl = std::clamp(dl, -o.lane, (6 - w) - o.lane);
-                        if(o.time + dt < 0) dt = -o.time;
+                        if(o.time + dt < 0) dt = -o.time;                       // 0ms より前には出さない
                     }
+                    const int32_t minDuration = static_cast<int32_t>(std::max(1.0, gridMs));
+                    for(const auto& o : tailOrigins){
+                        if(o.index >= notes.size()) continue;
+                        dt = std::max(dt, minDuration - o.duration);            // ロングは最低 1 マス
+                    }
+                    // ※ 上の2つがぶつかる（片方は前へ、片方は後ろへ止めたい）ときは、ロングの最低の長さを優先する
 
-                    // 「掴んだ瞬間の位置 + ずれ量」で毎回計算し直す（足し続けないので誤差がたまらない）
+                    // 「掴んだ瞬間の値 + ずれ量」で毎回計算し直す（足し続けないので誤差がたまらない）
                     for(const auto& o : moveOrigins){
                         if(o.index >= notes.size()) continue;
                         EditorNote& n = notes[o.index];
-                        n.time = o.time + dt;
+                        n.time = std::max<int32_t>(0, o.time + dt);
                         n.lane = o.lane + dl;
-                        for(size_t k = 0; k < n.path.size() && k < o.pathTimes.size(); k++){
-                            n.path[k].time = o.pathTimes[k] + dt;
-                        }
+                    }
+                    for(const auto& o : tailOrigins){
+                        if(o.index >= notes.size()) continue;
+                        notes[o.index].duration = o.duration + dt;
                     }
                 }
             }
@@ -2074,6 +2050,7 @@ GameScene chartCreateScene(SDL_Window* window, SDL_Renderer* renderer, std::stri
 
                 boxSelecting = false;
                 moveOrigins.clear();
+                tailOrigins.clear();
                 dragMode = DragMode::None;
                 dragNoteIndex = -1;
                 dragEventIndex = -1;
@@ -2095,7 +2072,7 @@ GameScene chartCreateScene(SDL_Window* window, SDL_Renderer* renderer, std::stri
             InputDevices::get().refresh();   // コントローラーの抜き差しに合わせる（プレイ画面と同じ）
             const Uint8* ks = SDL_GetKeyboardState(nullptr);
             const bool modBlocked = (SDL_GetModState() & (KMOD_CTRL | KMOD_ALT)) != 0;
-            const bool canPlace = !io.WantTextInput && !modBlocked && !eventMenuOpen && !selectMenuOpen;
+            const bool canPlace = !io.WantTextInput && !modBlocked && !eventMenuOpen && !selectMenuOpen && !speedEditOpen && !propsOpen;
 
             for(int i = 0; i < 6; i++){
                 const bool pressed = !io.WantTextInput && isBindingPressed(editorSettings.laneBindings[i], ks);
@@ -2123,8 +2100,7 @@ GameScene chartCreateScene(SDL_Window* window, SDL_Renderer* renderer, std::stri
                     fx.width = n.width;
                     fx.spawnTime = nowTicks;
                     flashEffects.push_back(fx);
-                    Mix_Chunk* se = (n.noteTypeInt == 5 && !n.isLong() && tap_sound_c) ? tap_sound_c : tap_sound;
-                    Mix_PlayChannel(-1, se, 0);
+                    if(tap_sound) Mix_PlayChannel(-1, tap_sound, 0);
                 }
             }
         }
@@ -2296,7 +2272,185 @@ GameScene chartCreateScene(SDL_Window* window, SDL_Renderer* renderer, std::stri
             }
         }
         ImGui::End();
+
+        // ----- NOTES の下：ブループリントのマーク（押すと、画面の下から一覧が出る／しまう） -----
+        editorui::beginPanel("##bpbutton", "BLUEPRINT", editorui::BLUEPRINT_RECT);
+        {
+            const ImVec2 avail = ImGui::GetContentRegionAvail();
+            if(ImGui::InvisibleButton("##blueprint", avail)) blueprintOpen = !blueprintOpen;
+            const bool hovered = ImGui::IsItemHovered();
+            const ImVec2 p0 = ImGui::GetItemRectMin();
+            const ImVec2 p1 = ImGui::GetItemRectMax();
+            ImDrawList* dl = ImGui::GetWindowDrawList();
+            if(blueprintOpen)  dl->AddRectFilled(p0, p1, IM_COL32(0, 200, 255, 45));
+            else if(hovered)   dl->AddRectFilled(p0, p1, IM_COL32(45, 45, 80, 200));
+
+            const float icon = 54.0f;
+            editorui::drawBlueprintIcon(dl, ImVec2((p0.x + p1.x - icon) * 0.5f, p0.y + 4.0f), icon);
+
+            ImFont* f = ImGui::GetFont();
+            char cnt[24];
+            std::snprintf(cnt, sizeof(cnt), "%zu 件", blueprints.size());
+            const ImVec2 ts = f->CalcTextSizeA(17.0f, FLT_MAX, 0.0f, cnt);
+            dl->AddText(f, 17.0f, ImVec2((p0.x + p1.x - ts.x) * 0.5f, p0.y + icon + 10.0f),
+                        blueprintOpen ? IM_COL32(0, 255, 255, 255) : IM_COL32(235, 235, 245, 255), cnt);
+            if(hovered) ImGui::SetTooltip("ブループリント（コピーの履歴）");
+        }
+        ImGui::End();
         ImGui::PopStyleVar(2);
+
+        // =================================================================
+        //  ブループリントの一覧（コピーの履歴。新しい順）
+        //    ・画面の下 BP_SHEET_RATIO（3割）の高さで、下からスライドして出る（設定ウィンドウと同じ近づき方）
+        //    ・左（最前）が Ctrl+V で貼られるもの。カードを押すと、そのブループリントを判定ラインの位置に貼り付ける。× で消す
+        //    ・出る／しまうの速さは BP_SHEET_SPEED（毎フレーム、残りの何割だけ近づくか。小さいほどゆっくり）
+        // =================================================================
+        constexpr double BP_SHEET_SPEED = 0.08;   // 前は 0.18（設定ウィンドウと同じ）。約半分の速さ
+        blueprintAnim += ((blueprintOpen ? 1.0 : 0.0) - blueprintAnim) * BP_SHEET_SPEED;
+        if(std::abs(blueprintAnim - (blueprintOpen ? 1.0 : 0.0)) < 0.001) blueprintAnim = blueprintOpen ? 1.0 : 0.0;
+        if(blueprintAnim > 0.001){
+            const float e = static_cast<float>(1.0 - std::pow(1.0 - blueprintAnim, 3.0));   // 最後はゆっくり止まる
+            const int sheetH = static_cast<int>(SCREEN_H * editorui::BP_SHEET_RATIO);
+            const int sheetY = SCREEN_H - static_cast<int>(sheetH * e);
+            const SDL_Rect sheet = {20, sheetY, SCREEN_W - 40, sheetH - 10};
+
+            ImGui::PushStyleVar(ImGuiStyleVar_Alpha, std::clamp(e * 1.4f, 0.0f, 1.0f));
+            if(blueprintOpen && blueprintAnim < 0.2) ImGui::SetNextWindowFocus();   // 出始めに一番手前へ
+            editorui::beginPanel("##bpsheet", "BLUEPRINT", sheet);
+            {
+                ImGui::TextColored(ImVec4(0.47f, 0.75f, 1.0f, 1.0f), "コピーの履歴（左ほど新しい）");
+                ImGui::SameLine();
+                ImGui::TextDisabled("カードを押すと判定ラインの位置（一番近いグリッド線）に貼り付け ／ Ctrl+V は一番左（最前）");
+                ImGui::SameLine(ImGui::GetWindowWidth() - 120.0f);
+                if(ImGui::Button("しまう", ImVec2(96.0f, 0.0f))) blueprintOpen = false;
+                ImGui::Separator();
+
+                if(blueprints.empty()){
+                    ImGui::TextDisabled("まだコピーしていません（範囲選択して Ctrl+C でここに増えます）");
+                }
+
+                // カードを横に並べる。入りきらないときは横にスクロール
+                ImGui::BeginChild("##bpcards", ImVec2(0.0f, 0.0f), false, ImGuiWindowFlags_HorizontalScrollbar);
+                int toPaste = -1, toRemove = -1;
+                const float cardW = 210.0f;
+                const float cardH = std::max(120.0f, ImGui::GetContentRegionAvail().y - 14.0f);
+                for(size_t i = 0; i < blueprints.size(); i++){
+                    const Blueprint& bp = blueprints[i];
+                    ImGui::PushID(static_cast<int>(i) + 600000);
+                    if(i > 0) ImGui::SameLine();
+
+                    const ImVec2 c0 = ImGui::GetCursorScreenPos();
+                    const ImVec2 c1(c0.x + cardW, c0.y + cardH);
+                    // 右上の × の範囲（カードと重なる2つのボタンは ImGui では扱いにくいので、押した位置で分ける）
+                    const ImVec2 x0(c1.x - 30.0f, c0.y + 4.0f), x1(c1.x - 4.0f, c0.y + 30.0f);
+                    if(ImGui::InvisibleButton("##bpcard", ImVec2(cardW, cardH))){
+                        const ImVec2 m = ImGui::GetMousePos();
+                        const bool onX = m.x >= x0.x && m.x < x1.x && m.y >= x0.y && m.y < x1.y;
+                        if(onX) toRemove = static_cast<int>(i);
+                        else    toPaste  = static_cast<int>(i);
+                    }
+                    const bool hov = ImGui::IsItemHovered();
+                    ImDrawList* dl = ImGui::GetWindowDrawList();
+                    const bool front = (i == 0);
+                    dl->AddRectFilled(c0, c1, front ? IM_COL32(0, 200, 255, 45) : hov ? IM_COL32(45, 45, 80, 200) : IM_COL32(25, 25, 45, 200));
+                    dl->AddRect(c0, c1, front ? editorui::COL_ACCENT : IM_COL32(110, 110, 150, 255), 0.0f, 0, front ? 3.0f : 1.0f);
+
+                    // 上：小さな図（下が先頭のノーツ）
+                    const float textH = 54.0f;
+                    editorui::drawBlueprintPreview(dl, ImVec2(c0.x + 10.0f, c0.y + 10.0f), ImVec2(c1.x - 10.0f, c1.y - textH),
+                                                   bp.notes, bp.lengthMs);
+                    // 下：番号・時刻・中身
+                    char line1[64], line2[64];
+                    std::snprintf(line1, sizeof(line1), "#%zu  %s%s", i + 1, bp.copiedAt.c_str(), front ? " 最前" : "");
+                    std::snprintf(line2, sizeof(line2), "%zu 個 / %d ms", bp.notes.size(), bp.lengthMs);
+                    ImFont* f = ImGui::GetFont();
+                    dl->AddText(f, 16.0f, ImVec2(c0.x + 10.0f, c1.y - textH + 6.0f),
+                                front ? IM_COL32(0, 255, 255, 255) : IM_COL32(235, 235, 245, 255), line1);
+                    dl->AddText(f, 14.0f, ImVec2(c0.x + 10.0f, c1.y - textH + 28.0f), IM_COL32(150, 150, 170, 255), line2);
+
+                    // 右上の ×
+                    {
+                        const ImVec2 m = ImGui::GetMousePos();
+                        const bool onX = hov && m.x >= x0.x && m.x < x1.x && m.y >= x0.y && m.y < x1.y;
+                        dl->AddRectFilled(x0, x1, onX ? IM_COL32(200, 60, 60, 255) : IM_COL32(40, 40, 60, 230));
+                        dl->AddRect(x0, x1, IM_COL32(150, 150, 170, 255));
+                        const ImVec2 ts = ImGui::CalcTextSize("×");
+                        dl->AddText(ImVec2((x0.x + x1.x - ts.x) * 0.5f, (x0.y + x1.y - ts.y) * 0.5f), IM_COL32(235, 235, 245, 255), "×");
+                    }
+
+                    ImGui::PopID();
+                }
+                if(toRemove >= 0){
+                    blueprints.erase(blueprints.begin() + toRemove);
+                }
+                else if(toPaste >= 0){
+                    // 押したカードを、判定ラインに一番近いグリッド線へ貼り付ける（並び順は変えない）
+                    pasteBlueprint(static_cast<size_t>(toPaste));
+                }
+                ImGui::EndChild();
+            }
+            ImGui::End();
+            ImGui::PopStyleVar();
+        }
+
+        // =================================================================
+        //  SPEED イベントの編集ウィンドウ（レーンの左の「SPD ○x」の枠をクリックで開く）
+        // =================================================================
+        if(speedEditRequest){
+            ImGui::OpenPopup("##speededit");
+            ImGui::SetNextWindowPos(speedEditPos, ImGuiCond_Always);
+            speedEditRequest = false;
+        }
+        ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, ImVec2(16.0f, 14.0f));
+        speedEditOpen = ImGui::BeginPopup("##speededit");
+        ImGui::PopStyleVar();
+        if(speedEditOpen){
+            {
+                ImDrawList* dl = ImGui::GetWindowDrawList();
+                const ImVec2 wp = ImGui::GetWindowPos();
+                const ImVec2 ws = ImGui::GetWindowSize();
+                dl->PushClipRectFullScreen();
+                dl->AddRect(ImVec2(wp.x + 1.5f, wp.y + 1.5f), ImVec2(wp.x + ws.x - 1.5f, wp.y + ws.y - 1.5f),
+                            IM_COL32(255, 220, 80, 255), 0.0f, 0, 3.0f);
+                dl->PopClipRect();
+            }
+            auto& evs = currentDiff().speedEvents;
+            if(speedEditCloseRequest || speedEditIndex < 0 || speedEditIndex >= static_cast<int>(evs.size())){
+                ImGui::CloseCurrentPopup();
+            }
+            else{
+                EditorSpeedEvent& ev = evs[speedEditIndex];
+                ImGui::TextColored(ImVec4(1.0f, 0.86f, 0.31f, 1.0f), "SPEED EVENT #%d", speedEditIndex);
+                ImGui::Separator();
+                ImGui::PushItemWidth(200.0f);
+                ImGui::InputInt("時刻(ms)##spedit", &ev.time, 1, 10);
+                ImGui::InputDouble("目標の速度##spedit", &ev.target, 0.1, 1.0, "%.2f");
+                const char* easeNames[] = {"Straight(1)", "easeOutCubic(2)", "easeInCubic(3)"};
+                int easeIdx = std::clamp(ev.easing - 1, 0, 2);
+                if(ImGui::Combo("イージング##spedit", &easeIdx, easeNames, 3)) ev.easing = easeIdx + 1;
+                ImGui::InputInt("変化にかける時間(ms)##spedit", &ev.duration, 10, 100);
+                if(ev.duration < 0) ev.duration = 0;
+                ImGui::PopItemWidth();
+                ImGui::Separator();
+                if(ImGui::Button("削除##spedit", ImVec2(120.0f, 0.0f))){
+                    evs.erase(evs.begin() + speedEditIndex);
+                    speedEditIndex = -1;
+                    ImGui::CloseCurrentPopup();
+                }
+                ImGui::SameLine();
+                if(ImGui::Button("閉じる##spedit", ImVec2(120.0f, 0.0f))){
+                    ImGui::CloseCurrentPopup();
+                }
+            }
+            ImGui::EndPopup();
+        }
+        else if(speedEditIndex >= 0){
+            // 閉じたあと：時刻を変えたかもしれないので、時刻の順に並べ直す
+            auto& evs = currentDiff().speedEvents;
+            std::sort(evs.begin(), evs.end(), [](const EditorSpeedEvent& a, const EditorSpeedEvent& b){ return a.time < b.time; });
+            speedEditIndex = -1;
+        }
+        speedEditCloseRequest = false;
 
         toolNotetype = editorui::PALETTE[paletteIndex].type;
         toolIsLong = editorui::PALETTE[paletteIndex].isLong;
@@ -2327,7 +2481,12 @@ GameScene chartCreateScene(SDL_Window* window, SDL_Renderer* renderer, std::stri
                 dl->PopClipRect();
             }
 
+            // メニューの範囲を覚えておく（メニューの外をクリックしたら選択を解除するため）
+            selectMenuMin = ImGui::GetWindowPos();
+            selectMenuMax = ImVec2(selectMenuMin.x + ImGui::GetWindowSize().x, selectMenuMin.y + ImGui::GetWindowSize().y);
+
             const int selCount = countSelected();
+            const int tailCount = countTailSelected();
 
             // Esc が押された／キー操作（Delete など）で選択がなくなった → 閉じる
             if(selectMenuCloseRequest || selCount == 0){
@@ -2335,6 +2494,7 @@ GameScene chartCreateScene(SDL_Window* window, SDL_Renderer* renderer, std::stri
             }
 
             ImGui::Text("%d 個を選択中", selCount);
+            if(tailCount > 0) ImGui::TextDisabled("ロングの終端 %d 個（ドラッグで長さを変更）", tailCount);
             ImGui::Separator();
 
             ImGui::TextColored(ImVec4(0.0f, 0.86f, 1.0f, 1.0f), "SELECT");
@@ -2351,7 +2511,7 @@ GameScene chartCreateScene(SDL_Window* window, SDL_Renderer* renderer, std::stri
             };
 
             if(opButton("コピー",   "Ctrl+C", true))               copySelection();
-            if(opButton("貼り付け", "Ctrl+V", !clipboard.empty())) pasteClipboard();
+            if(opButton("貼り付け", "Ctrl+V", !blueprints.empty())) pasteClipboard();
             if(opButton("左右反転", "Ctrl+R", true))               mirrorSelection();
             if(opButton("削除",     "Delete", true))               deleteSelection();
 
@@ -2361,9 +2521,10 @@ GameScene chartCreateScene(SDL_Window* window, SDL_Renderer* renderer, std::stri
                 ImGui::CloseCurrentPopup();
             }
 
-            ImGui::TextDisabled("貼り付けは判定ラインの位置に入ります");
+            ImGui::TextDisabled("貼り付けは判定ラインの位置に入ります（最前のブループリント）");
             ImGui::TextDisabled("選んだノーツはドラッグでまとめて移動");
             ImGui::TextDisabled("選んだノーツを右クリックで再表示");
+            ImGui::TextDisabled("選んだもの以外をクリックで選択解除");
 
             ImGui::EndPopup();
         }
@@ -2387,48 +2548,12 @@ GameScene chartCreateScene(SDL_Window* window, SDL_Renderer* renderer, std::stri
                 ImGui::InputDouble("速度##tool", &toolCustomSpeed, 0.1, 1.0, "%.2f");
             }
 
-            // ----- スナップ：一覧から選ぶ ＋ 一番下の「自由入力」で好きな分割数を打てる -----
-            //   コンボの一番下（1920 の下）が「自由入力」。選ぶと右に数字の入力欄が出る
-            //   入力欄は +/- ボタンなし（パネルの横幅に収めるため）。キーボードで打つ
-            {
-                static const char* gridNames[] = {"4", "6", "8", "12", "16", "24", "32", "48", "64", "96", "128", "1920", "自由入力"};
-                static const int   gridValue[] = {4, 6, 8, 12, 16, 24, 32, 48, 64, 96, 128, 1920};
-                constexpr int GRID_PRESET_COUNT = static_cast<int>(sizeof(gridValue) / sizeof(gridValue[0]));
-                constexpr int GRID_CUSTOM_INDEX = GRID_PRESET_COUNT;   // 「自由入力」の番号（一覧の一番下）
-
-                // 今のコンボの位置：自由入力中ならいちばん下。そうでなければ一覧から同じ値を探す
-                int gridComboIndex = GRID_CUSTOM_INDEX;
-                if(!gridCustom){
-                    for(int gi = 0; gi < GRID_PRESET_COUNT; gi++){
-                        if(gridValue[gi] == gridDivisor){
-                            gridComboIndex = gi;
-                            break;
-                        }
-                    }
-                }
-
-                ImGui::SetNextItemWidth(gridCustom ? 120.0f : 160.0f);
-                if(ImGui::Combo("##snapcombo", &gridComboIndex, gridNames, GRID_PRESET_COUNT + 1)){
-                    if(gridComboIndex == GRID_CUSTOM_INDEX){
-                        gridCustom = true;
-                        gridDivisor = customGridDivisor;   // 前に打った値から始める
-                    }
-                    else{
-                        gridCustom = false;
-                        gridDivisor = gridValue[gridComboIndex];
-                    }
-                }
-
-                if(gridCustom){
-                    ImGui::SameLine();
-                    ImGui::SetNextItemWidth(80.0f);
-                    ImGui::InputInt("##snapcustom", &customGridDivisor, 0, 0);
-                    customGridDivisor = std::clamp(customGridDivisor, 1, GRID_DIVISOR_MAX);
-                    gridDivisor = customGridDivisor;   // 打った値をそのままスナップに使う
-                }
-
-                ImGui::SameLine();
-                ImGui::TextUnformatted("分スナップ");
+            const char* gridNames[] = {"4", "6", "8", "12", "16","24", "32", "48", "64", "96", "128", "1920"};
+            int gridValue[] = {4, 6, 8, 12, 16, 24, 32, 48, 64, 96, 128, 1920};
+            int gridComboIndex = 0;
+            for(int gi = 0; gi < 12; gi++) if(gridValue[gi] == gridDivisor) gridComboIndex = gi;
+            if(ImGui::Combo("スナップ（分）##tool", &gridComboIndex, gridNames, 12)){
+                gridDivisor = gridValue[gridComboIndex];
             }
 
             // キーボード配置モード（Ctrl+K と同じ）
@@ -2437,8 +2562,9 @@ GameScene chartCreateScene(SDL_Window* window, SDL_Renderer* renderer, std::stri
                 setKeyboardMode(kbModeCheck);
             }
 
-            ImGui::TextDisabled("左:置く/選ぶ 右:消す 1〜7:ノーツ");
+            ImGui::TextDisabled("左:置く/選ぶ 右:消す 1〜5:ノーツ");
             ImGui::TextDisabled("Shift+ドラッグ:範囲選択 Ctrl+ホイール:拡大");
+            ImGui::TextDisabled("終端だけ囲む→ドラッグでロングの長さ変更");
         }
         ImGui::End();
 
@@ -2452,26 +2578,7 @@ GameScene chartCreateScene(SDL_Window* window, SDL_Renderer* renderer, std::stri
                 newDiff.name = "NEW";
                 newDiff.level = "0";
                 newDiff.chartCreator = currentDiff().chartCreator;
-
-                // テンポは親（今編集している難易度）と同じにする
-                //   ・曲頭の BPM と拍子
-                //   ・BPM イベント（時刻・BPM・拍子をそのまま写す → 同じ位置に小節線・グリッドが来る）
-                //   ノーツと SPEED イベントは写さない（子の譜面は空から作る）
                 newDiff.bpm = currentDiff().bpm;
-                newDiff.sigNum = currentDiff().sigNum;
-                newDiff.sigDen = currentDiff().sigDen;
-                newDiff.bpmEvents = currentDiff().bpmEvents;
-                std::stable_sort(newDiff.bpmEvents.begin(), newDiff.bpmEvents.end(),
-                    [](const EditorBpmEvent& a, const EditorBpmEvent& b){ return a.time < b.time; });
-
-                // 「今のテンポ表 = 合わせ済み」にしておく（写した直後にノーツ追従の処理が走らないように）
-                {
-                    std::vector<TempoPoint> pts;
-                    for(const auto& b : newDiff.bpmEvents) pts.push_back({static_cast<double>(b.time), b.bpm});
-                    newDiff.alignedMap = makeTempoMap(newDiff.bpm, pts);
-                    newDiff.tempoAligned = true;
-                }
-
                 difficulties.push_back(newDiff);
 
                 currentDiffIndex = static_cast<int>(difficulties.size()) - 1;
@@ -2543,7 +2650,7 @@ GameScene chartCreateScene(SDL_Window* window, SDL_Renderer* renderer, std::stri
             ImGui::SameLine();
             if(ImGui::Button("先頭へ")){
                 scrollTimeMs = 0;
-                if(bgm) bgm.halt();
+                if(bgm) Mix_HaltMusic();
                 isPlaying = false;
                 musicNeedsStart = true;
             }
@@ -2635,72 +2742,6 @@ GameScene chartCreateScene(SDL_Window* window, SDL_Renderer* renderer, std::stri
             }
 
             ImGui::Separator();
-            bool hasPath = !n.path.empty();
-            if(ImGui::Checkbox("カスタムパス##inspector", &hasPath)){
-                if(hasPath && n.path.empty()){
-                    EditorPathKeyfrane start;
-                    start.time = n.time - 1000;
-                    start.y = 900.0;
-                    start.easing = 1;
-
-                    EditorPathKeyfrane  end;
-                    end.time = n.time;
-                    end.y = 0.0;
-                    end.easing = 1;
-
-                    n.path = { start, end };
-                }
-                else if(!hasPath){
-                    n.path.clear();
-                }
-            }
-
-            if(hasPath){
-                ImGui::TextDisabled("Y = 判定ラインからの距離(px)。速度・拡大率に関係なし");
-
-                if(ImGui::Button("キーフレーム追加##path")){
-                    EditorPathKeyfrane k;
-                    k.time = scrollTimeMs;
-                    k.y = static_cast<double>(judgeY - (judgeY - static_cast<int>((n.time - scrollTimeMs) * effectivePixelsPerMs)));
-                    n.path.push_back(k);
-                    std::sort(n.path.begin(), n.path.end(), [](const EditorPathKeyfrane& a, const EditorPathKeyfrane& b){
-                        return a.time < b.time;
-                    });
-                }
-
-                int removePathIdx = -1;
-                for(size_t pi = 0; pi < n.path.size(); pi++){
-                    ImGui::PushID(static_cast<int>(pi) + 300000);
-                    auto& k = n.path[pi];
-
-                    ImGui::Text("#%zu", pi);
-                    ImGui::InputInt("時刻(ms)##path", &k.time);
-                    ImGui::InputDouble("Y(px)##path", &k.y, 10.0, 50.0, "%.0f");
-
-                    const char* pathEaseNames[] = {"Linear(1)", "easeOut(2)", "easeIn(3)"};
-                    int pathEaseIdx = k.easing - 1;
-                    if(pathEaseIdx < 0 || pathEaseIdx > 2) pathEaseIdx = 0;
-                    if(ImGui::Combo("イージング##path", &pathEaseIdx, pathEaseNames, 3)){
-                        k.easing = pathEaseIdx + 1;
-                    }
-
-                    if(ImGui::Button("削除##path")){
-                        removePathIdx = static_cast<int>(pi);
-                    }
-
-                    ImGui::Separator();
-                    ImGui::PopID();
-                }
-                if(removePathIdx >= 0){
-                    n.path.erase(n.path.begin() + removePathIdx);
-                }
-
-                std::sort(n.path.begin(), n.path.end(), [](const EditorPathKeyfrane& a, const EditorPathKeyfrane& b){
-                    return a.time < b.time;
-                });
-            }
-
-            ImGui::Separator();
             if(ImGui::Button("このノーツを削除")){
                 currentDiff().notes.erase(currentDiff().notes.begin() + selectedNoteIndex);
                 selectedNoteIndex = -1;
@@ -2712,279 +2753,471 @@ GameScene chartCreateScene(SDL_Window* window, SDL_Renderer* renderer, std::stri
         ImGui::End();
 
         // =================================================================
-        //  右下：DATA（SPEED / BPM / FILE をタブで切替）
+        //  右上：歯車（押すと譜面のプロパティを開く／閉じる）
         // =================================================================
-        editorui::beginPanel("##data", "DATA", editorui::DATA_RECT);
-        if(ImGui::BeginTabBar("##datatabs")){
+        {
+            const SDL_Rect g = editorui::GEAR_RECT;
+            ImGui::SetNextWindowPos(ImVec2(static_cast<float>(g.x), static_cast<float>(g.y)), ImGuiCond_Always);
+            ImGui::SetNextWindowSize(ImVec2(static_cast<float>(g.w), static_cast<float>(g.h)), ImGuiCond_Always);
+            ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, ImVec2(0.0f, 0.0f));
+            ImGui::Begin("##gear", nullptr, ImGuiWindowFlags_NoDecoration | ImGuiWindowFlags_NoMove |
+                         ImGuiWindowFlags_NoSavedSettings | ImGuiWindowFlags_NoBackground);
+            if(ImGui::InvisibleButton("##gearbtn", ImVec2(static_cast<float>(g.w), static_cast<float>(g.h)))){
+                propsOpen = !propsOpen;
+                if(propsOpen) propsJustOpened = true;
+            }
+            const bool hov = ImGui::IsItemHovered();
+            const ImVec2 p0 = ImGui::GetItemRectMin();
+            const ImVec2 p1 = ImGui::GetItemRectMax();
+            ImDrawList* dl = ImGui::GetWindowDrawList();
+            const bool lit = hov || propsOpen;
+            if(lit) dl->AddRectFilled(p0, p1, IM_COL32(45, 45, 80, 200));
+            editorui::drawGearIcon(dl, ImVec2((p0.x + p1.x) * 0.5f, (p0.y + p1.y) * 0.5f), 20.0f,
+                                   lit ? editorui::COL_ACCENT : IM_COL32(200, 200, 220, 255),
+                                   lit ? IM_COL32(45, 45, 80, 255) : IM_COL32(15, 15, 25, 255));
+            if(hov) ImGui::SetTooltip("譜面のプロパティ");
+            ImGui::End();
+            ImGui::PopStyleVar();
+        }
 
-            // ----- SPEED：速度イベント -----
-            if(ImGui::BeginTabItem("SPEED")){
-                if(ImGui::Button("追加##speed")){
-                    EditorSpeedEvent ev;
-                    ev.time = scrollTimeMs;
-                    currentDiff().speedEvents.push_back(ev);
-                }
+        // =================================================================
+        //  譜面のプロパティ（Settingspanel.h の設定ウィンドウと同じ作り）
+        //    ・後ろを暗くして、画面の真ん中にウィンドウを出す。開くと下から少し上がりながら、だんだん見えてくる
+        //      （近づき方は Settingspanel と同じ「毎フレーム、残りの 18% だけ近づく」）
+        //    ・上に分類のタブ（選んでいる分類だけシアンで塗る）。押すと中身が切り替わる
+        //    ・Esc・歯車・「閉じる」・ウィンドウの外（暗いところ）のクリックで閉じる
+        // =================================================================
+        propsAnim += ((propsOpen ? 1.0 : 0.0) - propsAnim) * 0.18;
+        if(std::abs(propsAnim - (propsOpen ? 1.0 : 0.0)) < 0.001) propsAnim = propsOpen ? 1.0 : 0.0;
+        if(propsAnim > 0.001){
+            const float e = static_cast<float>(1.0 - std::pow(1.0 - propsAnim, 3.0));
 
-                int removeIndex = -1;
-                for(size_t idx = 0; idx < currentDiff().speedEvents.size(); idx++){
-                    ImGui::PushID(static_cast<int>(idx));
-                    auto& ev = currentDiff().speedEvents[idx];
+            // 1. 後ろを暗くする（ここを押したら閉じる）
+            ImGui::SetNextWindowPos(ImVec2(0.0f, 0.0f), ImGuiCond_Always);
+            ImGui::SetNextWindowSize(ImVec2(static_cast<float>(SCREEN_W), static_cast<float>(SCREEN_H)), ImGuiCond_Always);
+            ImGui::SetNextWindowBgAlpha(0.55f * e);
+            if(propsJustOpened) ImGui::SetNextWindowFocus();
+            ImGui::Begin("##propsdim", nullptr, ImGuiWindowFlags_NoDecoration | ImGuiWindowFlags_NoMove |
+                         ImGuiWindowFlags_NoSavedSettings | ImGuiWindowFlags_NoBringToFrontOnFocus);   // 押しても本体より手前に来ない
+            if(propsOpen && ImGui::IsWindowHovered() && ImGui::IsMouseClicked(ImGuiMouseButton_Left)) propsOpen = false;
+            ImGui::End();
 
-                    ImGui::Text("#%zu", idx);
-                    ImGui::InputInt("時刻(ms)##speed", &ev.time);
-                    ImGui::InputDouble("目標の速度##speed", &ev.target, 0.1, 1.0, "%.2f");
-
-                    const char* easeNames[] = {"Straight(1)", "easeOutCubic(2)", "easeInCubic(3)"};
-                    int easeIndex = ev.easing - 1;
-                    if(easeIndex < 0 || easeIndex > 2) easeIndex = 0;
-                    if(ImGui::Combo("イージング##speed", &easeIndex, easeNames, 3)){
-                        ev.easing = easeIndex + 1;
-                    }
-
-                    ImGui::InputInt("変化にかける時間(ms)##speed", &ev.duration);
-
-                    if(ImGui::Button("削除##speed")){
-                        removeIndex = static_cast<int>(idx);
-                    }
-
-                    ImGui::Separator();
+            // 2. 本体：画面の真ん中。下から 40px 上がりながら出る
+            const SDL_Rect pr = {(SCREEN_W - editorui::PROPS_W) / 2,
+                                 (SCREEN_H - editorui::PROPS_H) / 2 + static_cast<int>((1.0f - e) * 40.0f),
+                                 editorui::PROPS_W, editorui::PROPS_H};
+            ImGui::PushStyleVar(ImGuiStyleVar_Alpha, e);
+            if(propsJustOpened) ImGui::SetNextWindowFocus();   // 開いたときに、暗い幕より手前に置く
+            editorui::beginPanel("##props", "CHART PROPERTIES", pr);
+            propsJustOpened = false;
+            {
+                // ----- 分類のタブ -----
+                static constexpr const char* PROPS_CATEGORY_NAMES[] = {"SPEED", "BPM", "PREVIEW", "情報", "FILE"};
+                constexpr int PROPS_CATEGORY_COUNT = 5;
+                const float tabGap = 10.0f;
+                const float tabW = (ImGui::GetContentRegionAvail().x - tabGap * (PROPS_CATEGORY_COUNT - 1)) / PROPS_CATEGORY_COUNT;
+                const float tabH = 40.0f;
+                for(int c = 0; c < PROPS_CATEGORY_COUNT; c++){
+                    if(c > 0) ImGui::SameLine(0.0f, tabGap);
+                    ImGui::PushID(c + 700000);
+                    if(ImGui::InvisibleButton("##ptab", ImVec2(tabW, tabH))) propsCategory = c;
+                    const bool active = (c == propsCategory);
+                    const bool hov = ImGui::IsItemHovered();
+                    const ImVec2 t0 = ImGui::GetItemRectMin();
+                    const ImVec2 t1 = ImGui::GetItemRectMax();
+                    ImDrawList* dl = ImGui::GetWindowDrawList();
+                    dl->AddRectFilled(t0, t1, active ? IM_COL32(0, 200, 255, 230) : hov ? IM_COL32(45, 45, 80, 220) : IM_COL32(30, 30, 50, 170));
+                    dl->AddRect(t0, t1, active ? IM_COL32(0, 255, 255, 255) : IM_COL32(110, 110, 150, 255), 0.0f, 0, active ? 2.0f : 1.0f);
+                    const ImVec2 ts = ImGui::CalcTextSize(PROPS_CATEGORY_NAMES[c]);
+                    dl->AddText(ImVec2((t0.x + t1.x - ts.x) * 0.5f, (t0.y + t1.y - ts.y) * 0.5f),
+                                active ? IM_COL32(15, 15, 25, 255) : IM_COL32(200, 200, 220, 255), PROPS_CATEGORY_NAMES[c]);
                     ImGui::PopID();
                 }
-                if(removeIndex >= 0){
-                    currentDiff().speedEvents.erase(currentDiff().speedEvents.begin() + removeIndex);
-                }
-                ImGui::EndTabItem();
-            }
+                ImGui::Spacing();
 
-            // ----- BPM：BPM 変化イベント -----
-            if(ImGui::BeginTabItem("BPM")){
-                ImGui::Checkbox("BPM を変えたらノーツも追従", &moveNotesOnBpmChange);
-                ImGui::TextDisabled("入力を確定（Enter / 欄の外をクリック）したときに動きます");
-
-                if(ImGui::Button("追加##bpm")){
-                    EditorBpmEvent b;
-                    b.time = scrollTimeMs;
-                    b.bpm = getCurrentBpm(scrollTimeMs);                        // 今の位置の BPM と拍子を初期値に
-                    timeSigAt(currentDiff(), scrollTimeMs, b.sigNum, b.sigDen);
-                    currentDiff().bpmEvents.push_back(b);
-                }
-
-                int removeBpmIndex = -1;
-                for(size_t idx = 0; idx < currentDiff().bpmEvents.size(); idx++){
-                    ImGui::PushID(static_cast<int>(idx) + 100000);
-                    auto& b = currentDiff().bpmEvents[idx];
-
-                    ImGui::Text("#%zu", idx);
-                    ImGui::InputInt("時刻(ms)##bpm", &b.time);
-                    ImGui::InputDouble("BPM##bpm", &b.bpm, 1.0, 10.0, "%.3f");
-                    if(b.bpm <= 0.0) b.bpm = 1.0;
-                    timeSigInput("sig##bpm", b.sigNum, b.sigDen);
-                    if(ImGui::Button("削除##bpm")){
-                        removeBpmIndex = static_cast<int>(idx);
+                // ----- 中身（下に「閉じる」の分だけ空けて、はみ出したらスクロール） -----
+                ImGui::BeginChild("##propsbody", ImVec2(0.0f, -46.0f), false);
+                if(propsCategory == 0){
+                    // ===== SPEED：速度イベント =====
+                    if(ImGui::Button("追加##speed")){
+                        EditorSpeedEvent ev;
+                        ev.time = scrollTimeMs;
+                        currentDiff().speedEvents.push_back(ev);
                     }
 
-                    ImGui::Separator();
-                    ImGui::PopID();
-                }
-                if(removeBpmIndex >= 0){
-                    currentDiff().bpmEvents.erase(currentDiff().bpmEvents.begin() + removeBpmIndex);
-                }
-                ImGui::EndTabItem();
-            }
+                    int removeIndex = -1;
+                    for(size_t idx = 0; idx < currentDiff().speedEvents.size(); idx++){
+                        ImGui::PushID(static_cast<int>(idx));
+                        auto& ev = currentDiff().speedEvents[idx];
 
-            // ----- FILE：曲・作曲者・オフセット・保存／読込・BPM解析 -----
-            if(ImGui::BeginTabItem("FILE")){
-                ImGui::InputText("曲ファイル名##file", bgmBuf, sizeof(bgmBuf));
-                meta.bgm = bgmBuf;
+                        ImGui::Text("#%zu", idx);
+                        ImGui::InputInt("時刻(ms)##speed", &ev.time);
+                        ImGui::InputDouble("目標の速度##speed", &ev.target, 0.1, 1.0, "%.2f");
 
-                ImGui::InputText("作曲者##file", composerBuf, sizeof(composerBuf));
-                meta.composer = composerBuf;
-
-                ImGui::InputDouble("オフセット(ms)##file", &meta.offsetMs, 1.0, 10.0, "%.1f");
-                ImGui::TextDisabled("- : 遅く  + : 早く");
-
-                // ----- 選曲画面の試聴 -----
-                ImGui::Separator();
-                ImGui::TextColored(ImVec4(0.31f, 1.0f, 0.55f, 1.0f), "PREVIEW（選曲画面の試聴）");
-                ImGui::InputDouble("試聴の開始(ms)##file", &meta.previewStartMs, 100.0, 1000.0, "%.0f");
-                if(meta.previewStartMs < 0.0) meta.previewStartMs = 0.0;
-
-                if(ImGui::Button("判定ラインの位置を試聴の開始にする##file")){
-                    // 譜面上の時刻 → 曲ファイル上の位置（seekMusicIfNeeded と同じ「音声位置 = 譜面時刻 + オフセット」）
-                    meta.previewStartMs = std::max(0.0, std::round(scrollTimeMs + meta.offsetMs));
-                }
-                if(ImGui::Button("試聴の開始へ移動##file")){
-                    scrollTimeMs = std::max<int32_t>(0, static_cast<int32_t>(std::lround(meta.previewStartMs - meta.offsetMs)));
-                    if(bgm) seekMusicIfNeeded(scrollTimeMs);
-                }
-                ImGui::TextDisabled("ここから %d 秒、フェードしながら繰り返し流れます", songpreview::LENGTH_MS / 1000);
-
-                ImGui::Separator();
-                ImGui::InputText("保存先##file", savePathBuf, sizeof(savePathBuf));
-
-                if(ImGui::Button("保存##file")){
-                    saveToastOk = saveChart(savePathBuf, meta, difficulties);
-                    saveToastTicks = SDL_GetTicks();
-                }
-                ImGui::SameLine();
-                if(ImGui::Button("読込##file")){
-                    loadChartForEdit(savePathBuf, meta, difficulties);
-                    if(difficulties.empty()) difficulties.push_back(EditorDifficulty{});
-                    currentDiffIndex = 0;
-                    syncMetaBuffers();
-                    syncDifficultyBuffers();
-                    selectedNoteIndex = -1;
-                    dragMode = DragMode::None;
-                    dragNoteIndex = -1;
-                }
-
-                // ----- Music Settings：オフセット → 曲全体の BPM → 途中の BPM 変化 を自動で設定（拍子は変えない） -----
-                ImGui::Separator();
-                ImGui::TextColored(ImVec4(0.0f, 0.86f, 1.0f, 1.0f), "MUSIC SETTINGS");
-                if(ImGui::Button("Music Settings（オフセットと BPM を自動設定）", ImVec2(-1.0f, 0.0f))){
-                    if(meta.bgm.empty()){
-                        musicResult = MusicAnalysis{};
-                        musicResult.error = "曲ファイル名が空です";
-                    }
-                    else{
-                        musicResult = analyzeMusic("sounds/" + meta.bgm);
-                        if(musicResult.ok){
-                            applyMusicAnalysis(musicResult, meta, difficulties);
-                            selectedNoteIndex = -1;
-                            dragMode = DragMode::None;
-                            dragNoteIndex = -1;
+                        const char* easeNames[] = {"Straight(1)", "easeOutCubic(2)", "easeInCubic(3)"};
+                        int easeIndex = ev.easing - 1;
+                        if(easeIndex < 0 || easeIndex > 2) easeIndex = 0;
+                        if(ImGui::Combo("イージング##speed", &easeIndex, easeNames, 3)){
+                            ev.easing = easeIndex + 1;
                         }
-                    }
-                    hasMusicResult = true;
-                }
-                ImGui::TextDisabled("曲全体を解析します（数秒止まります）");
-                ImGui::TextDisabled("すべての難易度に反映され、元に戻せません");
 
-                if(hasMusicResult){
-                    if(!musicResult.ok){
-                        ImGui::TextColored(ImVec4(1.0f, 0.4f, 0.4f, 1.0f), "%s", musicResult.error.c_str());
+                        ImGui::InputInt("変化にかける時間(ms)##speed", &ev.duration);
+
+                        if(ImGui::Button("削除##speed")){
+                            removeIndex = static_cast<int>(idx);
+                        }
+
+                        ImGui::Separator();
+                        ImGui::PopID();
                     }
-                    else{
-                        ImGui::Text("オフセット: %.1f ms", meta.offsetMs);
-                        ImGui::Text("BPM: %.3f（拍のはっきりさ %.0f%%）", currentDiff().bpm, musicResult.clarity * 100.0);
-                        ImGui::TextDisabled("拍子は変えていません（今: %d/%d）", currentDiff().sigNum, currentDiff().sigDen);
-                        ImGui::TextDisabled("拍の間の音の型: %s", musicResult.pattern.c_str());
-                        if(currentDiff().bpmEvents.empty()){
-                            ImGui::Text("BPM の変化: なし");
+                    if(removeIndex >= 0){
+                        currentDiff().speedEvents.erase(currentDiff().speedEvents.begin() + removeIndex);
+                    }
+                }
+                else if(propsCategory == 1){
+                    // ===== BPM：BPM 変化イベント =====
+                    ImGui::Checkbox("BPM を変えたらノーツも追従", &moveNotesOnBpmChange);
+                    ImGui::TextDisabled("入力を確定（Enter / 欄の外をクリック）したときに動きます");
+
+                    if(ImGui::Button("追加##bpm")){
+                        EditorBpmEvent b;
+                        b.time = scrollTimeMs;
+                        b.bpm = getCurrentBpm(scrollTimeMs);                        // 今の位置の BPM と拍子を初期値に
+                        timeSigAt(currentDiff(), scrollTimeMs, b.sigNum, b.sigDen);
+                        currentDiff().bpmEvents.push_back(b);
+                    }
+
+                    int removeBpmIndex = -1;
+                    for(size_t idx = 0; idx < currentDiff().bpmEvents.size(); idx++){
+                        ImGui::PushID(static_cast<int>(idx) + 100000);
+                        auto& b = currentDiff().bpmEvents[idx];
+
+                        ImGui::Text("#%zu", idx);
+                        ImGui::InputInt("時刻(ms)##bpm", &b.time);
+                        ImGui::InputDouble("BPM##bpm", &b.bpm, 1.0, 10.0, "%.3f");
+                        if(b.bpm <= 0.0) b.bpm = 1.0;
+                        timeSigInput("sig##bpm", b.sigNum, b.sigDen);
+                        if(ImGui::Button("削除##bpm")){
+                            removeBpmIndex = static_cast<int>(idx);
+                        }
+
+                        ImGui::Separator();
+                        ImGui::PopID();
+                    }
+                    if(removeBpmIndex >= 0){
+                        currentDiff().bpmEvents.erase(currentDiff().bpmEvents.begin() + removeBpmIndex);
+                    }
+                }
+                else if(propsCategory == 2){
+                    // ===== PREVIEW：選曲画面の試聴を始める位置 =====
+                    ImGui::TextColored(ImVec4(0.0f, 0.86f, 1.0f, 1.0f), "選曲画面の試聴");
+                    ImGui::TextDisabled("曲ファイルのこの位置から、フェードしながらくり返し流します（譜面ファイルの \"previewStart\"）");
+                    ImGui::Separator();
+                    ImGui::PushItemWidth(240.0f);
+                    ImGui::InputDouble("開始位置（曲ファイル上の ms）##preview", &meta.previewStartMs, 100.0, 1000.0, "%.0f");
+                    if(meta.previewStartMs < 0.0) meta.previewStartMs = 0.0;
+                    ImGui::PopItemWidth();
+
+                    // 曲ファイル上の位置 = 譜面の時刻 + オフセット（seekMusicIfNeeded と同じ関係）
+                    const double nowAudioMs = std::max(0.0, scrollTimeMs + meta.offsetMs);
+                    ImGui::Text("今の判定ラインの位置：譜面 %d ms ／ 曲ファイル %.0f ms", scrollTimeMs, nowAudioMs);
+                    if(ImGui::Button("今の位置を試聴の開始にする##preview", ImVec2(320.0f, 0.0f))){
+                        meta.previewStartMs = std::round(nowAudioMs);
+                    }
+                    ImGui::SameLine();
+                    if(ImGui::Button("試聴の開始位置へ移動##preview", ImVec2(260.0f, 0.0f))){
+                        scrollTimeMs = std::max<int32_t>(0, static_cast<int32_t>(std::lround(meta.previewStartMs - meta.offsetMs)));
+                        if(bgm) seekMusicIfNeeded(scrollTimeMs);
+                    }
+                    ImGui::TextDisabled("保存すると譜面ファイルに書き込まれ、選曲画面の試聴に使われます");
+                }
+                else if(propsCategory == 3){
+                    // ===== 情報：コンボ数・ノーツの数（編集中の難易度） =====
+                    //   コンボ数はプレイ画面と同じ数え方：
+                    //     ・単発（通常・ドラッグ・レーン）：1
+                    //     ・ロング（ドラッグロングも）：始点 1 ＋ 中継点 ＋ 終点 1
+                    //       中継点は loadScore.h の buildLongTicks と同じ計算（16 分のグリッド、始点・終点から半マス以内は使わない）
+                    const TempoMap tm = currentTempoMap();
+                    int cNormal = 0, cDrag = 0, cLane = 0, cLong = 0, cDragLong = 0;
+                    long combo = 0;
+                    for(const auto& n : currentDiff().notes){
+                        if(n.isLong()){
+                            if(n.noteTypeInt == 3) cDragLong++; else cLong++;
+                            const double grid = 1.0 / 4.0;   // LONG_TICKS_PER_BEAT = 4（16 分）
+                            const double startK = tempoBeatAt(tm, static_cast<double>(n.time)) / grid;
+                            const double endK   = tempoBeatAt(tm, static_cast<double>(n.time) + n.duration) / grid;
+                            long ticks = 0;
+                            for(long k = static_cast<long>(std::floor(startK + 0.5)) + 1; k < endK - 0.5 && ticks < 100000; k++) ticks++;
+                            combo += 2 + ticks;
                         }
                         else{
-                            ImGui::Text("BPM の変化: %zu か所", currentDiff().bpmEvents.size());
-                            for(const auto& b : currentDiff().bpmEvents){
-                                ImGui::Text("  %7d ms : %.3f BPM  %d/%d", b.time, b.bpm, b.sigNum, b.sigDen);
+                            if(n.noteTypeInt == 3)      cDrag++;
+                            else if(n.noteTypeInt == 4) cLane++;
+                            else                        cNormal++;
+                            combo += 1;
+                        }
+                    }
+                    ImGui::TextColored(ImVec4(0.0f, 0.86f, 1.0f, 1.0f), "%s（Lv.%s）", currentDiff().name.c_str(), currentDiff().level.c_str());
+                    ImGui::TextDisabled("ロングは 始点 ＋ 中継点（16 分ごと） ＋ 終点 で数えます");
+                    ImGui::Spacing();
+
+                    // ----- リザルト画面の SCORE ウィンドウと同じ並び -----
+                    //   一番上に大きく「MAX COMBO」、区切り線、種類ごとの数（左：名前を色付き、右：数）、細い区切り、合計
+                    //   ImGui の部品は使わず、場所を取って（Dummy）その中に自分で描く
+                    {
+                        ImFont* fBig = infoFontBig ? infoFontBig : ImGui::GetFont();
+                        ImFont* fRow = infoFontRow ? infoFontRow : ImGui::GetFont();
+                        const float bigSize = 56.0f, rowSize = 36.0f;
+                        const float rowStep = 54.0f;   // 1行の高さ（リザルトは 32px の文字で 48px）
+
+                        struct Row{ const char* label; int value; ImU32 color; };
+                        const Row rows[] = {
+                            {"TAP",           cNormal,   IM_COL32(255, 255, 255, 255)},
+                            {"DRAG",       cDrag,     IM_COL32(250, 250, 150, 255)},
+                            {"LANE",         cLane,     IM_COL32(255,  80,  80, 255)},
+                            {"TAP LONG",         cLong,     IM_COL32(200, 200, 225, 255)},
+                            {"DRAG LONG", cDragLong, IM_COL32(220, 220, 120, 255)},
+                        };
+                        constexpr int ROW_COUNT = 5;
+
+                        const float w = std::min(720.0f, ImGui::GetContentRegionAvail().x);
+                        const float h = 40.0f + 70.0f + 30.0f + rowStep * ROW_COUNT + 24.0f + rowStep + 30.0f;
+                        const ImVec2 p0 = ImGui::GetCursorScreenPos();
+                        ImGui::Dummy(ImVec2(w, h));
+                        const ImVec2 p1(p0.x + w, p0.y + h);
+                        ImDrawList* dl = ImGui::GetWindowDrawList();
+
+                        // ウィンドウ（リザルトと同じ：半透明の塗り＋シアン 3px の枠）
+                        dl->AddRectFilled(p0, p1, IM_COL32(10, 10, 20, 190));
+                        dl->AddRect(ImVec2(p0.x + 1.5f, p0.y + 1.5f), ImVec2(p1.x - 1.5f, p1.y - 1.5f), editorui::COL_ACCENT, 0.0f, 0, 3.0f);
+
+                        const float left = p0.x + 40.0f, right = p1.x - 40.0f;
+                        // y は文字の縦の中心で考えて、描くときに文字の高さの半分だけ上にずらす
+                        auto textL = [&](ImFont* f, float size, float cy, ImU32 col, const char* t){
+                            dl->AddText(f, size, ImVec2(left, cy - size * 0.5f), col, t);
+                        };
+                        auto textR = [&](ImFont* f, float size, float cy, ImU32 col, const char* t){
+                            const ImVec2 ts = f->CalcTextSizeA(size, FLT_MAX, 0.0f, t);
+                            dl->AddText(f, size, ImVec2(right - ts.x, cy - size * 0.5f), col, t);
+                        };
+                        const ImU32 gray = IM_COL32(150, 150, 170, 255);
+                        const ImU32 white = IM_COL32(255, 255, 255, 255);
+                        char buf[32];
+
+                        // 1. MAX COMBO（大きく）
+                        float y = p0.y + 40.0f + 35.0f;
+                        textL(fRow, rowSize, y, gray, "MAX COMBO");
+                        std::snprintf(buf, sizeof(buf), "%ld", combo);
+                        textR(fBig, bigSize, y, white, buf);
+
+                        // 2. 区切り線
+                        y += 50.0f;
+                        dl->AddRectFilled(ImVec2(left, y), ImVec2(right, y + 2.0f), IM_COL32(110, 110, 150, 255));
+
+                        // 3. 種類ごとの数
+                        y += 30.0f + rowStep * 0.5f;
+                        for(int i = 0; i < ROW_COUNT; i++){
+                            textL(fRow, rowSize, y, rows[i].color, rows[i].label);
+                            std::snprintf(buf, sizeof(buf), "%d", rows[i].value);
+                            textR(fRow, rowSize, y, white, buf);
+                            y += rowStep;
+                        }
+
+                        // 4. 細い区切り ＋ 合計
+                        const float sepY = y - rowStep * 0.5f + 6.0f;
+                        dl->AddRectFilled(ImVec2(left, sepY), ImVec2(right, sepY + 1.0f), IM_COL32(70, 70, 90, 255));
+                        y += 24.0f;
+                        textL(fRow, rowSize, y, gray, "合計");
+                        std::snprintf(buf, sizeof(buf), "%zu", currentDiff().notes.size());
+                        textR(fRow, rowSize, y, white, buf);
+                    }
+
+                    ImGui::Spacing();
+                    ImGui::TextDisabled("SPEED イベント %zu 個 ／ BPM イベント %zu 個",
+                                        currentDiff().speedEvents.size(), currentDiff().bpmEvents.size());
+                }
+                else{
+                    // ===== FILE：曲・作曲者・オフセット・保存／読込・BPM 解析 =====
+                    ImGui::InputText("曲ファイル名##file", bgmBuf, sizeof(bgmBuf));
+                    meta.bgm = bgmBuf;
+
+                    ImGui::InputText("作曲者##file", composerBuf, sizeof(composerBuf));
+                    meta.composer = composerBuf;
+
+                    ImGui::InputDouble("オフセット(ms)##file", &meta.offsetMs, 1.0, 10.0, "%.1f");
+                    ImGui::TextDisabled("- : 遅く  + : 早く");
+
+                    ImGui::Separator();
+                    ImGui::InputText("保存先##file", savePathBuf, sizeof(savePathBuf));
+
+                    if(ImGui::Button("保存##file")){
+                        saveToastOk = saveChart(savePathBuf, meta, difficulties);
+                        saveToastTicks = SDL_GetTicks();
+                    }
+                    ImGui::SameLine();
+                    if(ImGui::Button("読込##file")){
+                        loadChartForEdit(savePathBuf, meta, difficulties);
+                        if(difficulties.empty()) difficulties.push_back(EditorDifficulty{});
+                        currentDiffIndex = 0;
+                        syncMetaBuffers();
+                        syncDifficultyBuffers();
+                        selectedNoteIndex = -1;
+                        dragMode = DragMode::None;
+                        dragNoteIndex = -1;
+                    }
+
+                    // ----- Music Settings：オフセット → 曲全体の BPM → 途中の BPM 変化 を自動で設定（拍子は変えない） -----
+                    ImGui::Separator();
+                    ImGui::TextColored(ImVec4(0.0f, 0.86f, 1.0f, 1.0f), "MUSIC SETTINGS");
+                    if(ImGui::Button("Music Settings（オフセットと BPM を自動設定）", ImVec2(-1.0f, 0.0f))){
+                        if(meta.bgm.empty()){
+                            musicResult = MusicAnalysis{};
+                            musicResult.error = "曲ファイル名が空です";
+                        }
+                        else{
+                            musicResult = analyzeMusic("sounds/" + meta.bgm);
+                            if(musicResult.ok){
+                                applyMusicAnalysis(musicResult, meta, difficulties);
+                                selectedNoteIndex = -1;
+                                dragMode = DragMode::None;
+                                dragNoteIndex = -1;
                             }
                         }
+                        hasMusicResult = true;
+                    }
+                    ImGui::TextDisabled("曲全体を解析します（数秒止まります）");
+                    ImGui::TextDisabled("すべての難易度に反映され、元に戻せません");
 
-                        // 倍テン・半テンの直し：ノーツの位置（ms）は変えずに、BPM の数え方だけ変える
-                        if(ImGui::SmallButton("BPM をすべて x2##music")) scaleAllBpm(2.0, difficulties);
-                        ImGui::SameLine();
-                        if(ImGui::SmallButton("BPM をすべて /2##music")) scaleAllBpm(0.5, difficulties);
-                    }
-                }
-
-                ImGui::Separator();
-                if(ImGui::Button("BPM を解析")){
-                    if(meta.bgm.empty()){
-                        bpmResult = BpmAnalysisResult{};
-                        bpmResult.error = "BGM File Name is empty";
-                    }
-                    else{
-                        bpmResult = detectBpmFromFile("sounds/" + meta.bgm);
-                    }
-                    hasBpmResult = true;
-                }
-                ImGui::SameLine();
-                ImGui::TextDisabled("（1秒ほど止まります）");
-
-                if(hasBpmResult){
-                    if(!bpmResult.ok){
-                        ImGui::TextColored(ImVec4(1.0f, 0.4f, 0.4f, 1.0f), "%s", bpmResult.error.c_str());
-                    }
-                    else{
-                        ImGui::Text("推定: %.2f BPM（確からしさ %.0f%%）", bpmResult.bpm, bpmResult.confidence * 100.0);
-                        ImGui::Text("拍の位置: 約 %.0f ms", bpmResult.beatPhaseMs);
-
-                        char lbl[3][48];
-                        snprintf(lbl[0], sizeof(lbl[0]), "%.2f", bpmResult.bpm);
-                        snprintf(lbl[1], sizeof(lbl[1]), "x2 = %.2f", bpmResult.bpm * 2.0);
-                        snprintf(lbl[2], sizeof(lbl[2]), "/2 = %.2f", bpmResult.bpm / 2.0);
-
-                        if(ImGui::Button(lbl[0])) currentDiff().bpm = bpmResult.bpm;
-                        ImGui::SameLine();
-                        if(ImGui::Button(lbl[1])) currentDiff().bpm = bpmResult.bpm * 2.0;
-                        ImGui::SameLine();
-                        if(ImGui::Button(lbl[2])) currentDiff().bpm = bpmResult.bpm / 2.0;
-                        ImGui::TextDisabled("編集中の難易度に反映されます");
-                    }
-                }
-
-                ImGui::Separator();
-                if(ImGui::Button("BPM の変化を解析")){
-                    if(meta.bgm.empty()){
-                        tempoMap = TempoMapResult{};
-                        tempoMap.error = "BGM File Name is empty";
-                    }
-                    else{
-                        tempoMap = detectTempoMapFromFile("sounds/" + meta.bgm);
-                    }
-                    hasTempoMap = true;
-                }
-                ImGui::SameLine();
-                ImGui::TextDisabled("（1秒ほど止まります）");
-
-                if(hasTempoMap){
-                    if(!tempoMap.ok){
-                        ImGui::TextColored(ImVec4(1.0f, 0.4f, 0.4f, 1.0f), "%s", tempoMap.error.c_str());
-                    }
-                    else{
-                        ImGui::Text("%zu 区間を検出:", tempoMap.segments.size());
-                        for(size_t i = 0; i < tempoMap.segments.size(); i++){
-                            ImGui::PushID(static_cast<int>(i) + 400000);
-                            auto& sg = tempoMap.segments[i];
-                            ImGui::Text("%7.0f ms : %.2f BPM", sg.startMs, sg.bpm);
-                            ImGui::SameLine();
-                            if(ImGui::SmallButton("x2")) sg.bpm *= 2.0;
-                            ImGui::SameLine();
-                            if(ImGui::SmallButton("/2")) sg.bpm /= 2.0;
-                            ImGui::PopID();
+                    if(hasMusicResult){
+                        if(!musicResult.ok){
+                            ImGui::TextColored(ImVec4(1.0f, 0.4f, 0.4f, 1.0f), "%s", musicResult.error.c_str());
                         }
-                        if(ImGui::SmallButton("すべて x2##tempo")){
-                            for(auto& sg : tempoMap.segments) sg.bpm *= 2.0;
-                        }
-                        ImGui::SameLine();
-                        if(ImGui::SmallButton("すべて /2##tempo")){
-                            for(auto& sg : tempoMap.segments) sg.bpm /= 2.0;
-                        }
-
-                        ImGui::Checkbox("今の BPM イベントを置き換える", &replaceBpmEvents);
-                        if(ImGui::Button("編集中の難易度に反映")){
-                            EditorDifficulty& d = currentDiff();
-                            if(replaceBpmEvents) d.bpmEvents.clear();
-
-                            d.bpm = tempoMap.segments[0].bpm;
-                            for(size_t i = 1; i < tempoMap.segments.size(); i++){
-                                EditorBpmEvent b;
-                                // 音源上の位置 → 譜面上の時刻(音声位置 = 譜面時刻 + Offset の関係に合わせる)
-                                b.time = std::max(0, static_cast<int>(std::lround(tempoMap.segments[i].startMs - meta.offsetMs)));
-                                b.bpm = tempoMap.segments[i].bpm;
-                                d.bpmEvents.push_back(b);
+                        else{
+                            ImGui::Text("オフセット: %.1f ms", meta.offsetMs);
+                            ImGui::Text("BPM: %.3f（拍のはっきりさ %.0f%%）", currentDiff().bpm, musicResult.clarity * 100.0);
+                            ImGui::TextDisabled("拍子は変えていません（今: %d/%d）", currentDiff().sigNum, currentDiff().sigDen);
+                            ImGui::TextDisabled("拍の間の音の型: %s", musicResult.pattern.c_str());
+                            if(currentDiff().bpmEvents.empty()){
+                                ImGui::Text("BPM の変化: なし");
                             }
-                            std::sort(d.bpmEvents.begin(), d.bpmEvents.end(),
-                                [](const EditorBpmEvent& a, const EditorBpmEvent& b){ return a.time < b.time; });
+                            else{
+                                ImGui::Text("BPM の変化: %zu か所", currentDiff().bpmEvents.size());
+                                for(const auto& b : currentDiff().bpmEvents){
+                                    ImGui::Text("  %7d ms : %.3f BPM  %d/%d", b.time, b.bpm, b.sigNum, b.sigDen);
+                                }
+                            }
+
+                            // 倍テン・半テンの直し：ノーツの位置（ms）は変えずに、BPM の数え方だけ変える
+                            if(ImGui::SmallButton("BPM をすべて x2##music")) scaleAllBpm(2.0, difficulties);
+                            ImGui::SameLine();
+                            if(ImGui::SmallButton("BPM をすべて /2##music")) scaleAllBpm(0.5, difficulties);
                         }
-                        ImGui::TextDisabled("元に戻せません。残したいときは「置き換える」を外してください");
+                    }
+
+                    ImGui::Separator();
+                    if(ImGui::Button("BPM を解析")){
+                        if(meta.bgm.empty()){
+                            bpmResult = BpmAnalysisResult{};
+                            bpmResult.error = "BGM File Name is empty";
+                        }
+                        else{
+                            bpmResult = detectBpmFromFile("sounds/" + meta.bgm);
+                        }
+                        hasBpmResult = true;
+                    }
+                    ImGui::SameLine();
+                    ImGui::TextDisabled("（1秒ほど止まります）");
+
+                    if(hasBpmResult){
+                        if(!bpmResult.ok){
+                            ImGui::TextColored(ImVec4(1.0f, 0.4f, 0.4f, 1.0f), "%s", bpmResult.error.c_str());
+                        }
+                        else{
+                            ImGui::Text("推定: %.2f BPM（確からしさ %.0f%%）", bpmResult.bpm, bpmResult.confidence * 100.0);
+                            ImGui::Text("拍の位置: 約 %.0f ms", bpmResult.beatPhaseMs);
+
+                            char lbl[3][48];
+                            snprintf(lbl[0], sizeof(lbl[0]), "%.2f", bpmResult.bpm);
+                            snprintf(lbl[1], sizeof(lbl[1]), "x2 = %.2f", bpmResult.bpm * 2.0);
+                            snprintf(lbl[2], sizeof(lbl[2]), "/2 = %.2f", bpmResult.bpm / 2.0);
+
+                            if(ImGui::Button(lbl[0])) currentDiff().bpm = bpmResult.bpm;
+                            ImGui::SameLine();
+                            if(ImGui::Button(lbl[1])) currentDiff().bpm = bpmResult.bpm * 2.0;
+                            ImGui::SameLine();
+                            if(ImGui::Button(lbl[2])) currentDiff().bpm = bpmResult.bpm / 2.0;
+                            ImGui::TextDisabled("編集中の難易度に反映されます");
+                        }
+                    }
+
+                    ImGui::Separator();
+                    if(ImGui::Button("BPM の変化を解析")){
+                        if(meta.bgm.empty()){
+                            tempoMap = TempoMapResult{};
+                            tempoMap.error = "BGM File Name is empty";
+                        }
+                        else{
+                            tempoMap = detectTempoMapFromFile("sounds/" + meta.bgm);
+                        }
+                        hasTempoMap = true;
+                    }
+                    ImGui::SameLine();
+                    ImGui::TextDisabled("（1秒ほど止まります）");
+
+                    if(hasTempoMap){
+                        if(!tempoMap.ok){
+                            ImGui::TextColored(ImVec4(1.0f, 0.4f, 0.4f, 1.0f), "%s", tempoMap.error.c_str());
+                        }
+                        else{
+                            ImGui::Text("%zu 区間を検出:", tempoMap.segments.size());
+                            for(size_t i = 0; i < tempoMap.segments.size(); i++){
+                                ImGui::PushID(static_cast<int>(i) + 400000);
+                                auto& sg = tempoMap.segments[i];
+                                ImGui::Text("%7.0f ms : %.2f BPM", sg.startMs, sg.bpm);
+                                ImGui::SameLine();
+                                if(ImGui::SmallButton("x2")) sg.bpm *= 2.0;
+                                ImGui::SameLine();
+                                if(ImGui::SmallButton("/2")) sg.bpm /= 2.0;
+                                ImGui::PopID();
+                            }
+                            if(ImGui::SmallButton("すべて x2##tempo")){
+                                for(auto& sg : tempoMap.segments) sg.bpm *= 2.0;
+                            }
+                            ImGui::SameLine();
+                            if(ImGui::SmallButton("すべて /2##tempo")){
+                                for(auto& sg : tempoMap.segments) sg.bpm /= 2.0;
+                            }
+
+                            ImGui::Checkbox("今の BPM イベントを置き換える", &replaceBpmEvents);
+                            if(ImGui::Button("編集中の難易度に反映")){
+                                EditorDifficulty& d = currentDiff();
+                                if(replaceBpmEvents) d.bpmEvents.clear();
+
+                                d.bpm = tempoMap.segments[0].bpm;
+                                for(size_t i = 1; i < tempoMap.segments.size(); i++){
+                                    EditorBpmEvent b;
+                                    // 音源上の位置 → 譜面上の時刻(音声位置 = 譜面時刻 + Offset の関係に合わせる)
+                                    b.time = std::max(0, static_cast<int>(std::lround(tempoMap.segments[i].startMs - meta.offsetMs)));
+                                    b.bpm = tempoMap.segments[i].bpm;
+                                    d.bpmEvents.push_back(b);
+                                }
+                                std::sort(d.bpmEvents.begin(), d.bpmEvents.end(),
+                                    [](const EditorBpmEvent& a, const EditorBpmEvent& b){ return a.time < b.time; });
+                            }
+                            ImGui::TextDisabled("元に戻せません。残したいときは「置き換える」を外してください");
+                        }
                     }
                 }
-                ImGui::EndTabItem();
+                ImGui::EndChild();
+
+                ImGui::Separator();
+                ImGui::TextDisabled("Esc・歯車・外側のクリックでも閉じます");
+                ImGui::SameLine(ImGui::GetWindowWidth() - 150.0f);
+                if(ImGui::Button("閉じる##props", ImVec2(120.0f, 0.0f))) propsOpen = false;
             }
-
-            ImGui::EndTabBar();
+            ImGui::End();
+            ImGui::PopStyleVar();
         }
-        ImGui::End();
 
         {
             EditorDifficulty& d = currentDiff();
@@ -3009,7 +3242,6 @@ GameScene chartCreateScene(SDL_Window* window, SDL_Renderer* renderer, std::stri
                                 const int32_t newEnd = remapTime(d.alignedMap, newMap, n.time + n.duration);
                                 n.duration = std::max<int32_t>(1, newEnd - newStart);
                             }
-                            for(auto& k : n.path) k.time = remapTime(d.alignedMap, newMap, k.time);
                             n.time = newStart;
                         }
 
@@ -3042,167 +3274,8 @@ GameScene chartCreateScene(SDL_Window* window, SDL_Renderer* renderer, std::stri
             else SDL_SetRenderDrawColor(renderer, 25, 25, 35, 255);
             SDL_RenderFillRect(renderer, &laneRect);
         }
-        for(int i = 0; i <= 6; i++){
-            SDL_SetRenderDrawColor(renderer, 80, 80, 90, 255);
-            int lx = startX + laneWidth * i;
-            SDL_RenderDrawLine(renderer, lx, 0, lx, SCREEN_H);
-        }
-
-        // グリッド線・小節線
-        //   どちらも区切り（曲の始まり・各 BPM イベント）ごとに、その先頭から数え直す
-        {
-            const TempoMap tm = currentTempoMap();
-            const std::vector<SigSeg> segs = buildSigSegs(currentDiff(), tm);
-            const double gb = 4.0 / gridDivisor;   // グリッド1マスの拍数
-
-            const double viewStartTime = scrollTimeMs - (SCREEN_H - judgeY) / effectivePixelsPerMs;
-            const double viewEndTime   = scrollTimeMs + judgeY / effectivePixelsPerMs;
-            const double beat0 = tempoBeatAt(tm, viewStartTime);
-            const double beat1 = tempoBeatAt(tm, viewEndTime);
-
-            // ----- グリッド線（拍の線は明るく） -----
-            long drawn = 0;
-            for(size_t si = 0; si < segs.size(); si++){
-                const SigSeg& sg = segs[si];
-                const double segEnd = sigSegEnd(segs, si);
-                if(segEnd <= beat0) continue;             // この区切りは画面より下（過去）
-                if(si > 0 && sg.beat > beat1) break;      // ここから先は画面より上（未来）
-
-                const double unit = 4.0 / sg.den;         // 拍子の 1 拍（4/4 なら 4 分、3/8 なら 8 分）
-                long kFirst = static_cast<long>(std::floor((beat0 - sg.beat) / gb));
-                if(si > 0) kFirst = std::max(0L, kFirst); // 曲の始まりより前（負の拍）は最初の区切りだけで描く
-                const long kLast = static_cast<long>(std::ceil((std::min(beat1, segEnd) - sg.beat) / gb));
-
-                for(long k = kFirst; k <= kLast; k++){
-                    if(++drawn > 20000) break;            // 拡大しすぎたときの保険
-                    const double beat = sg.beat + k * gb;
-                    if(beat >= segEnd - 1.0e-9) break;    // 境目の線は次の区切りが引く
-
-                    const double t = tempoTimeAt(tm, beat);
-                    const int gy = judgeY - static_cast<int>((t - scrollTimeMs) * effectivePixelsPerMs);
-
-                    const double r = (beat - sg.beat) / unit;   // 区切りの先頭から何拍目か
-                    const bool isBeatLine = std::abs(r - std::round(r)) < 1.0e-6;
-                    if(isBeatLine) SDL_SetRenderDrawColor(renderer, 120, 120, 140, 255);
-                    else SDL_SetRenderDrawColor(renderer, 50, 50, 60, 255);
-
-                    SDL_RenderDrawLine(renderer, startX, gy, lanesRight, gy);
-                }
-            }
-
-            // ----- 小節線（拍の線より明るく太く、左に小節番号） -----
-            {
-                ImFont* f = ImGui::GetFont();
-                long measureNo = 1;   // その区切りの最初の小節の番号
-                for(size_t si = 0; si < segs.size(); si++){
-                    const SigSeg& sg = segs[si];
-                    const double len = sg.num * 4.0 / sg.den;                    // 1 小節が 4 分音符いくつ分か
-                    const bool last = (si + 1 == segs.size());
-                    const double segEnd = last ? std::numeric_limits<double>::infinity() : segs[si + 1].beat;
-
-                    // この区切りに入る小節の数（最後の区切りは終わりなし）
-                    long count = last ? std::numeric_limits<long>::max()
-                                      : static_cast<long>(std::ceil((segEnd - sg.beat) / len - 1.0e-6));
-                    if(count < 1) count = 1;
-
-                    const long kMin = std::max(0L, static_cast<long>(std::floor((beat0 - sg.beat) / len)));
-                    const long kMax = std::min(count - 1, static_cast<long>(std::ceil((beat1 - sg.beat) / len)));
-                    if(kMax - kMin <= 5000){
-                        for(long k = kMin; k <= kMax; k++){
-                            const double beat = sg.beat + k * len;
-                            if(beat >= segEnd - 1.0e-9) break;
-                            const double t = tempoTimeAt(tm, beat);
-                            const int gy = judgeY - static_cast<int>((t - scrollTimeMs) * effectivePixelsPerMs);
-                            if(gy < -30 || gy > SCREEN_H + 30) continue;
-
-                            SDL_SetRenderDrawColor(renderer, 200, 200, 235, 255);
-                            SDL_Rect bar = {startX, gy - 1, lanesRight - startX, 2};
-                            SDL_RenderFillRect(renderer, &bar);
-
-                            // 小節番号。区切りの最初の小節には拍子も書く
-                            char label[32];
-                            if(k == 0) std::snprintf(label, sizeof(label), "%ld  %d/%d", measureNo + k, sg.num, sg.den);
-                            else       std::snprintf(label, sizeof(label), "%ld", measureNo + k);
-                            ImGui::GetBackgroundDrawList()->AddText(f, 15.0f,
-                                ImVec2(static_cast<float>(startX + 4), static_cast<float>(gy - 18)),
-                                IM_COL32(170, 170, 205, 255), label);
-                        }
-                    }
-                    if(!last) measureNo += count;
-                }
-            }
-        }
-
-        // イベントの線と帯（レーンの範囲だけに描く。文字は後で ImGui の背景に描く）
-        ImDrawList* bgDraw = ImGui::GetBackgroundDrawList();   // パネルより奥に描く文字用
-
-        for(const auto& s : currentDiff().speedEvents){
-            int ly = judgeY - static_cast<int>((s.time - scrollTimeMs) * effectivePixelsPerMs);
-            int ey = judgeY - static_cast<int>((s.time + s.duration - scrollTimeMs) * effectivePixelsPerMs);
-
-            // 適用時間を薄い黄色の帯で表現する(画面内に一部でも重なっていれば描画)
-            if(!(ly < -20 && ey < -20) && !(ly > SCREEN_H + 20 && ey > SCREEN_H + 20)){
-                int yTop = std::min(ly, ey);
-                int yBottom = std::max(ly, ey);
-                SDL_SetRenderDrawColor(renderer, 255, 240, 150, 40);
-                SDL_Rect bandRect = {startX, yTop, lanesRight - startX, yBottom - yTop};
-                SDL_RenderFillRect(renderer, &bandRect);
-
-                // 終端にも薄い線を引き、Ctrl+ドラッグで掴める位置を視覚的に示す
-                SDL_SetRenderDrawColor(renderer, 255, 220, 80, 100);
-                SDL_RenderDrawLine(renderer, startX, ey, lanesRight, ey);
-            }
-
-            if(ly < -20 || ly > SCREEN_H + 20) continue;
-
-            SDL_SetRenderDrawColor(renderer, 255, 220, 80, 200);
-            SDL_Rect thick = {startX, ly - 1, lanesRight - startX, 3};
-            SDL_RenderFillRect(renderer, &thick);
-
-            char buf[64];
-            snprintf(buf, sizeof(buf), "SPD %.2fx", s.target);
-            bgDraw->AddText(ImVec2(static_cast<float>(startX + 6), static_cast<float>(ly - 24)), IM_COL32(255, 220, 80, 255), buf);
-        }
-
-        for(const auto& b : currentDiff().bpmEvents){
-            int ly = judgeY - static_cast<int>((b.time - scrollTimeMs) * effectivePixelsPerMs);
-            if(ly < -20 || ly > SCREEN_H + 20) continue;
-
-            SDL_SetRenderDrawColor(renderer, 80, 220, 255, 200);
-            SDL_Rect thick = {startX, ly - 1, lanesRight - startX, 3};
-            SDL_RenderFillRect(renderer, &thick);
-
-            char buf[64];
-            snprintf(buf, sizeof(buf), "BPM %.1f  %d/%d", b.bpm, b.sigNum, b.sigDen);
-            ImVec2 textSize = ImGui::CalcTextSize(buf);
-            bgDraw->AddText(ImVec2(static_cast<float>(lanesRight - 6) - textSize.x, static_cast<float>(ly - 24)),
-                            IM_COL32(80, 220, 255, 255), buf);
-        }
-
-        // ----- 選曲画面の試聴範囲：レーンの左に緑の縦帯、開始位置に線 -----
-        {
-            const double pStart = meta.previewStartMs - meta.offsetMs;   // 曲ファイル上の位置 → 譜面上の時刻
-            const double pEnd   = pStart + songpreview::LENGTH_MS;
-            const double yS = judgeY - (pStart - scrollTimeMs) * effectivePixelsPerMs;   // 開始（下側）
-            const double yE = judgeY - (pEnd   - scrollTimeMs) * effectivePixelsPerMs;   // 終了（上側）
-
-            if(yS > -20.0 && yE < SCREEN_H + 20.0){   // 一部でも画面に入っていれば描く
-                const int top    = static_cast<int>(std::clamp(yE, -20.0, static_cast<double>(SCREEN_H + 20)));
-                const int bottom = static_cast<int>(std::clamp(yS, -20.0, static_cast<double>(SCREEN_H + 20)));
-                SDL_SetRenderDrawColor(renderer, 80, 255, 140, 160);
-                SDL_Rect band = {startX - 12, top, 6, bottom - top};
-                SDL_RenderFillRect(renderer, &band);
-
-                if(yS <= SCREEN_H + 20.0){
-                    SDL_SetRenderDrawColor(renderer, 80, 255, 140, 200);
-                    SDL_Rect line = {startX, bottom - 1, lanesRight - startX, 2};
-                    SDL_RenderFillRect(renderer, &line);
-                    bgDraw->AddText(ImVec2(static_cast<float>(startX + 6), static_cast<float>(bottom + 4)),
-                                    IM_COL32(80, 255, 140, 255), "PREVIEW");
-                }
-            }
-        }
-
+        // 幕（レーンが隠れている区間）は、レーンの背景のすぐ上・グリッド線の下に描く
+        //   → 幕の上にも、グリッド線・拍の線・小節線・区切り線が見えるので、拍子が分かる
         // ----- レーンノーツで消えている区間を暗くする -----
         //   プレイ中は、レーンノーツ（type 4・ロングでないもの）を叩く／見逃すたびに、
         //   そのノーツが乗っているレーンの「表示 ⇔ 非表示」が切り替わる（noteJudge.h の toggleLaneActive）。
@@ -3265,7 +3338,7 @@ GameScene chartCreateScene(SDL_Window* window, SDL_Renderer* renderer, std::stri
 
                     // 斜線：はみ出さないように、この区間の四角で切り抜いて描く
                     SDL_RenderSetClipRect(renderer, &r);
-                    SDL_SetRenderDrawColor(renderer, 90, 90, 110, 120);
+                    SDL_SetRenderDrawColor(renderer, 90, 90, 110, 60);   // グリッド線と見分けやすいよう薄めに
                     const int h = r.h;
                     for(int x0 = -h - HATCH_STEP + hatchPhase; x0 < r.w; x0 += HATCH_STEP){
                         SDL_RenderDrawLine(renderer, r.x + x0, r.y + r.h, r.x + x0 + h, r.y);
@@ -3280,6 +3353,164 @@ GameScene chartCreateScene(SDL_Window* window, SDL_Renderer* renderer, std::stri
                     }
                 }
             }
+        }
+
+        for(int i = 0; i <= 6; i++){
+            SDL_SetRenderDrawColor(renderer, 80, 80, 90, 255);
+            int lx = startX + laneWidth * i;
+            SDL_RenderDrawLine(renderer, lx, 0, lx, SCREEN_H);
+        }
+
+        // グリッド線・小節線
+        //   どちらも区切り（曲の始まり・各 BPM イベント）ごとに、その先頭から数え直す
+        {
+            const TempoMap tm = currentTempoMap();
+            const std::vector<SigSeg> segs = buildSigSegs(currentDiff(), tm);
+            const double gb = 4.0 / gridDivisor;   // グリッド1マスの拍数
+
+            const double viewStartTime = scrollTimeMs - (SCREEN_H - judgeY) / effectivePixelsPerMs;
+            const double viewEndTime   = scrollTimeMs + judgeY / effectivePixelsPerMs;
+            const double beat0 = tempoBeatAt(tm, viewStartTime);
+            const double beat1 = tempoBeatAt(tm, viewEndTime);
+
+            // ----- グリッド線（拍の線は明るく） -----
+            long drawn = 0;
+            for(size_t si = 0; si < segs.size(); si++){
+                const SigSeg& sg = segs[si];
+                const double segEnd = sigSegEnd(segs, si);
+                if(segEnd <= beat0) continue;             // この区切りは画面より下（過去）
+                if(si > 0 && sg.beat > beat1) break;      // ここから先は画面より上（未来）
+
+                const double unit = 4.0 / sg.den;         // 拍子の 1 拍（4/4 なら 4 分、3/8 なら 8 分）
+                long kFirst = static_cast<long>(std::floor((beat0 - sg.beat) / gb));
+                if(si > 0) kFirst = std::max(0L, kFirst); // 曲の始まりより前（負の拍）は最初の区切りだけで描く
+                const long kLast = static_cast<long>(std::ceil((std::min(beat1, segEnd) - sg.beat) / gb));
+
+                for(long k = kFirst; k <= kLast; k++){
+                    if(++drawn > 20000) break;            // 拡大しすぎたときの保険
+                    const double beat = sg.beat + k * gb;
+                    if(beat >= segEnd - 1.0e-9) break;    // 境目の線は次の区切りが引く
+
+                    const double t = tempoTimeAt(tm, beat);
+                    const int gy = judgeY - static_cast<int>((t - scrollTimeMs) * effectivePixelsPerMs);
+
+                    const double r = (beat - sg.beat) / unit;   // 区切りの先頭から何拍目か
+                    const bool isBeatLine = std::abs(r - std::round(r)) < 1.0e-6;
+                    if(isBeatLine) SDL_SetRenderDrawColor(renderer, 120, 120, 140, 255);
+                    else SDL_SetRenderDrawColor(renderer, 68, 68, 82, 255);   // 幕（灰色）の上でも見えるよう、少し明るく
+
+                    SDL_RenderDrawLine(renderer, startX, gy, lanesRight, gy);
+                }
+            }
+
+            // ----- 小節線（拍の線より明るく太く、左に小節番号） -----
+            {
+                ImFont* f = ImGui::GetFont();
+                long measureNo = 1;   // その区切りの最初の小節の番号
+                for(size_t si = 0; si < segs.size(); si++){
+                    const SigSeg& sg = segs[si];
+                    const double len = sg.num * 4.0 / sg.den;                    // 1 小節が 4 分音符いくつ分か
+                    const bool last = (si + 1 == segs.size());
+                    const double segEnd = last ? std::numeric_limits<double>::infinity() : segs[si + 1].beat;
+
+                    // この区切りに入る小節の数（最後の区切りは終わりなし）
+                    long count = last ? std::numeric_limits<long>::max()
+                                      : static_cast<long>(std::ceil((segEnd - sg.beat) / len - 1.0e-6));
+                    if(count < 1) count = 1;
+
+                    const long kMin = std::max(0L, static_cast<long>(std::floor((beat0 - sg.beat) / len)));
+                    const long kMax = std::min(count - 1, static_cast<long>(std::ceil((beat1 - sg.beat) / len)));
+                    if(kMax - kMin <= 5000){
+                        for(long k = kMin; k <= kMax; k++){
+                            const double beat = sg.beat + k * len;
+                            if(beat >= segEnd - 1.0e-9) break;
+                            const double t = tempoTimeAt(tm, beat);
+                            const int gy = judgeY - static_cast<int>((t - scrollTimeMs) * effectivePixelsPerMs);
+                            if(gy < -30 || gy > SCREEN_H + 30) continue;
+
+                            SDL_SetRenderDrawColor(renderer, 200, 200, 235, 255);
+                            SDL_Rect bar = {startX, gy - 1, lanesRight - startX, 2};
+                            SDL_RenderFillRect(renderer, &bar);
+
+                            // 小節番号。区切りの最初の小節には拍子も書く
+                            char label[32];
+                            if(k == 0) std::snprintf(label, sizeof(label), "%ld  %d/%d", measureNo + k, sg.num, sg.den);
+                            else       std::snprintf(label, sizeof(label), "%ld", measureNo + k);
+                            ImGui::GetBackgroundDrawList()->AddText(f, 15.0f,
+                                ImVec2(static_cast<float>(startX + 4), static_cast<float>(gy - 18)),
+                                IM_COL32(170, 170, 205, 255), label);
+                        }
+                    }
+                    if(!last) measureNo += count;
+                }
+            }
+        }
+
+        // イベントの線と帯（レーンの範囲だけに描く。文字は後で ImGui の背景に描く）
+        ImDrawList* bgDraw = ImGui::GetBackgroundDrawList();   // パネルより奥に描く文字用
+
+        // SPEED・BPM の文字はレーンの左の外に、右端をそろえて出す（パネルより奥 = 一番奥の層に描く）
+        //   SPEED は線の上、BPM は線の下に出すので、同じ時刻にあっても重ならない
+        //   SPEED の文字には枠を付け、クリックするとその SPEED イベントの編集ウィンドウが開く
+        speedLabelHits.clear();
+        const float labelRight = static_cast<float>(startX) - 10.0f;
+        for(size_t si = 0; si < currentDiff().speedEvents.size(); si++){
+            const auto& s = currentDiff().speedEvents[si];
+            int ly = judgeY - static_cast<int>((s.time - scrollTimeMs) * effectivePixelsPerMs);
+            int ey = judgeY - static_cast<int>((s.time + s.duration - scrollTimeMs) * effectivePixelsPerMs);
+
+            // 適用時間を薄い黄色の帯で表現する(画面内に一部でも重なっていれば描画)
+            if(!(ly < -20 && ey < -20) && !(ly > SCREEN_H + 20 && ey > SCREEN_H + 20)){
+                int yTop = std::min(ly, ey);
+                int yBottom = std::max(ly, ey);
+                SDL_SetRenderDrawColor(renderer, 255, 240, 150, 40);
+                SDL_Rect bandRect = {startX, yTop, lanesRight - startX, yBottom - yTop};
+                SDL_RenderFillRect(renderer, &bandRect);
+
+                // 終端にも薄い線を引き、Ctrl+ドラッグで掴める位置を視覚的に示す
+                SDL_SetRenderDrawColor(renderer, 255, 220, 80, 100);
+                SDL_RenderDrawLine(renderer, startX, ey, lanesRight, ey);
+            }
+
+            if(ly < -20 || ly > SCREEN_H + 20) continue;
+
+            SDL_SetRenderDrawColor(renderer, 255, 220, 80, 200);
+            SDL_Rect thick = {startX, ly - 1, lanesRight - startX, 3};
+            SDL_RenderFillRect(renderer, &thick);
+
+            char buf[64];
+            snprintf(buf, sizeof(buf), "SPD %.2fx", s.target);
+            const ImVec2 ts = ImGui::CalcTextSize(buf);
+            const float padX = 8.0f, padY = 3.0f;
+            const ImVec2 b0(labelRight - ts.x - padX * 2.0f, static_cast<float>(ly) - ts.y - padY * 2.0f - 2.0f);
+            const ImVec2 b1(labelRight, static_cast<float>(ly) - 2.0f);
+            const bool editing = speedEditOpen && speedEditIndex == static_cast<int>(si);
+            bgDraw->AddRectFilled(b0, b1, editing ? IM_COL32(90, 70, 20, 230) : IM_COL32(30, 26, 10, 220));
+            bgDraw->AddRect(b0, b1, IM_COL32(255, 220, 80, 255), 0.0f, 0, editing ? 2.5f : 1.5f);
+            bgDraw->AddText(ImVec2(b0.x + padX, b0.y + padY), IM_COL32(255, 220, 80, 255), buf);
+            // 枠から線までを短くつなぐ（どの線の数字か分かるように）
+            bgDraw->AddLine(ImVec2(labelRight, static_cast<float>(ly)), ImVec2(static_cast<float>(startX), static_cast<float>(ly)),
+                            IM_COL32(255, 220, 80, 200), 2.0f);
+            speedLabelHits.push_back({SDL_Rect{static_cast<int>(b0.x), static_cast<int>(b0.y),
+                                               static_cast<int>(b1.x - b0.x), static_cast<int>(b1.y - b0.y)},
+                                      static_cast<int>(si)});
+        }
+
+        for(const auto& b : currentDiff().bpmEvents){
+            int ly = judgeY - static_cast<int>((b.time - scrollTimeMs) * effectivePixelsPerMs);
+            if(ly < -20 || ly > SCREEN_H + 20) continue;
+
+            SDL_SetRenderDrawColor(renderer, 80, 220, 255, 200);
+            SDL_Rect thick = {startX, ly - 1, lanesRight - startX, 3};
+            SDL_RenderFillRect(renderer, &thick);
+
+            char buf[64];
+            snprintf(buf, sizeof(buf), "BPM %.1f  %d/%d", b.bpm, b.sigNum, b.sigDen);
+            ImVec2 textSize = ImGui::CalcTextSize(buf);
+            bgDraw->AddText(ImVec2(labelRight - textSize.x, static_cast<float>(ly + 4)),
+                            IM_COL32(80, 220, 255, 255), buf);
+            bgDraw->AddLine(ImVec2(labelRight, static_cast<float>(ly)), ImVec2(static_cast<float>(startX), static_cast<float>(ly)),
+                            IM_COL32(80, 220, 255, 200), 2.0f);
         }
 
         // ----- キーボード配置モード：キービーム -----
@@ -3356,18 +3587,17 @@ GameScene chartCreateScene(SDL_Window* window, SDL_Renderer* renderer, std::stri
 
             const auto& notes = currentDiff().notes;
 
-            // ノーツのヘッドの y（パス付きはパスで計算）
+            // ノーツのヘッドの y
             auto headYOf = [&](const EditorNote& n) -> int {
-                if(!n.path.empty()) return judgeY - static_cast<int>(evaluateEditorPathY(n, scrollTimeMs));
                 return judgeY - static_cast<int>((n.time - scrollTimeMs) * effectivePixelsPerMs);
             };
 
-            // 同時押しの線：同じ時刻・別レーンのノーツを、パスなしのものだけ線でつなぐ
+            // 同時押しの線：同じ時刻・別レーンのノーツを線でつなぐ
             {
                 std::vector<std::pair<int32_t, size_t>> order;   // (時刻, 番号)
                 order.reserve(notes.size());
                 for(size_t i = 0; i < notes.size(); i++){
-                    if(notes[i].path.empty()) order.push_back({notes[i].time, i});
+                    order.push_back({notes[i].time, i});
                 }
                 std::sort(order.begin(), order.end());
 
@@ -3408,6 +3638,14 @@ GameScene chartCreateScene(SDL_Window* window, SDL_Renderer* renderer, std::stri
 
                 if(n.isLong()){
                     const int tailY = judgeY - static_cast<int>((n.time + n.duration - scrollTimeMs) * effectivePixelsPerMs);
+
+                    // 終端だけを選んでいる：終端のまわりを縁取りする（ドラッグで長さを変えられる印）
+                    if(n.tailSelected && tailY > -50 && tailY < SCREEN_H + 50){
+                        const float pad = 4.0f;
+                        selectBatch.addOutline(noteX - pad, static_cast<float>(tailY) - noteH * 0.5f - pad,
+                                               noteW + pad * 2.0f, noteH + pad * 2.0f,
+                                               NOTE_RADIUS + pad, 3.0f, SDL_Color{0, 255, 255, 255});
+                    }
                     const float top = static_cast<float>(tailY) - noteH * 0.5f;
                     const float bottom = static_cast<float>(noteY);
                     bodyTop = top;
@@ -3558,7 +3796,7 @@ GameScene chartCreateScene(SDL_Window* window, SDL_Renderer* renderer, std::stri
 
             // 1. エディタ側の再生を止める
             isPlaying = false;
-            if(bgm) bgm.halt();
+            if(bgm) Mix_HaltMusic();
             musicNeedsStart = true;
             flashEffects.clear();
 
@@ -3600,13 +3838,15 @@ GameScene chartCreateScene(SDL_Window* window, SDL_Renderer* renderer, std::stri
         }
     }
 
-    bgm.free();   // 止めてから解放する（WAV のときはチャンネルの予約も戻す）
+    if(bgm){
+        Mix_HaltMusic();
+        Mix_FreeMusic(bgm);
+    }
 
     ImGui_ImplSDLRenderer2_Shutdown();
     ImGui_ImplSDL2_Shutdown();
     ImGui::DestroyContext();
     if(tap_sound) Mix_FreeChunk(tap_sound);
-    if(tap_sound_c) Mix_FreeChunk(tap_sound_c);
     Mix_HaltChannel(-1);   // 鳴っている途中のメトロノームの音を止めてから解放する
     metronome.destroy();
 

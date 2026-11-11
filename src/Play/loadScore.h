@@ -66,10 +66,20 @@ inline std::vector<DifficultyInfo> listDifficulties(const std::string& filename)
 // =====================================================================
 inline constexpr double LONG_TICKS_PER_BEAT = 4.0;   // 1拍に何回（4 = 16分音符 = BPM の4倍）
 
+// =====================================================================
+//  ロングを離しても途切れない時間（BPM に関係なく固定）
+//    この時間より長く離したときだけ、ロングが途切れる（MISS）。それより早く押し直せば続けてホールドできる
+//    キーのチャタリング（押しているのに一瞬だけ離れたと読まれること）で途切れないようにするくらいの短さ
+// =====================================================================
+inline constexpr int32_t LONG_RELEASE_TOLERANCE_MS = 10;
+
 inline void buildLongTicks(Note& n, const TempoMap& tempo){
     n.tickTimes.clear();
     n.nextTick = 0;
     if(n.type != NoteType::Long || n.durationMs <= 0) return;
+
+    // 離しても途切れない時間（固定）
+    n.releaseToleranceMs = LONG_RELEASE_TOLERANCE_MS;
 
     const double grid = 1.0 / LONG_TICKS_PER_BEAT;   // グリッド1マスの長さ（拍）
 
@@ -175,19 +185,7 @@ inline bool loadScore(const std::string& filename, std::string& bgmName, std::ve
                 newNote.customSpeed = item.at("speed").get<double>();
             }
 
-            if(item.contains("path")){
-                for(const auto& kf : item.at("path")){
-                    PathKeyframe k;
-                    k.time = kf.at("time").get<int32_t>();
-                    k.y = kf.value("y", 1);
-                    k.easing = kf.value("easing", 1);
-                    newNote.path.push_back(k);
-                }
-
-                std::sort(newNote.path.begin(), newNote.path.end(), [](const PathKeyframe& a, const PathKeyframe& b){
-                    return a.time < b.time;
-                });
-            }
+            // ※ カスタムパス（"path"）は使わないことにした。古い譜面に書いてあっても読まない（ふつうに流れる）
 
             buildLongTicks(newNote, tempo);   // ロングなら中継点を置く
 

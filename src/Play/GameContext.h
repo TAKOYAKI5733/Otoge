@@ -5,8 +5,11 @@
 #include "Play/scoreTracker.h"
 #include "Play/DigitRenderer.h"
 #include "Play/Timingdisplay.h"
+#include <climits>   // INT32_MIN（NO_PRESS_TIME）
 
 struct SpectrumVisualizer;
+class LaneTilt;
+class PlayBackground;
 struct GameContext{
     SDL_Renderer* renderer;
     TTF_Font* font;
@@ -69,4 +72,18 @@ struct GameContext{
     SDL_Texture* comboLabel = nullptr;                    // コンボ数の上の「COMBO」
     int comboLabelW = 0;
     int comboLabelH = 0;
+
+    LaneTilt* laneTilt = nullptr;    // レーンを奥に倒して描く道具（Play/LaneTilt.h）。nullptr なら傾けない
+    double laneTiltDeg = 0.0;        // 倒す角度（度）。0 なら傾けない
+    double laneCoverRatio = 0.0;     // レーンカバー：レーンの奥を壁で隠す割合（0〜0.8）。0 なら隠さない
+    double keyBeamRatio = 0.62;      // キービームの長さ：見えているレーンの何割まで届くか（0〜1）。0 なら出さない
+
+    // 押した瞬間の正確な時刻（Play/PreciseInput.h）。nullptr なら今まで通り（フレームの時刻で判定）
+    const int32_t* pressTimes = nullptr;   // レーンごと：このフレームまでに押された瞬間の「曲の時刻」。NO_PRESS_TIME = 押されていない
+    const bool* preciseLanes = nullptr;    // レーンごと：true なら pressTimes で判定する（フレームごとの「押した瞬間」は使わない）
+
+    const PlayBackground* background = nullptr;   // 背景（Play/PlayBackground.h）。nullptr なら今まで通りのグラデーション
 };
+
+// pressTimes の「押されていない」の印
+inline constexpr int32_t NO_PRESS_TIME = INT32_MIN;

@@ -7,6 +7,9 @@
 #include "Play/LongHoldSound.h"
 #include "Play/JudgeStatsPanel.h"   // 右の JUDGE ウィンドウ（判定の数をリアルタイムに出す）
 #include "Play/RankGaugePanel.h"    // 右上の RANK ウィンドウ（今の評価とスコアのバー）
+#include "Play/LaneTilt.h"          // レーンを奥に倒して描く（設定の「レーンの傾き」）
+#include "Play/PreciseInput.h"      // キーを押した瞬間の時刻を、別スレッドで約 1ms ごとに記録する
+#include "Play/PlayBackground.h"    // 背景：藍色を含んだ灰色 ＋ 真ん中にぼかしたジャケット
 
 //グローバル変数
 double bpm = 120;
@@ -135,7 +138,25 @@ GameScene playGame(SDL_Window* window, SDL_Renderer* renderer, const std::string
     }
     scoreTracker.setTotalCombo(theoreticaMaxCombo + totalTicks);
 
+    // ===== プレイヤーのノーツ速度（設定の「ノーツ速度」）=====
+    //   譜面の速さ（基準の速さ・速度イベント・ノーツごとの速さ）を、全部同じ倍率で速く／遅くする。
+    //   全部に同じ倍率を掛けるので、譜面作者が付けた「途中で速くなる」などの変化の割合はそのまま残る。
+    //   判定の時刻は変えない（見た目の流れる速さだけが変わる）
+    const double speedRate = std::clamp(playerSettings.noteSpeedRate, NOTE_SPEED_RATE_MIN, NOTE_SPEED_RATE_MAX);
+    noteSpeed *= speedRate;
+    for(auto& ev : speedEvents) ev.targetspeed *= speedRate;
+    for(auto& n : notes){
+        if(n.hasCustomSpeed) n.customSpeed *= speedRate;
+    }
+
     double currentNoteSpeed = noteSpeed;
+
+    // ===== レーンの傾き（設定の「レーンの傾き」）=====
+    //   描くときに台形に変形するだけなので、ノーツの時刻・判定はそのまま。
+    //   チュートリアルは説明の矢印や文字を「傾いていないレーン」に合わせて置いているので、傾けない
+    LaneTilt laneTilt;
+    const double laneTiltDeg = (tutorial != nullptr) ? 0.0
+                             : std::clamp(playerSettings.laneTiltDeg, LANE_TILT_DEG_MIN, LANE_TILT_DEG_MAX);
 
     std::string bgm_fullPath = "sounds/" + bgmName;
     Mix_Music* bgm = Mix_LoadMUS(bgm_fullPath.c_str());
@@ -289,6 +310,7 @@ GameScene playGame(SDL_Window* window, SDL_Renderer* renderer, const std::string
     }
 
     bool bgmStarted = false;
+    double bgmStartedAtMs = 0.0;   // 実際に曲を鳴らし始めた時刻（ずれ直しを最初だけ速くするのに使う）
 
     double lastDriftCheckMs = 0.0;
     double clockDriftCorrectionMs = 0.0;   // 実際に時刻へ加えている補正量
@@ -369,6 +391,33 @@ GameScene playGame(SDL_Window* window, SDL_Renderer* renderer, const std::string
     std::vector<TimingSample> timingLog;
     timingDisplay.init(renderer, timingFont, playerSettings);
 
+    // ===== 押した瞬間の時刻を正確に取る（Play/PreciseInput.h） =====
+    //   オートプレイのときは使わない。この関数を抜けると（どの return でも）デストラクタでスレッドが止まる
+    PreciseInput preciseInput;
+    if(!isAutoplay) preciseInput.start(playerSettings.laneBindings);
+
+    // ===== 背景（ジャケットのぼかし） =====
+    PlayBackground playBackground;
+    playBackground.load(renderer, selectedScorePath);
+
+    // ===== 低音に合わせて、プレイ画面全体を少しズームする =====
+    //   ・画面を一度 sceneTex（画面と同じ大きさの絵）に描き、それを真ん中を中心に少し大きくして画面に貼る
+    //   ・大きさ = 1 + 低音の強さ × BASS_ZOOM_AMOUNT
+    //     低音の強さは、ビジュアライザーの一番下の BASS_BANDS 本（約 40〜130Hz：バスドラム・ベースのあたり）の平均。
+    //     いつも鳴っている低音で常に大きくならないよう、BASS_ZOOM_THRESHOLD より上の分だけを使う
+    //   ・ズームは、大きくなるときは速く、戻るときはゆっくり（BASS_ZOOM_ATTACK_MS / RELEASE_MS）→ ドンッと弾む感じ
+    //   ・ポーズメニューはズームしない（文字が揺れて読みにくくならないように）
+    constexpr int    BASS_BANDS          = 5;      // 使う帯の数（SpectrumVisualizer の 64 本のうち、下から）
+    constexpr float  BASS_ZOOM_THRESHOLD = 0.2f;   // 低音の強さ（0〜1）がこれより上の分だけズームに使う
+    constexpr float  BASS_ZOOM_AMOUNT    = 0.05f;  // 一番強いときに、どれだけ大きくするか（0.025 = 2.5%）
+    constexpr float  BASS_ZOOM_ATTACK_MS = 12.5f;   // 大きくなる速さ（小さいほど速い）
+    constexpr float  BASS_ZOOM_RELEASE_MS = 180.0f; // 戻る速さ（大きいほどゆっくり）
+    float bassZoom = 0.0f;                          // 今のズームの強さ（0〜1）
+    SDL_Texture* sceneTex = SDL_CreateTexture(renderer, SDL_PIXELFORMAT_RGBA8888, SDL_TEXTUREACCESS_TARGET, SCREEN_W, SCREEN_H);
+    if(sceneTex) SDL_SetTextureScaleMode(sceneTex, SDL_ScaleModeLinear);   // 少しだけ大きくするので、なめらかに
+    bool preciseLanes[6] = {};
+    for(int i = 0; i < 6; i++) preciseLanes[i] = preciseInput.lanePrecise(i);
+
     while(running){
 
         #if PLAY_PROFILE
@@ -384,10 +433,22 @@ GameScene playGame(SDL_Window* window, SDL_Renderer* renderer, const std::string
             Mix_PlayMusic(bgm, 1);
             if(testSeekMs > 0.0) Mix_SetMusicPosition(testSeekMs / 1000.0);   // 途中から鳴らす
             bgmStarted = true;
+
+            // 🌟 実際に鳴らし始めた瞬間を、曲の時計の基準にする
+            //   開始の予定時刻を過ぎた「最初のフレーム」で鳴らすので、予定より最大で1フレーム（60fps なら 16ms）遅れて鳴る。
+            //   前は予定時刻のまま数えていたので、その分だけ曲と判定がずれていた（ずれ直しで数秒かけて合っていた）。
+            //   基準を今に合わせると時刻が少し戻るが、下の「逆戻り防止」でその間ノーツは止まるだけ（曲が始まる前なので見えない）
+            const double now = nowMs() - pausedTotalMs;
+            musicStartTimeMs = now - testSeekMs;
+            lastDriftCheckMs = now;
+            bgmStartedAtMs = now;
         }
 
-        // ① 200msごとに「本来あるべき補正量」だけを更新する
-        if(bgmStarted && (globalMs - lastDriftCheckMs) >= 200.0){
+        // ① 「本来あるべき補正量」だけを更新する
+        //   曲の頭の 3 秒は 100ms ごと・ずれの 50% ずつ（早く合わせる）、その後は 200ms ごと・20% ずつ（ぶれないように）
+        //   Mix_GetMusicPosition は音を送るまとまり（256 サンプル ≒ 6ms）ごとにしか進まないので、3ms 以下のずれは直さない
+        const bool earlyPhase = bgmStarted && (globalMs - bgmStartedAtMs) < 3000.0;
+        if(bgmStarted && (globalMs - lastDriftCheckMs) >= (earlyPhase ? 100.0 : 200.0)){
             lastDriftCheckMs = globalMs;
 
             double actualPosMs = Mix_GetMusicPosition(bgm) * 1000.0;
@@ -395,8 +456,8 @@ GameScene playGame(SDL_Window* window, SDL_Renderer* renderer, const std::string
                 double predictedRawMs = (globalMs - musicStartTimeMs) + driftTargetMs;
                 double drift = actualPosMs - predictedRawMs;
 
-                if(std::abs(drift) > 5.0){
-                    driftTargetMs += drift * 0.2;
+                if(std::abs(drift) > 3.0){
+                    driftTargetMs += drift * (earlyPhase ? 0.5 : 0.2);
                 }
             }
         }
@@ -429,7 +490,9 @@ GameScene playGame(SDL_Window* window, SDL_Renderer* renderer, const std::string
                 nextScene = GameScene::Shutdown;
             }
             else if(e.type == SDL_WINDOWEVENT && e.window.event == SDL_WINDOWEVENT_FOCUS_LOST){
-                beginPause(realMs);   // 別のウィンドウに切り替えたら自動でポーズ
+                // 別のウィンドウに切り替えたら自動でポーズ
+                //   配信モードのときは、OBS を操作しただけで止まらないように、自動ではポーズしない
+                if(!playerSettings.streamMode) beginPause(realMs);
             }
             else if(e.type == SDL_KEYDOWN){
                 if(!pauseMenu.isActive()){
@@ -463,6 +526,24 @@ GameScene playGame(SDL_Window* window, SDL_Renderer* renderer, const std::string
             currentPressed[i] = isBindingPressed(playerSettings.laneBindings[i], currentKeyState);
         }
         currentPressed[6] = (currentKeyState[SDL_SCANCODE_ESCAPE] != 0);
+
+        // ===== 別スレッドが記録した「押した瞬間」を受け取って、曲の時刻に直す =====
+        //   曲の時刻 = (実時間 − ポーズしていた時間 − 曲の始まり) + ずれ直し − オフセット（上の musicTimeExact と同じ式）
+        //   ・ポーズ中・ほかのウィンドウを触っているときに押したものは捨てる
+        //   ・このフレームの時刻より後にはしない（受け取るのは、このフレームまでに押されたものだけ）
+        int32_t pressTimes[6];
+        {
+            Uint64 raw[6] = {};
+            preciseInput.takePresses(raw);
+            const bool focused = (SDL_GetKeyboardFocus() == window);
+            for(int i = 0; i < 6; i++){
+                pressTimes[i] = NO_PRESS_TIME;
+                if(raw[i] == 0 || paused || !focused) continue;
+                const double tReal = static_cast<double>(raw[i] - perfStart) * 1000.0 / perfFreq;
+                const double tMusic = (tReal - pausedTotalMs - musicStartTimeMs) + clockDriftCorrectionMs - offsetMs;
+                pressTimes[i] = std::min(musicTime, static_cast<int32_t>(std::floor(tMusic)));
+            }
+        }
 
             //GameContextの初期化
             GameContext ctx = {
@@ -508,7 +589,14 @@ GameScene playGame(SDL_Window* window, SDL_Renderer* renderer, const std::string
             .tickParticles = &tickParticles,
             .comboLabel = comboLabelTex,
             .comboLabelW = comboLabelW,
-            .comboLabelH = comboLabelH
+            .comboLabelH = comboLabelH,
+            .laneTilt = &laneTilt,
+            .laneTiltDeg = laneTiltDeg,
+            .laneCoverRatio = (tutorial != nullptr) ? 0.0 : playerSettings.laneCoverPercent / 100.0,  // チュートリアルでは隠さない
+            .keyBeamRatio = playerSettings.keyBeamPercent / 100.0,
+            .pressTimes = pressTimes,
+            .preciseLanes = preciseLanes,
+            .background = &playBackground
             };
 
         if(paused){
@@ -523,7 +611,10 @@ GameScene playGame(SDL_Window* window, SDL_Renderer* renderer, const std::string
             if(isAutoplay) applyAutoplay(ctx, prevMusicTime);
 
             for(int i = 0; i < 6; i++){
-                if(ctx.currentPressed[i] && !ctx.prevPressed[i]){
+                // 正確に見ているレーンは「押した瞬間」の記録で出す（フレームの間に押して離した速い連打でも光る）
+                const bool pressedNow = preciseLanes[i] ? (pressTimes[i] != NO_PRESS_TIME)
+                                                        : (ctx.currentPressed[i] && !ctx.prevPressed[i]);
+                if(pressedNow){
                     KeyBeam beam;
                     beam.lane = i;
                     beam.spawnTime = ctx.musicTime;
@@ -550,6 +641,20 @@ GameScene playGame(SDL_Window* window, SDL_Renderer* renderer, const std::string
 
         visualizer.update();
 
+        // 低音の強さ → ズームの強さ（大きくなるときは速く、戻るときはゆっくり。フレームレートに関係なく同じ速さ）
+        {
+            float bass = 0.0f;
+            for(int b = 0; b < BASS_BANDS; b++) bass += visualizer.levels[b];
+            bass /= BASS_BANDS;
+            const float target = std::clamp((bass - BASS_ZOOM_THRESHOLD) / (1.0f - BASS_ZOOM_THRESHOLD), 0.0f, 1.0f);
+            const float dt = static_cast<float>(std::clamp(frameDtMs, 0.0, 100.0));
+            const float tau = (target > bassZoom) ? BASS_ZOOM_ATTACK_MS : BASS_ZOOM_RELEASE_MS;
+            bassZoom += (target - bassZoom) * (1.0f - std::exp(-dt / tau));
+        }
+
+        // ここからポーズメニューの手前までは sceneTex に描く（後でズームして画面に貼る）
+        if(sceneTex) SDL_SetRenderTarget(renderer, sceneTex);
+
         SDL_SetRenderDrawColor(ctx.renderer, 155, 155, 155, 255);
         SDL_RenderClear(ctx.renderer);
 
@@ -572,6 +677,17 @@ GameScene playGame(SDL_Window* window, SDL_Renderer* renderer, const std::string
             rankPanel.update(lastDisplayScoreValue, sceneMs);
             rankPanel.draw(renderer, sceneMs);
             judgePanel.draw(renderer, sceneMs);
+        }
+
+        // sceneTex を、画面の真ん中を中心に (1 + ズーム) 倍にして画面に貼る
+        if(sceneTex){
+            SDL_SetRenderTarget(renderer, nullptr);
+            SDL_SetRenderDrawColor(renderer, 0, 0, 0, 255);
+            SDL_RenderClear(renderer);
+            const float scale = 1.0f + BASS_ZOOM_AMOUNT * bassZoom;
+            const SDL_FRect dst = {SCREEN_W * 0.5f * (1.0f - scale), SCREEN_H * 0.5f * (1.0f - scale),
+                                   SCREEN_W * scale, SCREEN_H * scale};
+            SDL_RenderCopyF(renderer, sceneTex, nullptr, &dst);
         }
 
         pauseMenu.draw(renderer, menuFont, font, labelFont, realMs);
@@ -614,6 +730,7 @@ GameScene playGame(SDL_Window* window, SDL_Renderer* renderer, const std::string
     outResult.isAutoplay = isAutoplay;
 
     visualizer.detach();
+    if(sceneTex) SDL_DestroyTexture(sceneTex);
 
     Mix_HaltMusic();
     digitFont.destroy();

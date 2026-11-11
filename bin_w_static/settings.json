@@ -1,0 +1,26 @@
+{
+  "bgmVolume": 70,
+  "fpsAuto": false,
+  "fpsCap": 165,
+  "keyBeamPercent": 62,
+  "keyBindings": [
+    "key:26",
+    "key:8",
+    "key:21",
+    "key:24",
+    "key:12",
+    "key:18"
+  ],
+  "laneCoverPercent": 0,
+  "laneTiltDeg": 60.0,
+  "noteSpeedRate": 5.0,
+  "offsetMs": 0.0,
+  "seVolume": 100,
+  "showFastLate": true,
+  "showTimingMs": false,
+  "streamMode": false,
+  "tapSound": "TAP_S.wav",
+  "visualOffsetMs": 0.0,
+  "vsync": false,
+  "windowMode": 1
+}

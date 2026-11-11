@@ -1,6 +1,6 @@
 {
   "bgmVolume": 60,
-  "fpsAuto": true,
+  "fpsAuto": false,
   "fpsCap": 165,
   "keyBindings": [
     "key:26",
@@ -10,10 +10,14 @@
     "key:12",
     "key:18"
   ],
-  "offsetMs": 0.0,
-  "seVolume": 100,
+  "laneCoverPercent": 0,
+  "laneTiltDeg": 0.0,
+  "noteSpeedRate": 1.0,
+  "offsetMs": 92.0,
+  "seVolume": 0,
   "showFastLate": true,
-  "showTimingMs": false,
+  "showTimingMs": true,
+  "streamMode": true,
   "tapSound": "",
   "visualOffsetMs": 0.0,
   "vsync": false,

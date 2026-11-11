@@ -18,6 +18,13 @@
 //    update()          … 毎フレーム1回（スライドのアニメーション）
 //    draw(...)         … 毎フレーム、選曲画面を描いた「後」に呼ぶ（一番手前に出す）
 //    destroy()         … 選曲シーンの終了時に1回
+//
+//  操作（2段階）
+//    ・選ぶとき   ：←→ / Tab（Shift+Tab で逆）で分類を切り替え、↑↓ で項目を選ぶ
+//                   ENTER で「変更中」に入る（判定調整・キー設定・ノーツの詳細設定は、ENTER でその画面を開く）
+//    ・変更中     ：←→ で値を変える（Shift で大きく）。ENTER / ESC で「選ぶとき」に戻る
+//    ・F2         ：いつでも閉じて保存。ESC は「選ぶとき」なら閉じて保存
+//  ノーツ速度・レーンの傾き・レーンカバー・キービームの長さは、ノーツの詳細設定（NoteSettingScene.cpp）だけで変える
 // =====================================================================
 class SettingsPanel{
 public:
@@ -42,6 +49,13 @@ public:
         return requested;
     }
 
+    // 「ノーツの詳細設定」で ENTER が押されたか（1回読むと false に戻る）
+    bool consumeNoteSettingRequest(){
+        bool requested = requestNoteSetting_;
+        requestNoteSetting_ = false;
+        return requested;
+    }
+
     // 「キー設定」で ENTER が押されたか（1回読むと false に戻る）
     bool consumeKeyConfigRequest(){
         bool requested = requestKeyConfig_;
@@ -53,14 +67,20 @@ public:
     void open(const PlayerSettings& s){
         open_ = true;
         cursor_ = 0;
+        editing_ = false;
         openedWindowMode_ = s.windowMode;
+        openedStreamMode_ = s.streamMode;
     }
 
     // 閉じる：表示モードが変わっていれば反映し、ファイルに保存する
     void close(SDL_Window* window, PlayerSettings& s){
         if(!open_) return;
         open_ = false;
-        if(s.windowMode != openedWindowMode_){
+        editing_ = false;
+        // 表示モードか配信モードが変わっていれば、表示モードを付け直す
+        //   （配信モードを切り替えると、フルスクリーンが排他 ↔ ボーダーレスに変わるため）
+        if(s.windowMode != openedWindowMode_ || s.streamMode != openedStreamMode_){
+            g_streamMode = s.streamMode;
             applyWindowMode(window, s.windowMode);
             // 表示モードを変えると Hz が変わることがある（フルスクリーンは一番高い Hz を選ぶ）ので、
             // FPS 自動が ON ならその場で選び直す
@@ -76,17 +96,41 @@ public:
         if(key.repeat && !isArrow) return;   // 押しっぱなしの連続入力は矢印だけ受け付ける
 
         bool big = (key.keysym.mod & KMOD_SHIFT) != 0;
-        const int rowCount = categoryRowCount(category_);
 
+        // F2 はどちらの状態でも、閉じて保存
+        if(sym == SDLK_F2){
+            close(window, s);
+            return;
+        }
+
+        // ===== 変更中：←→ で値を変える。ENTER / ESC で選ぶ状態に戻る =====
+        if(editing_){
+            switch(sym){
+                case SDLK_LEFT:   changeValue(-1, big, renderer, s); break;
+                case SDLK_RIGHT:  changeValue(+1, big, renderer, s); break;
+                case SDLK_RETURN:
+                case SDLK_KP_ENTER:
+                case SDLK_ESCAPE: editing_ = false; break;
+                default: break;   // ↑↓・Tab などは、変更中は使わない（うっかり別の項目に移らないように）
+            }
+            return;
+        }
+
+        // ===== 選ぶとき：←→ / Tab で分類、↑↓ で項目、ENTER で変更中へ =====
+        const int rowCount = categoryRowCount(category_);
         switch(sym){
             case SDLK_ESCAPE:
-            case SDLK_F2:
                 close(window, s);
                 break;
             case SDLK_TAB:
-                // 分類を切り替える（Shift+Tab で逆順）。カーソルは分類の先頭に戻す
-                category_ = (category_ + (big ? CATEGORY_COUNT - 1 : 1)) % CATEGORY_COUNT;
-                cursor_ = 0;
+                // Shift+Tab で逆順
+                changeCategory(big ? -1 : +1);
+                break;
+            case SDLK_LEFT:
+                changeCategory(-1);
+                break;
+            case SDLK_RIGHT:
+                changeCategory(+1);
                 break;
             case SDLK_UP:
                 cursor_ = (cursor_ + rowCount - 1) % rowCount;
@@ -94,16 +138,16 @@ public:
             case SDLK_DOWN:
                 cursor_ = (cursor_ + 1) % rowCount;
                 break;
-            case SDLK_LEFT:
-                changeValue(-1, big, renderer, s);
-                break;
-            case SDLK_RIGHT:
-                changeValue(+1, big, renderer, s);
-                break;
             case SDLK_RETURN:
+            case SDLK_KP_ENTER:
                 if(currentRow() == ROW_CALIBRATE){
                     // 判定調整：設定を保存して閉じ、選曲画面に「調整画面へ行く」ことを知らせる
                     requestCalibration_ = true;
+                    close(window, s);
+                }
+                else if(currentRow() == ROW_NOTE_DETAIL){
+                    // ノーツの詳細設定：判定調整と同じく、保存して閉じてから選曲画面に知らせる
+                    requestNoteSetting_ = true;
                     close(window, s);
                 }
                 else if(currentRow() == ROW_KEYCONFIG){
@@ -111,9 +155,8 @@ public:
                     requestKeyConfig_ = true;
                     close(window, s);
                 }
-                else if(currentRow() == ROW_VSYNC || currentRow() == ROW_FASTLATE || currentRow() == ROW_TIMING_MS ||
-                        currentRow() == ROW_FPS_AUTO){
-                    changeValue(+1, false, renderer, s);   // ON/OFF は ENTER でも切替
+                else if(!isLocked(currentRow(), s)){
+                    editing_ = true;   // ここから ←→ で値を変えられる
                 }
                 break;
             default:
@@ -161,7 +204,7 @@ public:
                           active ? 2 : 1);
                 drawText(renderer, smallFont, CATEGORY_NAMES[c],
                          active ? SDL_Color{15, 15, 25, 255} : SDL_Color{200, 200, 220, 255},
-                         tab.x + tab.w / 2, tab.y + tab.h / 2, a, Align::Center);
+                         tab.x + tab.w / 2, tab.y + tab.h / 2, a, Align::Center, tab.w - TEXT_PAD * 2);
             }
         }
 
@@ -170,39 +213,62 @@ public:
         for(int k = 0; k < rowCount; k++){
             const int i = CATEGORY_ROWS[category_][k];   // 項目の種類（ROW_xxx）
             bool selected = (k == cursor_);
+            const bool editing = selected && editing_;   // この項目を変更中か
             SDL_Rect row = {x + 30, ROWS_TOP + k * ROW_H, PANEL_W - 60, ROW_H - 12};
 
-            // FPS 自動が ON の間は FPS 上限を変えられないので、灰色で描く
+            // 今は変えられない項目（FPS 自動が ON の間の FPS 上限）は、灰色で描く
             const bool locked = isLocked(i, s);
 
+            // 変更中の項目は、塗りを明るくして枠を橙にする（選んでいるだけの項目と見分けられるように）
             drawFrame(renderer, row,
-                      selected ? SDL_Color{45, 45, 80, static_cast<Uint8>(210 * anim_)}
+                      editing  ? SDL_Color{70, 55, 40, static_cast<Uint8>(230 * anim_)}
+                    : selected ? SDL_Color{45, 45, 80, static_cast<Uint8>(210 * anim_)}
                                : SDL_Color{30, 30, 50, static_cast<Uint8>(170 * anim_)},
-                      selected ? SDL_Color{0, 255, 255, a}
+                      editing  ? SDL_Color{255, 190, 60, a}
+                    : selected ? SDL_Color{0, 255, 255, a}
                                : SDL_Color{110, 110, 150, a},
                       selected ? 3 : 1);
 
             int cy = row.y + row.h / 2;
             SDL_Color labelColor = selected ? SDL_Color{0, 255, 255, 255} : SDL_Color{255, 255, 255, 255};
             if(locked) labelColor = SDL_Color{130, 130, 150, 255};
-            drawText(renderer, font, ROW_LABELS[i], labelColor, row.x + 30, cy, a, Align::Left);
+            // 項目名と値の幅：枠の内側（左右 30px の余白を除いた幅）を2つで分ける
+            //   ・項目名は内側の LABEL_MAX_RATIO まで（はみ出す分だけ縮める）
+            //   ・値は、項目名が実際に使った幅と、間のすき間（LABEL_VALUE_GAP）を除いた残り全部
+            const int innerW = row.w - 60;
+            const int labelW = drawText(renderer, font, ROW_LABELS[i], labelColor, row.x + 30, cy, a, Align::Left,
+                                        static_cast<int>(innerW * LABEL_MAX_RATIO));
 
-            // 値：選択中だけ「< 値 >」の形にして、左右で変えられることを示す
+            // 値：変更中だけ「< 値 >」の形にして、左右で変えられることを示す
             std::string value = valueText(i, s);
-            //   ENTER で開く項目・今は変えられない項目は、左右で変える値がないので付けない
-            if(selected && i != ROW_CALIBRATE && i != ROW_KEYCONFIG && !locked) value = "<  " + value + "  >";
+            if(editing) value = "<  " + value + "  >";
             SDL_Color valueColor = locked ? SDL_Color{130, 130, 150, 255} : SDL_Color{255, 255, 255, 255};
-            drawText(renderer, font, value, valueColor, row.x + row.w - 30, cy, a, Align::Right);
+            // 音声オフセットが ±20ms 以上でノーツ音を鳴らしているときは、音声オフセットとノーツ音の値を橙色にする
+            if(!locked && (i == ROW_OFFSET || i == ROW_TAPSOUND) && shouldWarnTapSoundOffset(s)) valueColor = WARN_COLOR;
+            drawText(renderer, font, value, valueColor, row.x + row.w - 30, cy, a, Align::Right,
+                     std::max(80, innerW - labelW - LABEL_VALUE_GAP));
         }
 
         // 5. 選択中の項目の説明と、操作方法
         int descY = ROWS_TOP + MAX_ROWS * ROW_H + 10;
         const char* desc = isLocked(currentRow(), s) ? "FPS 自動が ON の間は、モニターに合わせて自動で決まります"
                                                      : ROW_DESCRIPTIONS[currentRow()];
+        const int textMaxW = PANEL_W - 80;   // 説明・警告・操作方法の最大の幅（左右 40px の余白の内側）
         drawText(renderer, smallFont, desc, SDL_Color{180, 180, 200, 255},
-                 x + 40, descY, a, Align::Left);
-        drawText(renderer, smallFont, "Tab:分類   上下:選択   左右:変更（Shift で大きく）   F2/ESC:閉じて保存",
-                 SDL_Color{130, 130, 150, 255}, x + 40, PANEL_Y + PANEL_H - 36, a, Align::Left);
+                 x + 40, descY, a, Align::Left, textMaxW);
+
+        // 6. 警告：音声オフセットが 0 から 20ms 以上ずれているのに、ノーツ音を鳴らしているとき
+        //    どの項目を選んでいても、説明の下にもう1行出す（オフセットの分類でも、ノーツの分類でも気づけるように）
+        if(shouldWarnTapSoundOffset(s)){
+            drawText(renderer, smallFont, TAP_SOUND_OFFSET_WARN_LINE1, WARN_COLOR, x + 40, descY + 34, a, Align::Left, textMaxW);
+            drawText(renderer, smallFont, TAP_SOUND_OFFSET_WARN_LINE2, WARN_COLOR, x + 40, descY + 64, a, Align::Left, textMaxW);
+        }
+        // 操作方法：今の状態で使えるキーだけ出す
+        const char* help;
+        if(editing_)                       help = "[← →]:値を変更（Shift ±10[ms]）   [ENTER/ESC]:変更をやめる   F2:保存";
+        else if(isActionRow(currentRow())) help = "[← →/Tab]:分類   [↑ ↓]:選択   [ENTER]:開く   [F2/ESC]:保存";
+        else                               help = "[← →/Tab]:分類   [↑ ↓]:選択   [ENTER]:変更する   [F2/ESC]:保存";
+        drawText(renderer, smallFont, help, SDL_Color{130, 130, 150, 255}, x + 40, PANEL_Y + PANEL_H - 36, a, Align::Left, textMaxW);
     }
 
 private:
@@ -210,14 +276,21 @@ private:
     static constexpr int SW = 1920;
     static constexpr int SH = 1080;
     static constexpr int PANEL_X = 60;
-    static constexpr int PANEL_Y = 140;
-    static constexpr int PANEL_W = 760;
-    static constexpr int PANEL_H = 824;   // 項目が一番多い分類（6項目）に合わせた高さ
-    static constexpr int ROW_H   = 88;
+    static constexpr int PANEL_Y = 120;   // 8項目入るように 140 → 120 に上げた
+    static constexpr int PANEL_W = 960;   // 文字が収まるように 760 → 960 に広げた
+    static constexpr int PANEL_H = 936;   // 項目が一番多い分類（8項目）に合わせた高さ。下端は 120 + 936 = 1056（画面は 1080）
+    static constexpr int ROW_H   = 80;    // 8項目入るように 88 → 80 に詰めた
     static constexpr int TAB_H   = 50;    // 分類タブの高さ
     static constexpr int TAB_GAP = 10;    // 分類タブどうしの隙間
     static constexpr int ROWS_TOP = PANEL_Y + 24 + TAB_H + 24;   // 項目の並びの上端
-    static constexpr int MAX_ROWS = 6;    // 1つの分類に入る項目の最大数（レイアウト用）
+    static constexpr int MAX_ROWS = 8;    // 1つの分類に入る項目の最大数（レイアウト用）
+    static constexpr SDL_Color WARN_COLOR = {255, 170, 60, 255};   // 警告の色（橙）
+
+    // ----- 文字がはみ出さないようにする幅 -----
+    //   決めた幅に収まる文字はそのままの大きさ、はみ出す文字だけ、その幅にぴったり収まるまで縮めて描く（drawText の maxW）
+    static constexpr double LABEL_MAX_RATIO = 0.45;   // 項目名に使ってよい幅（枠の内側の幅に対する割合）
+    static constexpr int    LABEL_VALUE_GAP = 40;     // 項目名と値の間に、最低限空けるすき間(px)
+    static constexpr int    TEXT_PAD        = 8;      // 分類タブの中の左右の余白(px)
 
     // ----- 項目 -----
     enum Row{
@@ -234,6 +307,8 @@ private:
         ROW_WINDOW,
         ROW_KEYCONFIG,
         ROW_FPS_AUTO,
+        ROW_NOTE_DETAIL,
+        ROW_STREAM_MODE,
         ROW_COUNT
     };
 
@@ -246,27 +321,32 @@ private:
         "ノーツ音",
         "FAST/LATE 表示",
         "±ms 表示",
-        "VSync",
+        "垂直同期",
         "FPS 上限",
         "表示モード",
         "キー設定",
-        "FPS 自動"
+        "FPS 自動",
+        "ノーツの詳細設定",
+        "配信モード"
     };
 
     static constexpr const char* ROW_DESCRIPTIONS[ROW_COUNT] = {
-        "ENTER で 音声調整→表示調整→確認 の順に調整します",
+        "音声調整→表示調整→確認 の順に調整します",
         "+ で判定が遅くなります",
         "+ でノーツが早めに表示されます",
         "BGMの割合を変更します",
         "SEの割合を変更します",
         "切り替えると試し聴きできます",
-        "GOOD・BAD のとき、早ければ FAST、遅ければ LATE を出します",
-        "叩いたズレを ms で出します（- = 早い、+ = 遅い）",
-        "垂直同期を設定できます",
-        "VSync が OFF のときに使われる上限設定です",
+        "GOOD BAD のとき、早ければ FAST、遅ければ LATE を出します",
+        "叩いたズレを ms で出します（- = FAST、+ = LATE）",
+        "画面のちらつきを防ぎます",
+        "垂直同期が OFF のときに使われる上限設定です",
         "ウィンドウの設定です",
-        "ENTER で キー設定の画面を開きます（キーボード・コントローラー）",
-        "モニターの Hz に一番近い FPS 上限を自動で選びます"
+        "キー設定の画面を開きます（キーボード・コントローラー）",
+        "モニターの Hz に一番近い FPS 上限を自動で選びます",
+        "ノーツ速度 レーンの傾き レーンカバー キービームを変えられます",
+        "OBS録画 配信をするとき（ゲームを起動し直すと反映）"
+
     };
 
     // ----- 分類 -----
@@ -274,9 +354,11 @@ private:
     static constexpr int CATEGORY_COUNT = 3;
     static constexpr const char* CATEGORY_NAMES[CATEGORY_COUNT] = {"オフセット", "ノーツ", "グラフィックス"};
     static constexpr int CATEGORY_ROWS[CATEGORY_COUNT][MAX_ROWS] = {
-        {ROW_CALIBRATE, ROW_OFFSET,   ROW_VISUAL_OFFSET, -1,      -1,           -1},              // オフセット関連
-        {ROW_KEYCONFIG, ROW_TAPSOUND, ROW_SE,            ROW_BGM, ROW_FASTLATE, ROW_TIMING_MS},   // ノーツ関連
-        {ROW_VSYNC,     ROW_FPS_AUTO, ROW_FPS,           ROW_WINDOW, -1,        -1},              // グラフィックス関連
+        //   FAST/LATE 表示・±ms 表示は、ノーツの分類に入りきらなくなったので「画面に出す物」としてグラフィックスへ移した
+        {ROW_CALIBRATE,  ROW_OFFSET,    ROW_VISUAL_OFFSET, -1,            -1,           -1,           -1,      -1},   // オフセット関連
+        //   ノーツ速度・レーンの傾き・レーンカバーは、ノーツの詳細設定（画面を見ながら変える）だけにした
+        {ROW_NOTE_DETAIL, ROW_KEYCONFIG, ROW_TAPSOUND,     ROW_SE,        ROW_BGM,      -1,           -1,      -1},   // ノーツ関連
+        {ROW_VSYNC,      ROW_FPS_AUTO,  ROW_FPS,           ROW_WINDOW,    ROW_STREAM_MODE, ROW_FASTLATE, ROW_TIMING_MS, -1},   // グラフィックス関連
     };
 
     // 分類 c に入っている項目の数（-1 の手前まで）
@@ -295,19 +377,34 @@ private:
     bool open_ = false;
     bool requestCalibration_ = false;
     bool requestKeyConfig_ = false;
+    bool requestNoteSetting_ = false;
     int category_ = 0;   // 選んでいる分類（閉じても覚えておく）
     int cursor_ = 0;     // 分類の中で何番目の項目か
 
     // カーソルが指している項目の種類（ROW_xxx）
     int currentRow() const { return CATEGORY_ROWS[category_][cursor_]; }
+    bool editing_ = false;   // true = 変更中（←→ で値を変える）、false = 選ぶとき（←→ で分類を変える）
+
+    // 分類を切り替える（端まで行ったら反対側に戻る）。カーソルは分類の先頭に戻す
+    void changeCategory(int dir){
+        category_ = (category_ + dir + CATEGORY_COUNT) % CATEGORY_COUNT;
+        cursor_ = 0;
+    }
+
+    // ENTER で別の画面を開く項目か（値を持たない）
+    static bool isActionRow(int row){
+        return row == ROW_CALIBRATE || row == ROW_KEYCONFIG || row == ROW_NOTE_DETAIL;
+    }
     int openedWindowMode_ = 0;
+    bool openedStreamMode_ = false;   // 開いたときの配信モード（閉じたときに変わっていれば表示モードを付け直す）
     double anim_ = 0.0;              // 0.0 = 隠れている、1.0 = 出きっている
     Mix_Chunk* previewTap_ = nullptr;
     std::vector<std::string> tapSounds_;   // 選べるノーツ音（先頭は標準 = 空文字）
 
     // その項目を今は変えられないか（FPS 自動が ON の間の FPS 上限）
     static bool isLocked(int row, const PlayerSettings& s){
-        return row == ROW_FPS && s.fpsAuto;
+        if(row == ROW_FPS) return s.fpsAuto;
+        return false;
     }
 
     // 今の設定のノーツ音が、選択肢の何番目か（見つからなければ標準 = 0）
@@ -406,6 +503,10 @@ private:
                 s.windowMode = std::clamp(s.windowMode + dir, 0, 2);   // 反映は close() で
                 break;
 
+            case ROW_STREAM_MODE:
+                s.streamMode = !s.streamMode;   // 反映は close() で（表示モードと一緒に付け直す）
+                break;
+
             default:
                 break;
         }
@@ -417,6 +518,7 @@ private:
         switch(row){
             case ROW_CALIBRATE: return "ENTER で開始";
             case ROW_KEYCONFIG: return "ENTER で開く";
+            case ROW_NOTE_DETAIL: return "ENTER で開く";
             case ROW_OFFSET: std::snprintf(buf, sizeof(buf), "%+.0f ms", s.offsetMs); return buf;
             case ROW_VISUAL_OFFSET: std::snprintf(buf, sizeof(buf), "%+.0f ms", s.visualOffsetMs); return buf;
             case ROW_BGM:    std::snprintf(buf, sizeof(buf), "%d %%", s.bgmVolume);   return buf;
@@ -444,7 +546,11 @@ private:
                 if(s.fpsCap <= 0) return "無制限";
                 std::snprintf(buf, sizeof(buf), "%d fps", s.fpsCap);
                 return buf;
-            case ROW_WINDOW: return WINDOW_MODE_NAMES[std::clamp(s.windowMode, 0, 2)];
+            case ROW_WINDOW:
+                // 配信モードでは、フルスクリーンはボーダーレスで表示されるので、そのことも出す
+                if(s.streamMode && s.windowMode == WINDOW_MODE_EXCLUSIVE) return "フルスクリーン（配信用）";
+                return WINDOW_MODE_NAMES[std::clamp(s.windowMode, 0, 2)];
+            case ROW_STREAM_MODE: return s.streamMode ? "ON" : "OFF";
             default:         return "";
         }
     }
@@ -467,7 +573,7 @@ private:
     static void drawTab(SDL_Renderer* renderer, TTF_Font* font, const char* title, const SDL_Rect& panel, Uint8 alpha){
         SDL_Surface* surf = TTF_RenderUTF8_Blended(font, title, SDL_Color{15, 15, 25, 255});
         if(!surf) return;
-        SDL_Rect tab = {panel.x, panel.y - surf->h - 6, surf->w + 28, surf->h + 6};
+        SDL_Rect tab = {panel.x, panel.y - surf->h - 6, surf->w + 28, surf->h + 6};   // タブは文字に合わせて伸びるので、縮める必要はない
         SDL_SetRenderDrawColor(renderer, 0, 200, 255, alpha);
         SDL_RenderFillRect(renderer, &tab);
 
@@ -480,21 +586,39 @@ private:
         SDL_FreeSurface(surf);
     }
 
-    // 文字を描く。y は文字の縦の中心、x は Left なら左端・Right なら右端
-    static void drawText(SDL_Renderer* renderer, TTF_Font* font, const std::string& text,
-                         SDL_Color color, int x, int y, Uint8 alpha, Align align){
+    // 文字を描く。y は文字の縦の中心、x は Left なら左端・Right なら右端・Center なら中心
+    //   maxW > 0 のとき：文字の幅が maxW を超える場合だけ、縦横の比を保ったまま maxW に収まるまで縮めて描く
+    //                    （収まる文字は元の大きさのまま。縮めたときは、なめらかに見えるよう線形補間で縮小する）
+    //   戻り値：実際に描いた幅(px)。項目名の幅を測って、値に使える幅を決めるのに使う
+    static int drawText(SDL_Renderer* renderer, TTF_Font* font, const std::string& text,
+                        SDL_Color color, int x, int y, Uint8 alpha, Align align, int maxW = 0){
+        if(!font || text.empty()) return 0;
         SDL_Surface* surf = TTF_RenderUTF8_Blended(font, text.c_str(), color);
-        if(!surf) return;
+        if(!surf) return 0;
         SDL_Texture* tex = SDL_CreateTextureFromSurface(renderer, surf);
+        if(!tex){
+            SDL_FreeSurface(surf);
+            return 0;
+        }
         SDL_SetTextureBlendMode(tex, SDL_BLENDMODE_BLEND);
         SDL_SetTextureAlphaMod(tex, alpha);
 
+        int w = surf->w;
+        int h = surf->h;
+        if(maxW > 0 && w > maxW){
+            const double scale = static_cast<double>(maxW) / w;
+            w = maxW;
+            h = std::max(1, static_cast<int>(std::lround(surf->h * scale)));
+            SDL_SetTextureScaleMode(tex, SDL_ScaleModeLinear);   // 縮めた文字がガタガタにならないように
+        }
+
         int left = x;
-        if(align == Align::Right)  left = x - surf->w;
-        if(align == Align::Center) left = x - surf->w / 2;
-        SDL_Rect dst = {left, y - surf->h / 2, surf->w, surf->h};
+        if(align == Align::Right)  left = x - w;
+        if(align == Align::Center) left = x - w / 2;
+        SDL_Rect dst = {left, y - h / 2, w, h};   // 縦の中心は y のまま（縮めても行の真ん中にそろう）
         SDL_RenderCopy(renderer, tex, NULL, &dst);
         SDL_DestroyTexture(tex);
         SDL_FreeSurface(surf);
+        return w;
     }
 };

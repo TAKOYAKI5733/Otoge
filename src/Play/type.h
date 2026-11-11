@@ -3,6 +3,7 @@
 #pragma once
 
 #include "GameCommon.h"
+#include <climits>   // INT32_MIN
 
 enum class NoteType{
     Normal,
@@ -21,18 +22,12 @@ struct Effect{
     int judgeType = 0;
 };
 
-struct PathKeyframe{
-    int32_t time;
-    double y = 0.0;
-    int easing = 1;
-};
 struct Note{
     int lane;
     int widthLanes = 1;
     int32_t targetTime;
     bool isHit = false;
-    int32_t hitTime = 0;   // 判定が出た時刻（曲の時刻）。ロングは終点まで押し切ったら終点の判定の時刻に書き換える
-                           //   描画では「表示の時刻」がここを過ぎたら、叩いた見た目（消える・破裂）にする
+    int32_t hitTime = 0;          // 判定が出た瞬間の時刻（判定の時計）。表示の時刻がここを過ぎたら「叩いた見た目」にする
     NoteType type = NoteType::Normal;
     int32_t durationMs = 0;
     int32_t lastTickTime = 0;
@@ -42,14 +37,16 @@ struct Note{
     int32_t failCutTime = 0;
     bool releaseGrace = false;
 
+    // ロングを離しても、すぐには途切れない（noteJudge.h）
+    //   離してから releaseToleranceMs（10ms 固定。loadScore.h の LONG_RELEASE_TOLERANCE_MS）以内に押し直せば、続けてホールドできる
+    int32_t releaseToleranceMs = 0;
+    int32_t releasedAtMs = INT32_MIN;   // 離した時刻（INT32_MIN = 今は押している）
+
     bool movesLane = false;
     bool isCyan = false;
 
     bool hasCustomSpeed = false;
     double customSpeed = 1.0;
-
-    std::vector<PathKeyframe> path;
-    bool hasCustomPath() const { return !path.empty(); }
 
     NoteType headType = NoteType::Normal;
     bool isDragLong() const { return type == NoteType::Long && headType == NoteType::Drag; }

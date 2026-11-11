@@ -5,6 +5,9 @@
 //  ・その下   ：つながっているコントローラーのボタン・十字キー・軸。押している間は色反転する
 //  ・中央     ：6つのレーンの枠。クリック（または ←→ と ENTER）で選ぶと入力待ちになり、
 //               次に押したキー／ボタンがそのレーンに割り当てられる（ESC でキャンセル）
+//               Esc・F1〜F12・Windows キーなどの特殊キー（InputBinding.h の isReservedKey）は割り当てられない。
+//               キーボードの図では灰色で出し、押したときは「割り当てられません」と知らせる
+//               コントローラーのボタン・十字キー・軸はすべて割り当てられる
 //               割り当てた入力を押している間はレーンの枠も反転するので、6点同時押しのテストにもなる
 //  ・ESC（入力待ちでないとき）：保存して選曲画面へ戻る
 // =====================================================================
@@ -22,6 +25,8 @@ const SDL_Color WHITE = {255, 255, 255, 255};
 const SDL_Color DARK  = {15, 15, 25, 255};      // 背景の色（反転したときの文字の色）
 const SDL_Color CYAN  = {0, 255, 255, 255};
 const SDL_Color GRAY  = {150, 150, 170, 255};
+const SDL_Color DIM   = {75, 75, 95, 255};       // 割り当てられないキーの枠・文字
+const SDL_Color WARN  = {255, 170, 60, 255};     // 「割り当てられません」の文字
 
 // ---------------------------------------------------------------------
 //  文字の画像を作り置きする（キーボードの図は文字が多いので、毎フレーム作らない）
@@ -262,6 +267,8 @@ GameScene keyConfigScene(SDL_Window* window, SDL_Renderer* renderer, PlayerSetti
         int waitingLane = -1;      // 入力待ちのレーン（-1 = 待っていない）
         int cursor = 0;            // キーボード操作で選んでいるレーン
         int mouseX = -1, mouseY = -1;
+        std::string rejectMsg;     // 特殊キーを押したときのお知らせ
+        Uint32 rejectUntil = 0;    // お知らせを出しておく時刻（SDL_GetTicks）
         bool running = true;
         GameScene nextScene = GameScene::Select;
         SDL_Event e;
@@ -304,6 +311,13 @@ GameScene keyConfigScene(SDL_Window* window, SDL_Renderer* renderer, PlayerSetti
                     }
                     InputBinding b;
                     if(captureBinding(e, b)){
+                        // 特殊キーは割り当てず、入力待ちのまま知らせる
+                        if(!isAssignableBinding(b)){
+                            rejectMsg = "「" + bindingName(b) + "」は割り当てられません（ほかのキーを押してください）";
+                            rejectUntil = SDL_GetTicks() + 1800;
+                            continue;
+                        }
+                        rejectUntil = 0;
                         assign(waitingLane, b);
                         cursor = waitingLane;
                         waitingLane = -1;
@@ -333,7 +347,7 @@ GameScene keyConfigScene(SDL_Window* window, SDL_Renderer* renderer, PlayerSetti
                         case SDLK_LEFT:   cursor = (cursor + LANE_COUNT - 1) % LANE_COUNT; break;
                         case SDLK_RIGHT:  cursor = (cursor + 1) % LANE_COUNT; break;
                         case SDLK_RETURN:
-                        case SDLK_KP_ENTER: waitingLane = cursor; break;
+                        case SDLK_KP_ENTER: waitingLane = cursor; rejectUntil = 0; break;
                         default: break;
                     }
                 }
@@ -355,16 +369,18 @@ GameScene keyConfigScene(SDL_Window* window, SDL_Renderer* renderer, PlayerSetti
                     static_cast<int>(k.h * KEY_U) - KEY_GAP
                 };
                 const bool pressed = ks[k.sc] != 0;
+                const bool reserved = isReservedKey(k.sc);   // 割り当てられないキーは灰色で出す
+                const SDL_Color keyColor = reserved ? DIM : WHITE;
 
-                // 押している間は色反転：白で塗って、文字を暗い色に
-                drawBox(renderer, r, pressed ? WHITE : SDL_Color{0, 0, 0, 0}, WHITE, 2);
+                // 押している間は色反転：白（特殊キーは灰色）で塗って、文字を暗い色に
+                drawBox(renderer, r, pressed ? keyColor : SDL_Color{0, 0, 0, 0}, keyColor, 2);
 
                 std::string label = k.label;
                 if(k.dynamic){
                     const char* n = SDL_GetKeyName(SDL_GetKeyFromScancode(k.sc));
                     if(n && *n) label = n;
                 }
-                text.drawFit(keyFont, label, pressed ? DARK : WHITE, r.x + r.w / 2, r.y + r.h / 2, r.w - 6);
+                text.drawFit(keyFont, label, pressed ? DARK : keyColor, r.x + r.w / 2, r.y + r.h / 2, r.w - 6);
 
                 // レーンに割り当てているキーには、左上に小さくレーンの番号を出す
                 for(int i = 0; i < LANE_COUNT; i++){
@@ -478,9 +494,14 @@ GameScene keyConfigScene(SDL_Window* window, SDL_Renderer* renderer, PlayerSetti
 
             // ----- 7. 入力待ちの案内 -----
             if(waitingLane >= 0){
-                char buf[96];
-                std::snprintf(buf, sizeof(buf), "LANE %d に割り当てるキー／ボタンを押してください", waitingLane + 1);
-                text.draw(font, buf, CYAN, SW / 2, SH - 50);
+                char buf[192];
+                if(now < rejectUntil){
+                    text.draw(font, rejectMsg, WARN, SW / 2, SH - 50);
+                }
+                else{
+                    std::snprintf(buf, sizeof(buf), "LANE %d に割り当てるキー／ボタンを押してください（灰色のキーは使えません）", waitingLane + 1);
+                    text.draw(font, buf, CYAN, SW / 2, SH - 50);
+                }
             }
             else{
                 text.draw(smallFont, "クリック / ←→＋ENTER：変更    押したまま：同時押しテスト    ESC：保存して戻る",

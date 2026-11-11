@@ -15,9 +15,12 @@ inline void markLongFailed(Note& note, int32_t cutTime){
 }
 
 // 判定文字と一緒に出す「ズレ」を記録する
-inline void recordTiming(JudgeEffect& je, const GameContext& ctx, const Note& note, int judgeType){
+//   pressTime = 押した瞬間の曲の時刻（PreciseInput があればその時刻、なければフレームの時刻）
+//   ほかのファイル（Autoplay.h など）から4つの引数で呼んだときは、今まで通りフレームの時刻を使う
+inline void recordTiming(JudgeEffect& je, const GameContext& ctx, const Note& note, int judgeType, int32_t pressTime = NO_PRESS_TIME){
+    if(pressTime == NO_PRESS_TIME) pressTime = ctx.musicTime;
     je.hasTiming = true;
-    je.diffMs = ctx.musicTime - note.targetTime;   // - = 早い、+ = 遅い
+    je.diffMs = pressTime - note.targetTime;   // - = 早い、+ = 遅い
     je.judgeType = judgeType;
     if(ctx.timingLog) ctx.timingLog->push_back({je.diffMs, judgeType});
 }
@@ -77,7 +80,16 @@ inline void NoteJudge(GameContext& ctx, Tex& tex, Sq& sq){
     bool consumedThisFrame[6] = {false, false, false, false, false, false};
 
     for(int i = 0; i < 6; i++){
-            if(ctx.currentPressed[i] && !ctx.prevPressed[i] && !consumedThisFrame[i]){
+            // 押した瞬間と、その時刻
+            //   ・PreciseInput で見ているレーン：別スレッドが約 1ms ごとに見つけた「押した瞬間」を使う
+            //     （フレームの間に押して離した速い連打も取りこぼさない。時刻もフレームにそろわない）
+            //   ・それ以外（コントローラーなど）：今まで通り、フレームの頭の状態の変化とフレームの時刻
+            const bool precise = ctx.preciseLanes && ctx.pressTimes && ctx.preciseLanes[i];
+            const bool pressedNow = precise ? (ctx.pressTimes && ctx.pressTimes[i] != NO_PRESS_TIME)
+                                            : (ctx.currentPressed[i] && !ctx.prevPressed[i]);
+            const int32_t tPress = precise ? std::min(ctx.pressTimes[i], ctx.musicTime) : ctx.musicTime;
+
+            if(pressedNow && !consumedThisFrame[i]){
                 for(auto& note : ctx.notes){
                     // ドラッグと、ドラッグロング（始点がドラッグ判定）は叩いて判定しない → 下の「ドラッグの自動判定」で扱う
                     if(note.lane < 0 || note.isHit || note.type == NoteType::Drag || note.isDragLong()) continue;
@@ -87,17 +99,17 @@ inline void NoteJudge(GameContext& ctx, Tex& tex, Sq& sq){
                     bool isAreaPressed = (i >= startLane && i <= endLane);
 
                     if(isAreaPressed){
-                        int timeDiff = std::abs(static_cast<int>(ctx.musicTime - note.targetTime));
+                        int timeDiff = std::abs(static_cast<int>(tPress - note.targetTime));   // 押した瞬間の時刻で比べる
 
                         if(timeDiff > 300) continue;
 
                         Effect newEffect;
                         newEffect.lane = note.lane;
-                        newEffect.spawnTime = ctx.musicTime;
+                        newEffect.spawnTime = tPress;   // 破裂は押した瞬間から始める
 
                         if(timeDiff <= 60){
                             ctx.laneJudge[i] = {tex.perfect, sq.perfect, ctx.musicTime};
-                            recordTiming(ctx.laneJudge[i], ctx, note, 1);
+                            recordTiming(ctx.laneJudge[i], ctx, note, 1, tPress);
                             note.isHit = true;
                             newEffect.lane = note.lane;
                             newEffect.widthLanes = note.widthLanes;
@@ -119,7 +131,7 @@ inline void NoteJudge(GameContext& ctx, Tex& tex, Sq& sq){
 
                         else if(timeDiff <= 80){
                             ctx.laneJudge[i] = {tex.good, sq.good, ctx.musicTime};
-                            recordTiming(ctx.laneJudge[i], ctx, note, 2);
+                            recordTiming(ctx.laneJudge[i], ctx, note, 2, tPress);
                             note.isHit = true;
                             newEffect.judgeType = 2;
                             newEffect.lane = note.lane;
@@ -143,7 +155,7 @@ inline void NoteJudge(GameContext& ctx, Tex& tex, Sq& sq){
 
                         else if(timeDiff <= 90){
                             ctx.laneJudge[i] = {tex.bad, sq.bad, ctx.musicTime};
-                            recordTiming(ctx.laneJudge[i], ctx, note, 3);
+                            recordTiming(ctx.laneJudge[i], ctx, note, 3, tPress);
                             note.isHit = true;
                             markLongFailed(note, note.targetTime);
                             newEffect.judgeType = 3;
@@ -158,7 +170,8 @@ inline void NoteJudge(GameContext& ctx, Tex& tex, Sq& sq){
 
                         // 判定が出た時刻を記録（描画で「表示の時刻」と比べて、叩いた見た目にする）
                         //   上の continue で isHit のノーツは飛ばしているので、ここで isHit なら今判定したもの
-                        if(note.isHit) note.hitTime = ctx.musicTime;
+                        //   押した瞬間の時刻にする（表示の時刻がそこを過ぎたら、叩いた見た目になる）
+                        if(note.isHit) note.hitTime = tPress;
 
                         for(int l = std::max(0, startLane); l <= std::min(5, endLane); l++){
                             consumedThisFrame[l] = true;
@@ -262,7 +275,14 @@ inline void NoteJudge(GameContext& ctx, Tex& tex, Sq& sq){
                 isHoldingArea = ctx.currentPressed[ln.lane];
             }
 
+            // 押し直した：離していた時刻を消して、そのままホールドを続ける
+            if(isHoldingArea) ln.releasedAtMs = INT32_MIN;
+
             // 途中で指を離した場合
+            //   ・終点の直前（LONG_RELEASE_GRACE_MS 以内）：失敗にせず、終点まで流す（今まで通り）
+            //   ・それより前：すぐには途切れない。離してから ln.releaseToleranceMs（BPM の 2 拍分）たっても
+            //     押し直さなかったときだけ MISS にする。それまでに押し直せば、何もなかったように続く
+            //     （離している間も、中継点のコンボは下でそのまま入る）
             if(!isHoldingArea && !ln.releaseGrace){
                 if(endTime - ctx.musicTime <= LONG_RELEASE_GRACE_MS){
                     // 終点直前：失敗にせず、ホールドしている扱いのまま終点まで流す
@@ -270,16 +290,22 @@ inline void NoteJudge(GameContext& ctx, Tex& tex, Sq& sq){
                     ln.releaseGrace = true;
                 }
                 else{
-                    // 早すぎる：MISS（残りの中継点はもらえない）
-                    ln.isHolding = false;
-                    ln.isHit = true;
-                    ctx.laneJudge[i] = {tex.miss, sq.miss, ctx.musicTime};
-                    Mix_PlayChannel(-1, ctx.tap_sound, 0);
-                    ctx.scoreTracker.registerJudge("MISS");
-                    markLongFailed(ln, ctx.musicTime);
+                    if(ln.releasedAtMs == INT32_MIN) ln.releasedAtMs = ctx.musicTime;   // 離し始めた時刻
 
-                    ctx.isAP = ctx.isFC = false;
-                    continue;
+                    if(ctx.musicTime - ln.releasedAtMs > ln.releaseToleranceMs){
+                        // 長く離しすぎた：MISS（残りの中継点はもらえない）
+                        //   帯は「離し始めた時刻」の所から暗くする（どこで離したか分かるように）
+                        ln.isHolding = false;
+                        ln.isHit = true;
+                        ln.hitTime = ctx.musicTime;
+                        ctx.laneJudge[i] = {tex.miss, sq.miss, ctx.musicTime};
+                        // ※ MISS のときは音を鳴らさない（前はノーツ音が鳴っていて、成功したように聞こえた）
+                        ctx.scoreTracker.registerJudge("MISS");
+                        markLongFailed(ln, ln.releasedAtMs);
+
+                        ctx.isAP = ctx.isFC = false;
+                        continue;
+                    }
                 }
             }
 

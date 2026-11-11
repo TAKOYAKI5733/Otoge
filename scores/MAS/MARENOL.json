@@ -10163,17 +10163,6 @@
       ]
     },
     {
-      "bpm": 140.17635794269552,
-      "bpmEvents": [],
-      "chartCreator": "TKYK.env",
-      "level": "0",
-      "name": "HARD",
-      "notes": [],
-      "sigDen": 4,
-      "sigNum": 4,
-      "speedEvents": []
-    },
-    {
       "bpm": 140.0,
       "bpmEvents": [],
       "chartCreator": "TKYK.env",

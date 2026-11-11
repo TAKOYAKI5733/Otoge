@@ -35,6 +35,15 @@ void loadPlayerSettings(PlayerSettings& settings){
     settings.showFastLate = j.value("showFastLate", true);
     settings.showTimingMs = j.value("showTimingMs", false);
     settings.visualOffsetMs = j.value("visualOffsetMs", 0.0);
+    // 古い settings.json には無いので、無ければ 1.0（譜面どおり）。手で書き換えて範囲外にしても範囲内に戻す
+    settings.noteSpeedRate = std::clamp(j.value("noteSpeedRate", 1.0), NOTE_SPEED_RATE_MIN, NOTE_SPEED_RATE_MAX);
+    // 古い settings.json には無いので、無ければ 0（傾けない・隠さない）
+    settings.laneTiltDeg = std::clamp(j.value("laneTiltDeg", 0.0), LANE_TILT_DEG_MIN, LANE_TILT_DEG_MAX);
+    settings.laneCoverPercent = std::clamp(j.value("laneCoverPercent", 0), LANE_COVER_PERCENT_MIN, LANE_COVER_PERCENT_MAX);
+    settings.streamMode = j.value("streamMode", false);
+    // 古い settings.json には無いので、無ければ今までの長さ（62 %）
+    settings.keyBeamPercent = std::clamp(j.value("keyBeamPercent", KEY_BEAM_PERCENT_DEFAULT), KEY_BEAM_PERCENT_MIN, KEY_BEAM_PERCENT_MAX);
+    g_streamMode = settings.streamMode;   // applyWindowMode（Displaymode.h）が見る値。起動時の表示モードにも反映される
     settings.laneBindings = defaultLaneBindings();
     if(j.contains("keyBindings") && j["keyBindings"].is_array()){
         const auto& arr = j["keyBindings"];
@@ -58,6 +67,11 @@ void savePlayerSettings(const PlayerSettings& settings){
     j["showFastLate"] = settings.showFastLate;
     j["showTimingMs"] = settings.showTimingMs;
     j["visualOffsetMs"] = settings.visualOffsetMs;
+    j["noteSpeedRate"] = settings.noteSpeedRate;
+    j["laneTiltDeg"] = settings.laneTiltDeg;
+    j["laneCoverPercent"] = settings.laneCoverPercent;
+    j["streamMode"] = settings.streamMode;
+    j["keyBeamPercent"] = settings.keyBeamPercent;
     json keys = json::array();
     for(const auto& b : settings.laneBindings) keys.push_back(bindingToString(b));
     j["keyBindings"] = keys;
@@ -100,9 +114,6 @@ GameScene settingScene(SDL_Window* window, SDL_Renderer* renderer, PlayerSetting
     PlayerSettings edit = playerSettings;
 
     Mix_Chunk* previewTap = Mix_LoadWAV("sounds/tapsound_2.wav");
-
-    bool showFastLate = true;    // FAST/LATE 表示
-    bool showTimingMs = false;   // ±ms 表示
 
     bool running = true;
     SDL_Event e;
@@ -188,7 +199,7 @@ GameScene settingScene(SDL_Window* window, SDL_Renderer* renderer, PlayerSetting
         ImGui_ImplSDLRenderer2_RenderDrawData(ImGui::GetDrawData(), renderer);
 
         SDL_RenderPresent(renderer);
-        
+
     }
 
     if(previewTap) Mix_FreeChunk(previewTap);
