@@ -2,7 +2,7 @@
   "bgmVolume": 70,
   "fpsAuto": false,
   "fpsCap": 165,
-  "keyBeamPercent": 62,
+  "keyBeamPercent": 100,
   "keyBindings": [
     "key:26",
     "key:8",
@@ -22,5 +22,5 @@
   "tapSound": "TAP_S.wav",
   "visualOffsetMs": 0.0,
   "vsync": false,
-  "windowMode": 1
+  "windowMode": 2
 }
