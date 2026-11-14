@@ -265,9 +265,9 @@ public:
         }
         // 操作方法：今の状態で使えるキーだけ出す
         const char* help;
-        if(editing_)                       help = "[← →]:値を変更（Shift ±10[ms]）   [ENTER/ESC]:変更をやめる   F2:保存";
-        else if(isActionRow(currentRow())) help = "[← →/Tab]:分類   [↑ ↓]:選択   [ENTER]:開く   [F2/ESC]:保存";
-        else                               help = "[← →/Tab]:分類   [↑ ↓]:選択   [ENTER]:変更する   [F2/ESC]:保存";
+        if(editing_)                       help = "左右:値を変更（Shift で大きく）   ENTER/ESC:変更をやめる   F2:閉じて保存";
+        else if(isActionRow(currentRow())) help = "左右/Tab:分類   上下:選択   ENTER:開く   F2/ESC:閉じて保存";
+        else                               help = "左右/Tab:分類   上下:選択   ENTER:変更する   F2/ESC:閉じて保存";
         drawText(renderer, smallFont, help, SDL_Color{130, 130, 150, 255}, x + 40, PANEL_Y + PANEL_H - 36, a, Align::Left, textMaxW);
     }
 
@@ -309,6 +309,8 @@ private:
         ROW_FPS_AUTO,
         ROW_NOTE_DETAIL,
         ROW_STREAM_MODE,
+        ROW_BASS_ZOOM,
+        ROW_LANE_ROLL,
         ROW_COUNT
     };
 
@@ -327,38 +329,42 @@ private:
         "キー設定",
         "FPS 自動",
         "ノーツの詳細設定",
-        "配信モード"
+        "配信モード",
+        "低音ズーム",
+        "レーンの左右の傾き"
     };
 
     static constexpr const char* ROW_DESCRIPTIONS[ROW_COUNT] = {
-        "音声調整→表示調整→確認 の順に調整します",
+        "ENTER で 音声調整→表示調整→確認 の順に調整します",
         "+ で判定が遅くなります",
         "+ でノーツが早めに表示されます",
         "BGMの割合を変更します",
         "SEの割合を変更します",
         "切り替えると試し聴きできます",
-        "GOOD BAD のとき、早ければ FAST、遅ければ LATE を出します",
-        "叩いたズレを ms で出します（- = FAST、+ = LATE）",
-        "画面のちらつきを防ぎます",
+        "GOOD・BAD のとき、早ければ FAST、遅ければ LATE を出します",
+        "叩いたズレを ms で出します（- = 早い、+ = 遅い）",
+        "画面のちらつきを防ぎます（OFF にすると遅延が少し減ります）",
         "垂直同期が OFF のときに使われる上限設定です",
         "ウィンドウの設定です",
-        "キー設定の画面を開きます（キーボード・コントローラー）",
+        "ENTER で キー設定の画面を開きます（キーボード・コントローラー）",
         "モニターの Hz に一番近い FPS 上限を自動で選びます",
-        "ノーツ速度 レーンの傾き レーンカバー キービームを変えられます",
-        "OBS録画 配信をするとき（ゲームを起動し直すと反映）"
-
+        "ENTER で ノーツ速度・レーンの傾き・レーンカバー・キービームを、画面を見ながら変えられます",
+        "OBS で録画・配信するとき ON（描き方の切り替えは、ゲームを起動し直すと反映）",
+        "曲の低音（バスドラム・ベース）に合わせて、プレイ画面全体が少し大きくなります",
+        "押しているロングが左右どちらに多いかで、レーンが左右に少し傾きます"
     };
 
     // ----- 分類 -----
     //   項目を増やすときは、ROW_xxx を作って、ここの好きな分類の行に足す（-1 は空き）
-    static constexpr int CATEGORY_COUNT = 3;
-    static constexpr const char* CATEGORY_NAMES[CATEGORY_COUNT] = {"オフセット", "ノーツ", "グラフィックス"};
+    static constexpr int CATEGORY_COUNT = 4;
+    static constexpr const char* CATEGORY_NAMES[CATEGORY_COUNT] = {"オフセット", "ノーツ", "グラフィックス", "演出"};
     static constexpr int CATEGORY_ROWS[CATEGORY_COUNT][MAX_ROWS] = {
         //   FAST/LATE 表示・±ms 表示は、ノーツの分類に入りきらなくなったので「画面に出す物」としてグラフィックスへ移した
         {ROW_CALIBRATE,  ROW_OFFSET,    ROW_VISUAL_OFFSET, -1,            -1,           -1,           -1,      -1},   // オフセット関連
         //   ノーツ速度・レーンの傾き・レーンカバーは、ノーツの詳細設定（画面を見ながら変える）だけにした
         {ROW_NOTE_DETAIL, ROW_KEYCONFIG, ROW_TAPSOUND,     ROW_SE,        ROW_BGM,      -1,           -1,      -1},   // ノーツ関連
         {ROW_VSYNC,      ROW_FPS_AUTO,  ROW_FPS,           ROW_WINDOW,    ROW_STREAM_MODE, ROW_FASTLATE, ROW_TIMING_MS, -1},   // グラフィックス関連
+        {ROW_BASS_ZOOM,  ROW_LANE_ROLL, -1,                -1,            -1,           -1,           -1,      -1},   // 演出（画面の動き）
     };
 
     // 分類 c に入っている項目の数（-1 の手前まで）
@@ -479,6 +485,14 @@ private:
                 s.showTimingMs = !s.showTimingMs;
                 break;
 
+            case ROW_BASS_ZOOM:
+                s.bassZoom = !s.bassZoom;
+                break;
+
+            case ROW_LANE_ROLL:
+                s.laneRoll = !s.laneRoll;
+                break;
+
             case ROW_VSYNC:
                 s.vsync = !s.vsync;
                 SDL_RenderSetVSync(renderer, s.vsync ? 1 : 0);
@@ -526,6 +540,8 @@ private:
             case ROW_TAPSOUND: return tapSoundDisplayName(s.tapSound);
             case ROW_FASTLATE:  return s.showFastLate ? "ON" : "OFF";
             case ROW_TIMING_MS: return s.showTimingMs ? "ON" : "OFF";
+            case ROW_BASS_ZOOM: return s.bassZoom ? "ON" : "OFF";
+            case ROW_LANE_ROLL: return s.laneRoll ? "ON" : "OFF";
             case ROW_VSYNC:  return s.vsync ? "ON" : "OFF";
             case ROW_FPS_AUTO:{
                 if(!s.fpsAuto) return "OFF";

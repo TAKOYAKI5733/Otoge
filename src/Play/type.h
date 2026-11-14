@@ -41,6 +41,8 @@ struct Note{
     //   離してから releaseToleranceMs（10ms 固定。loadScore.h の LONG_RELEASE_TOLERANCE_MS）以内に押し直せば、続けてホールドできる
     int32_t releaseToleranceMs = 0;
     int32_t releasedAtMs = INT32_MIN;   // 離した時刻（INT32_MIN = 今は押している）
+    bool endHeld = false;
+    bool dragArmed = false;             // ドラッグ：判定の幅（±20ms）の中で押していたか（判定ラインに来たら、離していても取れる）               // ロングを押したまま終点まで行けたか（つながったロングの始点を、押しっぱなしで取れるようにする）
 
     bool movesLane = false;
     bool isCyan = false;
@@ -109,17 +111,33 @@ struct KeyBeam{
     int32_t spawnTime;
 };
 
-// ロングの中継点で飛び散る、正方形の枠1つぶん
+// ノーツを取ったとき・ロングの中継点で飛び出す、半透明の立方体 1 つぶん
+//   上へ飛び出し → 重力で落ち → 判定ボックスの下の端（床）で小さく跳ね返り → 止まって消える
+//   位置は毎フレーム「出てからの時間」から計算する（renderGame.h の cubeStateAt）ので、ここには最初の値だけ持つ
+//   落ちている途中（teleportMs）で止まり、テレポートの演出（CUBE_TELEPORT_MS）で消える。消え終わった瞬間に Cube が 1 増える
 struct TickParticle{
-    float x, y;          // 出た位置（判定ボックスの中心）
-    float vx, vy;        // 飛ぶ向きと速さ(px/ms)
-    float size;          // 正方形の1辺(px)
-    float angle;         // 最初の傾き(ラジアン)
-    float spin;          // 回る速さ(ラジアン/ms)
-    double spawnTime;    // 出た時刻
-    SDL_Color color;
+    float x, y;                 // 出た位置（判定ラインの上、画面の座標）
+    float vx, vy;               // 最初の速さ(px/ms)。vy はマイナス = 上へ
+    float floorDy;              // 床（跳ね返る所）が、出た位置からどれだけ下か(px)
+    float size;                 // 立方体の 1 辺(px)
+    float rotX, rotY, rotZ;     // 最初の向き(ラジアン)
+    float spinX, spinY, spinZ;  // 回る速さ(ラジアン/ms)
+    int   lane;                 // 色を決めるレーン（そのレーンの色の立方体になる）
+    double spawnTime;           // 出た時刻（表示の時刻）
+    float alpha;                // 濃さ（0〜1、粒ごとに少し変える）
+    float teleportMs;           // 出てから何 ms で止まってテレポートを始めるか（落ちている途中）
+    bool  collected = false;    // テレポートし終わって、Cube を数えたか
 };
 
-// 中継点のエフェクトの設定（renderGame.h と noteJudge.h の両方で使うので、両方より先に読まれる type.h に置く）
-inline constexpr int    TICK_PARTICLE_COUNT   = 1;       // 1回に飛ぶ枠の数
-inline constexpr double TICK_PARTICLE_LIFE_MS = 420.0;   // 消えるまでの時間
+// 立方体の設定（renderGame.h と noteJudge.h の両方で使うので、両方より先に読まれる type.h に置く）
+inline constexpr int    TICK_PARTICLE_COUNT   = 1;       // ロングの中継点 1 回で出る数
+inline constexpr int    NOTE_CUBE_MIN         = 1;       // ノーツ 1 個を取ったときに出る数（MIN〜MAX のどれかをランダムに）
+inline constexpr int    NOTE_CUBE_MAX         = 2;
+inline constexpr double CUBE_TELEPORT_MS      = 260.0;   // テレポートの演出の長さ(ms)
+inline constexpr float  CUBE_TELEPORT_FROM    = 0.30f;   // 一番高い所から床までの間の、どこで止まるか（この割合〜TO の間でランダム）
+inline constexpr float  CUBE_TELEPORT_TO      = 0.75f;
+inline constexpr double TICK_PARTICLE_LIFE_MS = 800.0;   // 片付けるまでの時間(ms)。テレポートが終わるまでより長くする
+inline constexpr double CUBE_GRAVITY          = 0.0042;  // 重力(px/ms²)。大きいほど速く落ちる
+inline constexpr double CUBE_BOUNCE           = 0.36;    // 跳ね返り（床に当たった速さの何倍で跳ね返るか）
+inline constexpr double CUBE_FRICTION         = 0.55;    // 床に当たるたびに、横の速さ・回る速さを何倍にするか
+inline constexpr int    CUBE_MAX_BOUNCES      = 3;       // 跳ね返る回数の上限（それ以降は床に止まる）

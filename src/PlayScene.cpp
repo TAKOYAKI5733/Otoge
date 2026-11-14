@@ -10,6 +10,9 @@
 #include "Play/LaneTilt.h"          // レーンを奥に倒して描く（設定の「レーンの傾き」）
 #include "Play/PreciseInput.h"      // キーを押した瞬間の時刻を、別スレッドで約 1ms ごとに記録する
 #include "Play/PlayBackground.h"    // 背景：藍色を含んだ灰色 ＋ 真ん中にぼかしたジャケット
+#include "Play/CubeWallet.h"        // ゲーム内の通貨「Cube」の保存と読み込み
+#include "Play/GlitchLayer.h"       // ポーズメニューをグリッチで出す
+#include "Play/PlayInfoHud.h"       // 左下の難易度・右下の曲名（ホログラム）
 
 //グローバル変数
 double bpm = 120;
@@ -292,14 +295,35 @@ GameScene playGame(SDL_Window* window, SDL_Renderer* renderer, const std::string
         return static_cast<double>(SDL_GetPerformanceCounter() - perfStart) * 1000.0 / perfFreq;
     };
 
+    // ===== 始まりの演出 =====
+    //   時間はシーンが始まってから（globalMs − sceneStartMs。ポーズ中は止まる）
+    //   0 〜 LANE_FRAME_MS                         ：レーンの外枠の線が、判定ラインの所から上下・左右へ伸びる
+    //   LANE_GLITCH_START 〜 ＋LANE_GLITCH_MS       ：レーン（背景・区切り線・判定枠・ノーツ）がグリッチで出てくる
+    //   HUD_START 〜 ＋HUD_MS                       ：左下の難易度・右下の曲名がグリッチで出てくる
+    //   レーンが出きってから LANE_LINE_ALL_MS        ：区切り線を 7 本とも出しておく（drawFrame.h）
+    //   その後 LANE_LINE_OUT_INTRO_MS                ：要らない区切り線がグリッチで消える（drawFrame.h）
+    constexpr double LANE_FRAME_MS     = 320.0;
+    constexpr double LANE_GLITCH_START = 260.0;
+    constexpr double LANE_GLITCH_MS    = 450.0;
+    constexpr double HUD_START         = 650.0;
+    constexpr double HUD_MS            = 400.0;
+
     // ===== 始まってから曲が鳴るまで =====
-    //   0ms ─ 100ms：何も出ない
-    //   100ms ─ 550ms：右上の RANK ウィンドウが出てくる
-    //   230ms ─ 680ms：その下の JUDGE ウィンドウが出てくる（judgestats::STAGGER_MS だけ遅れて）
-    //   全部出きってから（judgestats::ALL_APPEARED_MS）PLAY_LEAD_AFTER_PANEL_MS 後に曲が始まる
+    //   右上の RANK・JUDGE ウィンドウ（judgestats::ALL_APPEARED_MS で出きる）と、上の始まりの演出が
+    //   全部終わった時刻（INTRO_END_MS）から、PLAY_LEAD_AFTER_PANEL_MS 後に曲が始まる
     //     ※ この待ちの間に、最初のノーツが画面の上から流れてくる。短くしすぎると最初のノーツが途中から現れる
+    //   チュートリアル・譜面エディタからのテストプレイは、今まで通り（右上のウィンドウが出きってから）にする
+    //     （テストプレイは、途中から始めるときの位置合わせが 1.5 秒の待ちを前提にしているため）
     const double PLAY_LEAD_AFTER_PANEL_MS = 820.0;
-    const double delayTimeMs = judgestats::ALL_APPEARED_MS + PLAY_LEAD_AFTER_PANEL_MS;   // = 1500ms
+    const double INTRO_END_MS = std::max({
+        static_cast<double>(judgestats::ALL_APPEARED_MS),
+        LANE_GLITCH_START + LANE_GLITCH_MS,                                              // レーンが出きる
+        HUD_START + HUD_MS,                                                              // 難易度・曲名が出きる
+        LANE_GLITCH_START + LANE_GLITCH_MS + LANE_LINE_ALL_MS + LANE_LINE_OUT_INTRO_MS,  // 要らない区切り線が消えきる
+    });
+    const bool waitAllIntro = (tutorial == nullptr && test == nullptr);
+    const double delayTimeMs = (waitAllIntro ? INTRO_END_MS : static_cast<double>(judgestats::ALL_APPEARED_MS))
+                             + PLAY_LEAD_AFTER_PANEL_MS;
     const double sceneStartMs = nowMs();   // ウィンドウのアニメーションの基準
     double musicStartTimeMs = sceneStartMs + delayTimeMs;
 
@@ -364,6 +388,21 @@ GameScene playGame(SDL_Window* window, SDL_Renderer* renderer, const std::string
     SpectrumVisualizer visualizer;
     visualizer.attach();
 
+    // ===== ゲーム内の通貨「Cube」 =====
+    //   ノーツを取ると立方体が 1〜2 個出て、テレポートし終わるたびに 1 増える（数えるのは renderGame.h の erase_some）
+    //   左上に「今持っている数 ＋ このプレイで集めた数」を出す。保存はこの関数の最後（オートプレイ・テストプレイでは保存しない）
+    CubeHud cubeHud;
+    cubeHud.base = loadCubeWallet();
+    if(TTF_Font* cf = TTF_OpenFont("fonts/prac.ttf", 28)){
+        if(SDL_Surface* cs = TTF_RenderUTF8_Blended(cf, "CUBE", {255, 255, 255, 255})){
+            cubeHud.label  = SDL_CreateTextureFromSurface(renderer, cs);
+            cubeHud.labelW = cs->w;
+            cubeHud.labelH = cs->h;
+            SDL_FreeSurface(cs);
+        }
+        TTF_CloseFont(cf);
+    }
+
     // ===== ポーズ =====
     TTF_Font* menuFont  = TTF_OpenFont("fonts/prac.ttf", 44);
     TTF_Font* labelFont = TTF_OpenFont("fonts/prac.ttf", 24);
@@ -371,10 +410,18 @@ GameScene playGame(SDL_Window* window, SDL_Renderer* renderer, const std::string
     double pauseStartMs  = 0.0;                 // ポーズした瞬間の実時間
     double pausedTotalMs = 0.0;                 // これまでにポーズしていた時間の合計
 
+    // ===== ポーズメニューの出し方：グリッチ（Play/GlitchLayer.h） =====
+    //   開いてから PAUSE_GLITCH_MS の間は、メニュー（暗くする幕も含む）を透明な絵 pauseLayer に描いてから、
+    //   横の帯に切ってずらしながら貼る。それを過ぎたら、いつも通り画面に直接描く
+    constexpr double PAUSE_GLITCH_MS = 350.0;
+    double pauseOpenedMs = -1e9;          // 最後にポーズを開いた実時間
+    SDL_Texture* pauseLayer = nullptr;    // 初めてポーズしたときに作る
+
     // ポーズを始める（ESC と、ウィンドウのフォーカスが外れたときに呼ぶ）
     auto beginPause = [&](double realMs){
         if(pauseMenu.isActive()) return;
         pauseMenu.open(realMs);
+        pauseOpenedMs = realMs;
         pauseStartMs = realMs;
         if(bgmStarted) Mix_PauseMusic();
     };
@@ -400,6 +447,38 @@ GameScene playGame(SDL_Window* window, SDL_Renderer* renderer, const std::string
     PlayBackground playBackground;
     playBackground.load(renderer, selectedScorePath);
 
+
+    // ===== 曲の終わりの演出 =====
+    //   曲が終わってノーツも全部なくなったら、すぐリザルトへは行かず、
+    //   レーン（背景・区切り線・判定枠）を LANE_OUTRO_MS かけてグリッチで消し（始まりの演出の逆）、
+    //   さらに OUTRO_HOLD_MS 待ってからリザルトへ進む
+    constexpr double LANE_OUTRO_MS = 500.0;
+    constexpr double OUTRO_HOLD_MS = 250.0;
+    double outroStartMs = -1.0;   // 終わりの演出を始めた時刻（globalMs）。-1 = まだ
+
+    // ===== 曲の進み具合のバー（画面の上の端） =====
+    //   曲の長さに対して、今どこまで進んだかの割合だけ、左から右へ伸びる
+    //   枠なし・Cube の色（立方体の辺と同じ白っぽい水色）の半透明の 1 色だけ
+    //   曲の長さは、曲のファイルの長さ（SDL_mixer 2.6 以上の Mix_MusicDuration）。
+    //   取れないとき（古い SDL_mixer など）は、譜面の最後のノーツ（ロングは終点）の時刻にする
+    constexpr int       PROGRESS_BAR_H     = 6;                       // バーの太さ(px)
+    constexpr SDL_Color PROGRESS_BAR_COLOR = {200, 250, 255, 110};    // Cube の色（HOLO_FRONT_COLOR）・半透明
+    double songLengthMs = 0.0;
+#if defined(SDL_MIXER_VERSION_ATLEAST)
+#if SDL_MIXER_VERSION_ATLEAST(2, 6, 0)
+    songLengthMs = Mix_MusicDuration(bgm) * 1000.0;
+#endif
+#endif
+    if(songLengthMs <= 0.0){
+        for(const Note& n : notes){
+            songLengthMs = std::max(songLengthMs, static_cast<double>(n.targetTime) + std::max<int32_t>(0, n.durationMs));
+        }
+    }
+
+    // 左下の難易度・右下の曲名（チュートリアルでは出さない）
+    PlayInfoHud infoHud;
+    if(tutorial == nullptr) infoHud.init(renderer, selectedScorePath, selectedDifficulty, laneX[0], laneX[0] + laneWidth * 6);
+
     // ===== 低音に合わせて、プレイ画面全体を少しズームする =====
     //   ・画面を一度 sceneTex（画面と同じ大きさの絵）に描き、それを真ん中を中心に少し大きくして画面に貼る
     //   ・大きさ = 1 + 低音の強さ × BASS_ZOOM_AMOUNT
@@ -407,14 +486,94 @@ GameScene playGame(SDL_Window* window, SDL_Renderer* renderer, const std::string
     //     いつも鳴っている低音で常に大きくならないよう、BASS_ZOOM_THRESHOLD より上の分だけを使う
     //   ・ズームは、大きくなるときは速く、戻るときはゆっくり（BASS_ZOOM_ATTACK_MS / RELEASE_MS）→ ドンッと弾む感じ
     //   ・ポーズメニューはズームしない（文字が揺れて読みにくくならないように）
-    constexpr int    BASS_BANDS          = 5;      // 使う帯の数（SpectrumVisualizer の 64 本のうち、下から）
-    constexpr float  BASS_ZOOM_THRESHOLD = 0.2f;   // 低音の強さ（0〜1）がこれより上の分だけズームに使う
+    constexpr int    BASS_BANDS          = 15;      // 使う帯の数（SpectrumVisualizer の 64 本のうち、下から）
+    constexpr float  BASS_ZOOM_THRESHOLD = 0.45f;   // 低音の強さ（0〜1）がこれより上の分だけズームに使う
     constexpr float  BASS_ZOOM_AMOUNT    = 0.05f;  // 一番強いときに、どれだけ大きくするか（0.025 = 2.5%）
-    constexpr float  BASS_ZOOM_ATTACK_MS = 12.5f;   // 大きくなる速さ（小さいほど速い）
-    constexpr float  BASS_ZOOM_RELEASE_MS = 180.0f; // 戻る速さ（大きいほどゆっくり）
+    constexpr float  BASS_ZOOM_ATTACK_MS = 15.0f;   // 大きくなる速さ（小さいほど速い）
+    constexpr float  BASS_ZOOM_RELEASE_MS = 120.0f; // 戻る速さ（大きいほどゆっくり）
     float bassZoom = 0.0f;                          // 今のズームの強さ（0〜1）
-    SDL_Texture* sceneTex = SDL_CreateTexture(renderer, SDL_PIXELFORMAT_RGBA8888, SDL_TEXTUREACCESS_TARGET, SCREEN_W, SCREEN_H);
+    //   設定の「低音ズーム」が OFF のときは作らない（いつも今まで通り、画面に直接描く）
+    SDL_Texture* sceneTex = playerSettings.bassZoom
+        ? SDL_CreateTexture(renderer, SDL_PIXELFORMAT_RGBA8888, SDL_TEXTUREACCESS_TARGET, SCREEN_W, SCREEN_H) : nullptr;
     if(sceneTex) SDL_SetTextureScaleMode(sceneTex, SDL_ScaleModeLinear);   // 少しだけ大きくするので、なめらかに
+
+    // ===== 低音のズームに合わせて、画面の端だけを少しぼかす =====
+    //   ・ぼかし方（ズームブラー）：sceneTex を「少しずつ大きさを変えて」BASS_BLUR_COPIES 枚重ねた絵を blurTex に作る。
+    //     真ん中から離れるほど、大きさの違いで位置が大きくずれるので、端ほど強く流れるようにぼける（真ん中はほとんどずれない）
+    //   ・blurTex の透明度を、blurMaskTex（真ん中が透明 → 端が不透明の丸いグラデーション）で置きかえる
+    //     → レーンのある真ん中はぼけた絵が乗らず、くっきりのまま（プレイに影響しない）
+    //   ・できた blurTex を、ズームの強さ × BASS_BLUR_MAX_ALPHA の濃さで、ズームした画面の上に重ねる
+    //   ・ズームがほぼ 0 のときは何もしない（重い処理を毎フレームしない）
+    constexpr int   BASS_BLUR_COPIES    = 4;       // 重ねる枚数（多いほどなめらか、少し重くなる）
+    constexpr float BASS_BLUR_SPREAD    = 0.035f;  // 一番大きい 1 枚を、どれだけ大きくするか（ズームが最大のとき。0.035 = 3.5%）
+    constexpr float BASS_BLUR_INNER     = 0.45f;   // 真ん中からこの割合までは、ぼかさない（1.0 = 画面の端）
+    constexpr float BASS_BLUR_OUTER     = 1.05f;   // ここで一番強いぼかしになる（画面の角は 1.0 より外）
+    constexpr Uint8 BASS_BLUR_MAX_ALPHA = 230;     // ズームが最大のときの、ぼかしの濃さ（0〜255）
+    SDL_Texture* blurTex     = nullptr;
+    SDL_Texture* blurMaskTex = nullptr;
+    // 透明度だけを置きかえる混ぜ方：色はそのまま（dst × 1）、透明度は描くもの（src × 1）
+    const SDL_BlendMode BLEND_REPLACE_ALPHA = SDL_ComposeCustomBlendMode(
+        SDL_BLENDFACTOR_ZERO, SDL_BLENDFACTOR_ONE, SDL_BLENDOPERATION_ADD,
+        SDL_BLENDFACTOR_ONE,  SDL_BLENDFACTOR_ZERO, SDL_BLENDOPERATION_ADD);
+    if(sceneTex){
+        blurTex = SDL_CreateTexture(renderer, SDL_PIXELFORMAT_RGBA8888, SDL_TEXTUREACCESS_TARGET, SCREEN_W, SCREEN_H);
+        if(blurTex){
+            SDL_SetTextureScaleMode(blurTex, SDL_ScaleModeLinear);
+            SDL_SetTextureBlendMode(blurTex, SDL_BLENDMODE_BLEND);
+        }
+        // マスク：小さく作って、なめらかに引き伸ばす（真ん中からの距離は、画面の縦横の半分を 1 として測る＝横長の楕円）
+        constexpr int MW = 192, MH = 108;
+        if(SDL_Surface* m = SDL_CreateRGBSurfaceWithFormat(0, MW, MH, 32, SDL_PIXELFORMAT_RGBA32)){
+            Uint8* px = static_cast<Uint8*>(m->pixels);
+            for(int y = 0; y < MH; y++){
+                for(int x = 0; x < MW; x++){
+                    const float dx = (x + 0.5f) / MW * 2.0f - 1.0f;
+                    const float dy = (y + 0.5f) / MH * 2.0f - 1.0f;
+                    const float r  = std::sqrt(dx * dx + dy * dy);
+                    float t = std::clamp((r - BASS_BLUR_INNER) / (BASS_BLUR_OUTER - BASS_BLUR_INNER), 0.0f, 1.0f);
+                    t = t * t * (3.0f - 2.0f * t);   // なめらかに 0 → 1
+                    Uint8* d = px + y * m->pitch + x * 4;
+                    d[0] = d[1] = d[2] = 255;
+                    d[3] = static_cast<Uint8>(t * 255.0f);
+                }
+            }
+            blurMaskTex = SDL_CreateTextureFromSurface(renderer, m);
+            SDL_FreeSurface(m);
+            if(blurMaskTex){
+                SDL_SetTextureScaleMode(blurMaskTex, SDL_ScaleModeLinear);
+                // この混ぜ方が使えない環境では、ぼかし自体をやめる（そのまま重ねると画面の端が白くなるため）
+                if(SDL_SetTextureBlendMode(blurMaskTex, BLEND_REPLACE_ALPHA) != 0){
+                    printf("画面の端のぼかしは使えません: %s\n", SDL_GetError());
+                    SDL_DestroyTexture(blurMaskTex);
+                    blurMaskTex = nullptr;
+                }
+            }
+        }
+    }
+
+    // ===== 押しているロングの左右の割合で、レーンを左右に傾ける =====
+    //   ・押しているロング（ホールド中）ごとに「真ん中からの距離 d」（-3 〜 +3、- が左）を求める
+    //     （d = ロングの中心のレーン位置 − 3。レーン 0 なら -2.5、レーン 5 なら +2.5）
+    //   ・割合 = Σ(d × 幅) ÷ Σ(3 × 幅) → -1 〜 +1。端のロングほど d が大きいので、強く傾く
+    //     （真ん中寄りのロングは少しだけ、端のロングは大きく傾ける。押していなければ 0）
+    //   ・角度 = 割合 × LANE_ROLL_MAX_DEG。レーンの中心線を軸に、右が多いと右側が奥へ、左が多いと左側が奥へ下がる
+    //   ・急に傾かないように、LANE_ROLL_SMOOTH_MS でなめらかに近づける
+    //   ・チュートリアル・設定の「レーンの左右の傾き」が OFF のときは傾けない
+    constexpr double LANE_ROLL_MAX_DEG   = 24.0;    // 一番傾いたときの角度（度）。奥行きのある傾きなので、平面の回転より大きめ
+    constexpr double LANE_ROLL_SMOOTH_MS = 100.0;   // 近づく速さ（大きいほどゆっくり）
+    double laneRollDeg = 0.0;
+    //   laneLayerTex は、始まりの演出（レーンをグリッチで出す）でも使うので、設定に関係なくいつも作る
+    //   （左右に傾けるかどうかは、下の laneRollEnabled で決める）
+    const bool laneRollEnabled = playerSettings.laneRoll && tutorial == nullptr;
+    SDL_Texture* laneLayerTex = SDL_CreateTexture(renderer, SDL_PIXELFORMAT_RGBA8888, SDL_TEXTUREACCESS_TARGET,
+                                                  SCREEN_W, SCREEN_H + LANE_ROLL_OVERDRAW_PX * 2);   // 上下に余分に描く分だけ高く（GameContext.h）
+    if(laneLayerTex){
+        SDL_SetTextureScaleMode(laneLayerTex, SDL_ScaleModeLinear);   // 回したときにふちがギザギザにならないように
+        // 中身は「透明度を掛けた色」で入っているので、その前提で重ねる（そのまま BLEND で貼ると、半透明の所が暗くなる）
+        SDL_SetTextureBlendMode(laneLayerTex, SDL_ComposeCustomBlendMode(
+            SDL_BLENDFACTOR_ONE, SDL_BLENDFACTOR_ONE_MINUS_SRC_ALPHA, SDL_BLENDOPERATION_ADD,
+            SDL_BLENDFACTOR_ONE, SDL_BLENDFACTOR_ONE_MINUS_SRC_ALPHA, SDL_BLENDOPERATION_ADD));
+    }
     bool preciseLanes[6] = {};
     for(int i = 0; i < 6; i++) preciseLanes[i] = preciseInput.lanePrecise(i);
 
@@ -545,6 +704,38 @@ GameScene playGame(SDL_Window* window, SDL_Renderer* renderer, const std::string
             }
         }
 
+        // ===== 押している状態と離した瞬間も、同じ別スレッドから受け取る（ロングのホールド判定用） =====
+        //   押した瞬間（上）と同じ所で見た状態を使うので、SDL のキーの状態と食い違ってロングが途切れることがない
+        bool preciseHeld[6] = {};
+        int32_t releaseTimes[6];
+        {
+            Uint64 rawRel[6] = {};
+            preciseInput.takeReleases(rawRel);
+            const bool focused = (SDL_GetKeyboardFocus() == window);
+            for(int i = 0; i < 6; i++){
+                preciseHeld[i] = preciseLanes[i] && focused && !paused && preciseInput.laneDown(i);
+                releaseTimes[i] = NO_PRESS_TIME;
+                if(rawRel[i] == 0 || paused || !focused) continue;
+                const double tReal = static_cast<double>(rawRel[i] - perfStart) * 1000.0 / perfFreq;
+                const double tMusic = (tReal - pausedTotalMs - musicStartTimeMs) + clockDriftCorrectionMs - offsetMs;
+                releaseTimes[i] = std::min(musicTime, static_cast<int32_t>(std::floor(tMusic)));
+            }
+        }
+
+        // レーンの左右の傾き：押しているロングの「真ん中からの距離 × 幅」の割合から角度を決めて、なめらかに近づける
+        if(laneLayerTex && laneRollEnabled){
+            double sum = 0.0, total = 0.0;
+            for(const Note& n : notes){
+                if(n.type != NoteType::Long || !n.isHolding) continue;
+                const double d = (n.lane + n.widthLanes * 0.5) - 3.0;   // 真ん中からの距離（- = 左、+ = 右）
+                sum   += d * n.widthLanes;
+                total += 3.0 * n.widthLanes;                            // 一番端（d = ±3）のときに割合が ±1 になる
+            }
+            const double target = (total > 0.0) ? std::clamp(sum / total, -1.0, 1.0) * LANE_ROLL_MAX_DEG : 0.0;
+            const double dt = std::clamp(frameDtMs, 0.0, 100.0);
+            laneRollDeg += (target - laneRollDeg) * (1.0 - std::exp(-dt / LANE_ROLL_SMOOTH_MS));
+        }
+
             //GameContextの初期化
             GameContext ctx = {
             .renderer = renderer,
@@ -596,8 +787,26 @@ GameScene playGame(SDL_Window* window, SDL_Renderer* renderer, const std::string
             .keyBeamRatio = playerSettings.keyBeamPercent / 100.0,
             .pressTimes = pressTimes,
             .preciseLanes = preciseLanes,
-            .background = &playBackground
+            .background = &playBackground,
+            .laneRollDeg = laneRollDeg,
+            .laneLayerTex = laneLayerTex,
+            .cubeHud = &cubeHud,
+            .preciseHeld = preciseHeld,
+            .releaseTimes = releaseTimes,
+            .isAutoplay = isAutoplay
             };
+        {
+            const double introMs = globalMs - sceneStartMs;
+            ctx.laneFrameIntro = std::clamp(introMs / LANE_FRAME_MS, 0.0, 1.0);
+            ctx.laneIntro      = laneLayerTex ? std::clamp((introMs - LANE_GLITCH_START) / LANE_GLITCH_MS, 0.0, 1.0) : 1.0;
+            // 終わりの演出の途中：レーンをグリッチで消していく（laneIntro を 1 → 0 に戻す。外枠の線は出さない）
+            if(outroStartMs >= 0.0){
+                const double outP = std::clamp((globalMs - outroStartMs) / LANE_OUTRO_MS, 0.0, 1.0);
+                ctx.laneIntro      = laneLayerTex ? 1.0 - outP : 1.0;
+                ctx.laneFrameIntro = 0.0;
+                ctx.laneOutro      = true;
+            }
+        }
 
         if(paused){
             for(int i = 0; i < 6; i++) prevPressed[i] = currentPressed[i];
@@ -628,9 +837,13 @@ GameScene playGame(SDL_Window* window, SDL_Renderer* renderer, const std::string
             //ノーツの消去処理 renderGame.h
             erase_some(ctx);
 
+            // 曲が終わってノーツも全部なくなった：終わりの演出（レーンをグリッチで消す）を始め、終わったらリザルトへ
             if(!Mix_PlayingMusic() && notes.empty() && nextScene != GameScene::Shutdown){
-                running = false;
-                nextScene = GameScene::Result;
+                if(outroStartMs < 0.0) outroStartMs = globalMs;
+                if(globalMs - outroStartMs >= LANE_OUTRO_MS + OUTRO_HOLD_MS){
+                    running = false;
+                    nextScene = GameScene::Result;
+                }
             }
         }
 
@@ -646,7 +859,8 @@ GameScene playGame(SDL_Window* window, SDL_Renderer* renderer, const std::string
             float bass = 0.0f;
             for(int b = 0; b < BASS_BANDS; b++) bass += visualizer.levels[b];
             bass /= BASS_BANDS;
-            const float target = std::clamp((bass - BASS_ZOOM_THRESHOLD) / (1.0f - BASS_ZOOM_THRESHOLD), 0.0f, 1.0f);
+            const float target = playerSettings.bassZoom
+                ? std::clamp((bass - BASS_ZOOM_THRESHOLD) / (1.0f - BASS_ZOOM_THRESHOLD), 0.0f, 1.0f) : 0.0f;
             const float dt = static_cast<float>(std::clamp(frameDtMs, 0.0, 100.0));
             const float tau = (target > bassZoom) ? BASS_ZOOM_ATTACK_MS : BASS_ZOOM_RELEASE_MS;
             bassZoom += (target - bassZoom) * (1.0f - std::exp(-dt / tau));
@@ -688,9 +902,71 @@ GameScene playGame(SDL_Window* window, SDL_Renderer* renderer, const std::string
             const SDL_FRect dst = {SCREEN_W * 0.5f * (1.0f - scale), SCREEN_H * 0.5f * (1.0f - scale),
                                    SCREEN_W * scale, SCREEN_H * scale};
             SDL_RenderCopyF(renderer, sceneTex, nullptr, &dst);
+
+            // 画面の端のぼかし（ズームしているときだけ）
+            if(blurTex && blurMaskTex && bassZoom > 0.01f){
+                // ① blurTex に、大きさを少しずつ変えた sceneTex を重ねる（k 枚目は 1/(k+1) の濃さ → 全部の平均になる）
+                SDL_SetRenderTarget(renderer, blurTex);
+                for(int k = 0; k < BASS_BLUR_COPIES; k++){
+                    const float sk = scale * (1.0f + BASS_BLUR_SPREAD * bassZoom * (k + 1) / BASS_BLUR_COPIES);
+                    const SDL_FRect d = {SCREEN_W * 0.5f * (1.0f - sk), SCREEN_H * 0.5f * (1.0f - sk),
+                                         SCREEN_W * sk, SCREEN_H * sk};
+                    SDL_SetTextureBlendMode(sceneTex, k == 0 ? SDL_BLENDMODE_NONE : SDL_BLENDMODE_BLEND);
+                    SDL_SetTextureAlphaMod(sceneTex, static_cast<Uint8>(255 / (k + 1)));
+                    SDL_RenderCopyF(renderer, sceneTex, nullptr, &d);
+                }
+                SDL_SetTextureBlendMode(sceneTex, SDL_BLENDMODE_BLEND);  // 元に戻す（作ったときの初期値）
+                SDL_SetTextureAlphaMod(sceneTex, 255);
+
+                // ② 透明度をマスクで置きかえる（真ん中 = 透明、端 = 不透明）
+                SDL_RenderCopy(renderer, blurMaskTex, nullptr, nullptr);
+
+                // ③ 画面に戻って、ズームの強さに合わせた濃さで重ねる
+                SDL_SetRenderTarget(renderer, nullptr);
+                SDL_SetTextureAlphaMod(blurTex, static_cast<Uint8>(BASS_BLUR_MAX_ALPHA * std::min(bassZoom, 1.0f)));
+                SDL_RenderCopy(renderer, blurTex, nullptr, nullptr);
+            }
         }
 
-        pauseMenu.draw(renderer, menuFont, font, labelFont, realMs);
+        // 曲の進み具合のバー（画面の上の端。低音のズームの後に描くので、ズームで画面の外に押し出されない）
+        if(songLengthMs > 0.0){
+            const double progress = std::clamp(musicTimeExact / songLengthMs, 0.0, 1.0);
+            const float w = static_cast<float>(SCREEN_W * progress);
+            if(w > 0.0f){
+                SDL_SetRenderDrawBlendMode(renderer, SDL_BLENDMODE_BLEND);
+                SDL_SetRenderDrawColor(renderer, PROGRESS_BAR_COLOR.r, PROGRESS_BAR_COLOR.g, PROGRESS_BAR_COLOR.b, PROGRESS_BAR_COLOR.a);
+                const SDL_FRect bar = {0.0f, 0.0f, w, static_cast<float>(PROGRESS_BAR_H)};
+                SDL_RenderFillRectF(renderer, &bar);
+            }
+        }
+
+        // 左下の難易度・右下の曲名（低音のズームの後に描くので、ズームで画面の外に押し出されない）
+        infoHud.draw(renderer, std::clamp((globalMs - sceneStartMs - HUD_START) / HUD_MS, 0.0, 1.0));
+
+        // ポーズメニュー：開いた直後はグリッチで出す
+        if(pauseMenu.isActive() && realMs - pauseOpenedMs < PAUSE_GLITCH_MS){
+            if(!pauseLayer){
+                pauseLayer = SDL_CreateTexture(renderer, SDL_PIXELFORMAT_RGBA8888, SDL_TEXTUREACCESS_TARGET, SCREEN_W, SCREEN_H);
+            }
+            if(pauseLayer){
+                SDL_Texture* prevTarget = SDL_GetRenderTarget(renderer);
+                SDL_SetRenderTarget(renderer, pauseLayer);
+                SDL_SetRenderDrawBlendMode(renderer, SDL_BLENDMODE_NONE);
+                SDL_SetRenderDrawColor(renderer, 0, 0, 0, 0);
+                SDL_RenderClear(renderer);
+                SDL_SetRenderDrawBlendMode(renderer, SDL_BLENDMODE_BLEND);
+                pauseMenu.draw(renderer, menuFont, font, labelFont, realMs);
+                SDL_SetRenderTarget(renderer, prevTarget);
+                const SDL_Rect full = {0, 0, SCREEN_W, SCREEN_H};
+                drawGlitchTexture(renderer, pauseLayer, full, (realMs - pauseOpenedMs) / PAUSE_GLITCH_MS);
+            }
+            else{
+                pauseMenu.draw(renderer, menuFont, font, labelFont, realMs);   // 絵が作れない環境：そのまま
+            }
+        }
+        else{
+            pauseMenu.draw(renderer, menuFont, font, labelFont, realMs);
+        }
         SDL_RenderPresent(renderer);
 
         #if PLAY_PROFILE
@@ -730,7 +1006,20 @@ GameScene playGame(SDL_Window* window, SDL_Renderer* renderer, const std::string
     outResult.isAutoplay = isAutoplay;
 
     visualizer.detach();
+
+    // 集めた Cube を持ち物に足して保存する：曲を最後まで遊んでリザルトへ進んだときだけ
+    //   リトライ・リタイア（・遊んでいる途中でゲームを閉じたとき）は、このプレイで集めた分は増えない
+    //   オートプレイ・譜面エディタのテストプレイも保存しない
+    if(nextScene == GameScene::Result && !isAutoplay && test == nullptr && cubeHud.earned > 0){
+        saveCubeWallet(cubeHud.base + cubeHud.earned);
+    }
+    if(cubeHud.label) SDL_DestroyTexture(cubeHud.label);
     if(sceneTex) SDL_DestroyTexture(sceneTex);
+    if(blurTex) SDL_DestroyTexture(blurTex);
+    if(blurMaskTex) SDL_DestroyTexture(blurMaskTex);
+    if(laneLayerTex) SDL_DestroyTexture(laneLayerTex);
+    if(pauseLayer) SDL_DestroyTexture(pauseLayer);
+    infoHud.destroy();
 
     Mix_HaltMusic();
     digitFont.destroy();

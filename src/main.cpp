@@ -211,6 +211,14 @@ int main(){
 
             case GameScene::Title:{
                 currentScene = titleScene(window, renderer);
+                // タイトル画面を進めたら、選曲画面ではなくメニュー画面へ（Title.cpp が Select を返しても、ここでメニューに回す）
+                if(currentScene == GameScene::Select) currentScene = GameScene::Menu;
+                break;
+            }
+
+            // メニュー画面（MenuScene.cpp）：PLAY → 選曲画面、CREATE → 譜面作成（新しい譜面）、ESC → タイトル
+            case GameScene::Menu:{
+                currentScene = menuScene(window, renderer, playerSettings, selectedScore);
                 break;
             }
 

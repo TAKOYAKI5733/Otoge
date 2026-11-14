@@ -45,16 +45,22 @@ public:
     // 譜面のパスからジャケット絵を探して、ぼかした絵を作る。見つからなければ灰色だけになる
     void load(SDL_Renderer* renderer, const std::string& scorePath){
         release();
+        jacket_ = buildBlurredJacket(renderer, jacketCandidates(scorePath));
+    }
+
+    // ジャケット絵の場所の候補を順に試し、最初に読めた絵から「ぼかした小さな絵」を作る（読めなければ nullptr）
+    //   選曲画面の背景（SelectBackground.h）も、これで同じぼかしを作る
+    static SDL_Texture* buildBlurredJacket(SDL_Renderer* renderer, const std::vector<std::string>& candidates){
         SDL_Surface* src = nullptr;
-        for(const std::string& path : jacketCandidates(scorePath)){
+        for(const std::string& path : candidates){
             src = IMG_Load(path.c_str());
             if(src) break;
         }
-        if(!src) return;
+        if(!src) return nullptr;
 
         SDL_Surface* rgba = SDL_ConvertSurfaceFormat(src, SDL_PIXELFORMAT_RGBA32, 0);
         SDL_FreeSurface(src);
-        if(!rgba) return;
+        if(!rgba) return nullptr;
 
         std::vector<float> img = shrinkAverage(rgba, BLUR_SIZE);   // RGBA を 0〜1 の小数で
         SDL_FreeSurface(rgba);
@@ -62,7 +68,7 @@ public:
 
         // 小さな絵を作る：色を少し暗くし、真ん中から離れるほど透明に
         SDL_Surface* out = SDL_CreateRGBSurfaceWithFormat(0, BLUR_SIZE, BLUR_SIZE, 32, SDL_PIXELFORMAT_RGBA32);
-        if(!out) return;
+        if(!out) return nullptr;
         Uint8* px = static_cast<Uint8*>(out->pixels);
         const float c = (BLUR_SIZE - 1) * 0.5f;
         for(int y = 0; y < BLUR_SIZE; y++){
@@ -79,13 +85,22 @@ public:
                 d[3] = static_cast<Uint8>(std::clamp(s[3] * edge, 0.0f, 1.0f) * 255.0f);
             }
         }
-        jacket_ = SDL_CreateTextureFromSurface(renderer, out);
+        SDL_Texture* tex = SDL_CreateTextureFromSurface(renderer, out);
         SDL_FreeSurface(out);
-        if(jacket_){
-            SDL_SetTextureBlendMode(jacket_, SDL_BLENDMODE_BLEND);
-            SDL_SetTextureScaleMode(jacket_, SDL_ScaleModeLinear);   // 大きく引き伸ばすときに、なめらかに（＝さらにぼける）
-            SDL_SetTextureAlphaMod(jacket_, JACKET_ALPHA);
+        if(tex){
+            SDL_SetTextureBlendMode(tex, SDL_BLENDMODE_BLEND);
+            SDL_SetTextureScaleMode(tex, SDL_ScaleModeLinear);   // 大きく引き伸ばすときに、なめらかに（＝さらにぼける）
+            SDL_SetTextureAlphaMod(tex, JACKET_ALPHA);
         }
+        return tex;
+    }
+
+    // ぼかした絵を、画面の真ん中に JACKET_DRAW_SIZE の大きさで貼る
+    static void drawBlurredJacket(SDL_Renderer* renderer, SDL_Texture* tex){
+        if(!tex) return;
+        SDL_Rect dst = {(SCREEN_W - JACKET_DRAW_SIZE) / 2, (SCREEN_H - JACKET_DRAW_SIZE) / 2,
+                        JACKET_DRAW_SIZE, JACKET_DRAW_SIZE};
+        SDL_RenderCopy(renderer, tex, nullptr, &dst);
     }
 
     void release(){
@@ -102,15 +117,8 @@ public:
         SDL_Rect full = {0, 0, SCREEN_W, SCREEN_H};
         SDL_RenderFillRect(renderer, &full);
 
-        if(jacket_){
-            SDL_Rect dst = {(SCREEN_W - JACKET_DRAW_SIZE) / 2, (SCREEN_H - JACKET_DRAW_SIZE) / 2,
-                            JACKET_DRAW_SIZE, JACKET_DRAW_SIZE};
-            SDL_RenderCopy(renderer, jacket_, nullptr, &dst);
-        }
+        drawBlurredJacket(renderer, jacket_);
     }
-
-private:
-    SDL_Texture* jacket_ = nullptr;
 
     // 選曲画面と同じ順番で、ジャケット絵の場所の候補を作る
     static std::vector<std::string> jacketCandidates(const std::string& scorePath){
@@ -132,6 +140,9 @@ private:
         out.push_back("jackets/" + title + ".jpg");
         return out;
     }
+
+private:
+    SDL_Texture* jacket_ = nullptr;
 
     // 周りの色を平均しながら size × size に縮める（大きな絵を小さくするとき、色のちらつきが出ない）
     static std::vector<float> shrinkAverage(SDL_Surface* s, int size){

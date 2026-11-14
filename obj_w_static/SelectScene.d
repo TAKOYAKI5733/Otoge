@@ -6,9 +6,11 @@ obj_w_static/SelectScene.o: src/SelectScene.cpp src/GameCommon.h \
  src/Play/TiltProjection.h src/Play/loadScore.h src/Editortempo.h \
  src/Play/updateAndRenderTexture.h src/Play/renderGame.h \
  src/Play/tutorialOverlay.h src/Play/tutorialAnim.h src/Play/visualizer.h \
- src/Play/LaneTilt.h src/Play/PlayBackground.h src/Play/updateSpeed.h \
- src/Play/noteJudge.h src/JacketSpectrum.h src/Settingspanel.h \
- src/Displaymode.h src/TapSound.h src/SongPreview.h
+ src/Play/LaneTilt.h src/Play/PlayBackground.h src/Play/GlitchLayer.h \
+ src/Play/updateSpeed.h src/Play/noteJudge.h src/JacketSpectrum.h \
+ src/Settingspanel.h src/Displaymode.h src/TapSound.h src/SongPreview.h \
+ src/SelectBackground.h src/Play/CubeWallet.h src/CubeShowcase.h \
+ src/QuarryReveal.h
 src/GameCommon.h:
 src/Scene.h:
 src/InputBinding.h:
@@ -33,6 +35,7 @@ src/Play/tutorialAnim.h:
 src/Play/visualizer.h:
 src/Play/LaneTilt.h:
 src/Play/PlayBackground.h:
+src/Play/GlitchLayer.h:
 src/Play/updateSpeed.h:
 src/Play/noteJudge.h:
 src/JacketSpectrum.h:
@@ -40,3 +43,7 @@ src/Settingspanel.h:
 src/Displaymode.h:
 src/TapSound.h:
 src/SongPreview.h:
+src/SelectBackground.h:
+src/Play/CubeWallet.h:
+src/CubeShowcase.h:
+src/QuarryReveal.h:

@@ -15,6 +15,11 @@
 //    描画側は毎フレーム takePresses() で受け取り、曲の時刻に直して判定に使う（noteJudge.h）。
 //    → fps に関係なく、押した時刻のずれが 1〜2ms になる
 //
+//  ■ 離した瞬間・押している状態も、同じスレッドで見る
+//    ロングのホールドは「押している状態」で判定する。押した瞬間はこのスレッド（GetAsyncKeyState）、
+//    押している状態は SDL のキーの状態、と見ている所が違うと、2 つが食い違ったときにロングが途切れてしまう。
+//    → 押している状態（laneDown）と離した瞬間（takeReleases）も、このスレッドで記録して渡す
+//
 //  ■ 使えないもの
 //    ・コントローラーのボタン・十字キー・軸：SDL のコントローラーは描画側のスレッドでしか読めないので、今まで通りフレームごと
 //    ・Linux などの Windows 以外：今まで通りフレームごと
@@ -51,6 +56,8 @@ public:
         for(int i = 0; i < LANE_COUNT; i++){
             vk_[i] = toVirtualKey(bindings[i]);
             pending_[i] = 0;
+            pendingRelease_[i] = 0;
+            down_[i].store(false);
             if(vk_[i] != 0) any = true;
         }
 #if defined(_WIN32)
@@ -78,6 +85,20 @@ public:
 #endif
     }
 
+    // レーン i のキーを、今このスレッドで「押している」と見ているか
+    bool laneDown(int i) const{
+        return down_[i].load(std::memory_order_relaxed);
+    }
+
+    // 前に呼んでから今までに離された瞬間（レーンごとに一番最後の1回）を受け取る。0 = 離されていない
+    void takeReleases(Uint64 out[LANE_COUNT]){
+        std::lock_guard<std::mutex> lock(mutex_);
+        for(int i = 0; i < LANE_COUNT; i++){
+            out[i] = pendingRelease_[i];
+            pendingRelease_[i] = 0;
+        }
+    }
+
     // 前に呼んでから今までに押された瞬間（レーンごとに一番最初の1回）を受け取る。
     //   out[i] = 押した瞬間の SDL_GetPerformanceCounter() の値。押されていなければ 0
     void takePresses(Uint64 out[LANE_COUNT]){
@@ -91,6 +112,8 @@ public:
 private:
     int vk_[LANE_COUNT] = {};            // レーンごとの Windows の仮想キーコード（0 = このスレッドでは見ない）
     Uint64 pending_[LANE_COUNT] = {};    // まだ描画側が受け取っていない「押した瞬間」（0 = なし）
+    Uint64 pendingRelease_[LANE_COUNT] = {};   // まだ受け取っていない「離した瞬間」（0 = なし）
+    std::atomic<bool> down_[LANE_COUNT] = {};  // 今押しているか（このスレッドが書き、描画側が読む）
     std::mutex mutex_;
     std::atomic<bool> running_{false};
     std::thread thread_;
@@ -104,6 +127,7 @@ private:
         bool prev[LANE_COUNT] = {};
         for(int i = 0; i < LANE_COUNT; i++){
             if(vk_[i] != 0) prev[i] = (GetAsyncKeyState(vk_[i]) & 0x8000) != 0;   // 始めた時点で押しっぱなしのキーは数えない
+            down_[i].store(prev[i]);
         }
 
         while(running_){
@@ -115,6 +139,12 @@ private:
                     std::lock_guard<std::mutex> lock(mutex_);
                     if(pending_[i] == 0) pending_[i] = t;          // 1フレームの間に何度も押されたら、最初の1回を使う
                 }
+                else if(!down && prev[i]){
+                    const Uint64 t = SDL_GetPerformanceCounter();   // 離した瞬間の時刻
+                    std::lock_guard<std::mutex> lock(mutex_);
+                    pendingRelease_[i] = t;                         // 1フレームの間に何度も離されたら、最後の1回を使う
+                }
+                down_[i].store(down, std::memory_order_relaxed);
                 prev[i] = down;
             }
             // main.cpp の timeBeginPeriod(1) により、Sleep(1) は約 1ms で戻ってくる

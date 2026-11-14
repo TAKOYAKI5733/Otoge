@@ -38,6 +38,7 @@ struct TiltProjection{
     double fadeTopY = 0.0;   // ぼかし：一番奥の画面の y（ここで透明）
     double fadeEndY = 0.0;   // ぼかし：ここから下は不透明
     bool   fade = false;
+    double offsetY = 0.0;    // 出てくる画面の y を全部この分だけ下にずらす（レーンの左右の傾き用に、上下に余分に描くとき）
     SDL_Texture* feather = nullptr;   // なめらかな線を描くための、両端が透明な小さな画像
 
     // 描く側の座標 (x, y) → 画面の座標 (X, Y)。scale は「その場所で物が何倍に見えるか」、alpha はぼかしの濃さ(0〜1)
@@ -46,14 +47,14 @@ struct TiltProjection{
         d = std::max(d, dMin);
         const double s = cameraDist / (cameraDist + d * sinT);
         X = static_cast<float>(cx + (x - cx) * s * zoom);
-        Y = static_cast<float>(pivot - d * cosT * s * zoom);
+        Y = static_cast<float>(pivot - d * cosT * s * zoom + offsetY);
         scale = static_cast<float>(s * zoom);
         alpha = fadeAt(Y);
     }
 
     // 画面の y → 描く側の y（map の逆）。帯に分けて描くとき、画面の上で等間隔に分けるのに使う
     double unmapY(double Y) const{
-        const double Yr = (pivot - Y) / zoom;
+        const double Yr = (pivot - (Y - offsetY)) / zoom;
         const double d  = Yr * cameraDist / (cameraDist * cosT - Yr * sinT);
         return pivot - d + extra;
     }

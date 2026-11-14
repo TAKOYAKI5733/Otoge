@@ -58,9 +58,11 @@ public:
     // ここから後の描画を、傾けて描くようにする。
     //   戻り値: 描く側が y 座標をずらす量（extra）。傾けないときは -1（いつも通りに描く）
     //   fadeRatio : レーンの奥の端をぼかす割合（0 = ぼかさない）
-    int begin(SDL_Renderer* renderer, double tiltDeg, double pivotY, double fadeRatio = 0.0, double centerX = SCREEN_W / 2.0){
+    //   offsetY：出てくる画面の y を全部この分だけ下にずらす（レーンの左右の傾きで、上下に余分に描くとき。ふだんは 0）
+    int begin(SDL_Renderer* renderer, double tiltDeg, double pivotY, double fadeRatio = 0.0, double centerX = SCREEN_W / 2.0,
+              double offsetY = 0.0){
         if(!active(tiltDeg)) return -1;
-        ensureResources(renderer, tiltDeg, pivotY);
+        ensureResources(renderer, tiltDeg, pivotY, offsetY);
 
         const double th = tiltDeg * 3.14159265358979 / 180.0;
         proj_.cameraDist = lanetilt::CAMERA_DIST;
@@ -73,6 +75,7 @@ public:
         // カメラの後ろ（C + d·sinθ ≦ 0）に回り込む手前で止める。そこまで手前の物は画面の外なので見た目は変わらない
         proj_.dMin  = -0.7 * lanetilt::CAMERA_DIST / std::max(proj_.sinT, 1e-6);
         proj_.feather = featherTex_;
+        proj_.offsetY = offsetY;
 
         // ぼかし：延長したレーンの一番奥（y = 0）と一番手前（y = textureLength）が画面のどこに来るかから決める
         proj_.fade = false;
@@ -95,20 +98,27 @@ public:
     //   lineXs     : 区切り線の x（ずらす前の、画面の x）。lineCount 本
     //   lineStartY : 区切り線を描き始める y（描く側の座標）。レーンカバーの壁の下の端を渡すと、壁の上には線を描かない
     //   （pivotY・centerX は begin() で渡した値を使う。引数は前の版と同じ形にしておくためのもの）
+    //   lineColor：区切り線の色。rgbSplitPx が 0 より大きいときは、赤と青の色ずれの線を左右に薄く重ねる（ホログラムのグリッチ）
     void end(SDL_Renderer* renderer, double /*tiltDeg*/, double /*pivotY*/, double /*centerX*/,
-             const float* lineXs, int lineCount, double lineStartY = 0.0){
+             const float* lineXs, int lineCount, double lineStartY = 0.0,
+             SDL_Color lineColor = lanetilt::LINE_COLOR, float rgbSplitPx = 0.0f, Uint8 rgbSplitAlpha = 0){
         if(g_tiltProj == &proj_){
             // 線は「描き始め → ぼかしが終わる所 → 手前の端」の2本に分けて描く（ぼかしの濃さを正しく付けるため）
             const double yLen  = textureLength();
             const double yStart = std::clamp(lineStartY, 0.0, yLen);
             const double yFade = std::max(yStart, proj_.fade ? std::clamp(proj_.unmapY(proj_.fadeEndY), 0.0, yLen) : 0.0);
-            for(int i = 0; i < lineCount; i++){
+            auto drawAt = [&](float x, SDL_Color c){
                 if(proj_.fade && yFade > yStart + 0.5){
-                    tiltLine(renderer, lineXs[i], static_cast<float>(yStart), lineXs[i], static_cast<float>(yFade),
-                             lanetilt::LINE_WIDTH, lanetilt::LINE_COLOR);
+                    tiltLine(renderer, x, static_cast<float>(yStart), x, static_cast<float>(yFade), lanetilt::LINE_WIDTH, c);
                 }
-                tiltLine(renderer, lineXs[i], static_cast<float>(yFade), lineXs[i], static_cast<float>(yLen),
-                         lanetilt::LINE_WIDTH, lanetilt::LINE_COLOR);
+                tiltLine(renderer, x, static_cast<float>(yFade), x, static_cast<float>(yLen), lanetilt::LINE_WIDTH, c);
+            };
+            for(int i = 0; i < lineCount; i++){
+                if(rgbSplitPx > 0.0f){
+                    drawAt(lineXs[i] - rgbSplitPx, SDL_Color{255, 40, 60, rgbSplitAlpha});
+                    drawAt(lineXs[i] + rgbSplitPx, SDL_Color{40, 200, 255, rgbSplitAlpha});
+                }
+                drawAt(lineXs[i], lineColor);
             }
         }
         g_tiltProj = nullptr;
@@ -149,10 +159,11 @@ public:
     }
 
     // 倒して zoom 倍にしたレーンの奥の端が画面の上（y = 0）に届くには、画面の上の端より何 px 先まで描けばよいか
-    static int extraFor(double tiltDeg, double pivotY){
+    //   margin：画面の上の端より、さらにこの px 上まで届かせる（レーンの左右の傾きで上下に余分に描くとき）
+    static int extraFor(double tiltDeg, double pivotY, double margin = 0.0){
         const double th = tiltDeg * 3.14159265358979 / 180.0;
         const double C  = lanetilt::CAMERA_DIST;
-        const double Y  = pivotY / zoomFor(tiltDeg);
+        const double Y  = (pivotY + margin) / zoomFor(tiltDeg);
         const double denom = C * std::cos(th) - Y * std::sin(th);
         if(denom <= 1.0) return lanetilt::MAX_EXTRA;
         const double d = Y * C / denom;
@@ -161,10 +172,11 @@ public:
     }
 
     // 倒して zoom 倍にしたレーンの手前の端が画面の下（y = SCREEN_H）に届くには、画面の下の端より何 px 先まで描けばよいか
-    static int extraBottomFor(double tiltDeg, double pivotY){
+    //   margin：画面の下の端より、さらにこの px 下まで届かせる
+    static int extraBottomFor(double tiltDeg, double pivotY, double margin = 0.0){
         const double th = tiltDeg * 3.14159265358979 / 180.0;
         const double C  = lanetilt::CAMERA_DIST;
-        const double Y  = -(SCREEN_H - pivotY) / zoomFor(tiltDeg);
+        const double Y  = -(SCREEN_H - pivotY + margin) / zoomFor(tiltDeg);
         const double d  = Y * C / (C * std::cos(th) - Y * std::sin(th));
         const int extra = static_cast<int>(std::ceil((pivotY - d) - SCREEN_H)) + 8;
         return std::clamp(extra, 0, lanetilt::MAX_EXTRA);
@@ -176,12 +188,14 @@ private:
     int    extra_ = 0;
     int    extraBottom_ = 0;
     double texDeg_ = -1.0;
+    double texMargin_ = 0.0;   // extra_ を計算したときの「上下に余分に届かせる量」
 
-    void ensureResources(SDL_Renderer* renderer, double tiltDeg, double pivotY){
-        if(texDeg_ != tiltDeg){
-            extra_       = extraFor(tiltDeg, pivotY);
-            extraBottom_ = extraBottomFor(tiltDeg, pivotY);
+    void ensureResources(SDL_Renderer* renderer, double tiltDeg, double pivotY, double margin){
+        if(texDeg_ != tiltDeg || texMargin_ != margin){
+            extra_       = extraFor(tiltDeg, pivotY, margin);
+            extraBottom_ = extraBottomFor(tiltDeg, pivotY, margin);
             texDeg_      = tiltDeg;
+            texMargin_   = margin;
         }
         if(featherTex_) return;
 

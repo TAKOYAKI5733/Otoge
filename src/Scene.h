@@ -18,7 +18,8 @@ enum class GameScene{
     Tutorial,
     Calibration,
     KeyConfig,
-    NoteSetting   // ノーツの詳細設定（NoteSettingScene.cpp）
+    NoteSetting,  // ノーツの詳細設定（NoteSettingScene.cpp）
+    Menu          // メニュー画面（MenuScene.cpp）：タイトルの次。PLAY / SHOP / STORY / CREATE / SETTING
 };
 
 struct TimingSample{
@@ -82,6 +83,8 @@ struct PlayerSettings{
     int laneCoverPercent = 0;    // レーンの奥を壁で隠す割合（%）。0 = 隠さない
     bool streamMode = false;     // 配信モード（OBS などで録画・配信しやすくする。Displaymode.h）
     int keyBeamPercent = KEY_BEAM_PERCENT_DEFAULT;   // キービームの長さ（%）。0 = 出さない
+    bool bassZoom = true;        // 低音に合わせてプレイ画面を少しズームする（PlayScene.cpp）
+    bool laneRoll = true;        // 押しているロングの左右の割合で、レーンを左右に傾ける（PlayScene.cpp / renderGame.h）
 };
 
 struct PlayTestOptions{
@@ -99,6 +102,8 @@ GameScene resultScene(SDL_Window* window, SDL_Renderer* renderer, const ResultDa
 GameScene settingScene(SDL_Window* window, SDL_Renderer* renderer, PlayerSettings& playerSettings, SDL_Texture* targetTex = nullptr);
 GameScene calibrationScene(SDL_Window* window, SDL_Renderer* renderer, PlayerSettings& settings);
 GameScene titleScene(SDL_Window* window, SDL_Renderer* renderer);
+// メニュー画面（MenuScene.cpp）。CREATE を選んだときは outSelectedScorePath を空にして ChartCreate を返す
+GameScene menuScene(SDL_Window* window, SDL_Renderer* renderer, PlayerSettings& playerSettings, std::string& outSelectedScorePath);
 GameScene keyConfigScene(SDL_Window* window, SDL_Renderer* renderer, PlayerSettings& settings);
 GameScene noteSettingScene(SDL_Window* window, SDL_Renderer* renderer, PlayerSettings& playerSettings);
 

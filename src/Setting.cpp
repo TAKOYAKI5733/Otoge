@@ -43,6 +43,9 @@ void loadPlayerSettings(PlayerSettings& settings){
     settings.streamMode = j.value("streamMode", false);
     // 古い settings.json には無いので、無ければ今までの長さ（62 %）
     settings.keyBeamPercent = std::clamp(j.value("keyBeamPercent", KEY_BEAM_PERCENT_DEFAULT), KEY_BEAM_PERCENT_MIN, KEY_BEAM_PERCENT_MAX);
+    // 古い settings.json には無いので、無ければ ON
+    settings.bassZoom = j.value("bassZoom", true);
+    settings.laneRoll = j.value("laneRoll", true);
     g_streamMode = settings.streamMode;   // applyWindowMode（Displaymode.h）が見る値。起動時の表示モードにも反映される
     settings.laneBindings = defaultLaneBindings();
     if(j.contains("keyBindings") && j["keyBindings"].is_array()){
@@ -72,6 +75,8 @@ void savePlayerSettings(const PlayerSettings& settings){
     j["laneCoverPercent"] = settings.laneCoverPercent;
     j["streamMode"] = settings.streamMode;
     j["keyBeamPercent"] = settings.keyBeamPercent;
+    j["bassZoom"] = settings.bassZoom;
+    j["laneRoll"] = settings.laneRoll;
     json keys = json::array();
     for(const auto& b : settings.laneBindings) keys.push_back(bindingToString(b));
     j["keyBindings"] = keys;

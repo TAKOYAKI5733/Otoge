@@ -1,4 +1,5 @@
 #include "GameCommon.h"
+#include "ScoreMirror.h"   // 保存した譜面を、ビルド用の scores フォルダにも書く
 #include <nlohmann/json.hpp>
 #include <limits>
 #include <cfloat>
@@ -147,10 +148,14 @@ inline bool saveChart(const std::string& path, const ChartMeta& meta, const std:
     }
     j["difficulties"] = diffArr;
 
+    const std::string content = j.dump(2);
     std::ofstream out(toUtf8Path(path));
     if(out.is_open()){
-        out << j.dump(2);
+        out << content;
+        out.close();
         printf("[譜面エディタ] 保存完了 : %s\n", path.c_str());
+        // ビルド用の scores フォルダ（プロジェクトの scores/ など）があれば、そこにも同じ内容を書く（ScoreMirror.h）
+        mirrorScoreToSource(toUtf8Path(path), content);
         return true;
     }
     else{
@@ -880,7 +885,7 @@ GameScene chartCreateScene(SDL_Window* window, SDL_Renderer* renderer, std::stri
     {
         ImFontGlyphRangesBuilder builder;
         builder.AddRanges(io.Fonts->GetGlyphRangesDefault());
-        builder.AddText("合計ノーツ数個最大コンボ");
+        builder.AddText("単発ドラッグレーンロング合計ノーツ数個最大コンボ");
         builder.BuildRanges(&infoGlyphRanges);
     }
     ImFont* infoFontBig = io.Fonts->AddFontFromFileTTF("fonts/prac.ttf", 56.0f, &font_cfg, infoGlyphRanges.Data);
@@ -2972,11 +2977,11 @@ GameScene chartCreateScene(SDL_Window* window, SDL_Renderer* renderer, std::stri
 
                         struct Row{ const char* label; int value; ImU32 color; };
                         const Row rows[] = {
-                            {"TAP",           cNormal,   IM_COL32(255, 255, 255, 255)},
-                            {"DRAG",       cDrag,     IM_COL32(250, 250, 150, 255)},
-                            {"LANE",         cLane,     IM_COL32(255,  80,  80, 255)},
-                            {"TAP LONG",         cLong,     IM_COL32(200, 200, 225, 255)},
-                            {"DRAG LONG", cDragLong, IM_COL32(220, 220, 120, 255)},
+                            {"単発",           cNormal,   IM_COL32(255, 255, 255, 255)},
+                            {"ドラッグ",       cDrag,     IM_COL32(250, 250, 150, 255)},
+                            {"レーン",         cLane,     IM_COL32(255,  80,  80, 255)},
+                            {"ロング",         cLong,     IM_COL32(200, 200, 225, 255)},
+                            {"ドラッグロング", cDragLong, IM_COL32(220, 220, 120, 255)},
                         };
                         constexpr int ROW_COUNT = 5;
 

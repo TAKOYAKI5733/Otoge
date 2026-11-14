@@ -1,8 +1,9 @@
 {
+  "bassZoom": true,
   "bgmVolume": 70,
   "fpsAuto": false,
-  "fpsCap": 165,
-  "keyBeamPercent": 100,
+  "fpsCap": 0,
+  "keyBeamPercent": 62,
   "keyBindings": [
     "key:26",
     "key:8",
@@ -12,15 +13,16 @@
     "key:18"
   ],
   "laneCoverPercent": 0,
-  "laneTiltDeg": 60.0,
-  "noteSpeedRate": 5.0,
+  "laneRoll": true,
+  "laneTiltDeg": 0.0,
+  "noteSpeedRate": 1.0,
   "offsetMs": 0.0,
   "seVolume": 100,
   "showFastLate": true,
   "showTimingMs": false,
-  "streamMode": false,
-  "tapSound": "TAP_S.wav",
+  "streamMode": true,
+  "tapSound": "",
   "visualOffsetMs": 0.0,
-  "vsync": false,
+  "vsync": true,
   "windowMode": 2
 }
