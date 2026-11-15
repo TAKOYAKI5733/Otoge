@@ -7,9 +7,10 @@ obj_w_static/MenuScene.o: src/MenuScene.cpp src/GameCommon.h src/Scene.h \
  nlohmann/json.hpp src/Play/updateAndRenderTexture.h \
  src/Play/renderGame.h src/Play/tutorialOverlay.h src/Play/tutorialAnim.h \
  src/Play/visualizer.h src/Play/LaneTilt.h src/Play/PlayBackground.h \
- src/Play/GlitchLayer.h src/Play/updateSpeed.h src/Play/noteJudge.h \
- src/CubeShowcase.h src/QuarryReveal.h src/Settingspanel.h \
- src/Displaymode.h src/TapSound.h
+ src/Play/FalseNotes.h src/Play/BSpeedEvent.h src/Play/GlitchLayer.h \
+ src/Play/updateSpeed.h src/Play/noteJudge.h src/CubeShowcase.h \
+ src/QuarryReveal.h src/Settingspanel.h src/Displaymode.h src/TapSound.h \
+ src/HoloWindow.h
 src/GameCommon.h:
 src/Scene.h:
 src/InputBinding.h:
@@ -34,6 +35,8 @@ src/Play/tutorialAnim.h:
 src/Play/visualizer.h:
 src/Play/LaneTilt.h:
 src/Play/PlayBackground.h:
+src/Play/FalseNotes.h:
+src/Play/BSpeedEvent.h:
 src/Play/GlitchLayer.h:
 src/Play/updateSpeed.h:
 src/Play/noteJudge.h:
@@ -42,3 +45,4 @@ src/QuarryReveal.h:
 src/Settingspanel.h:
 src/Displaymode.h:
 src/TapSound.h:
+src/HoloWindow.h:

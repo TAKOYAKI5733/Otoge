@@ -27,6 +27,7 @@
 #include "Play/Autoplay.h"
 #include "Play/LaneTilt.h"
 #include "TapSound.h"
+#include "HoloWindow.h"   // ウィンドウの見た目（Cube の色のホログラム・走査線・たまにグリッチ）
 
 #include <cmath>
 #include <cstdint>
@@ -57,8 +58,6 @@ namespace notesetting{
     inline constexpr SDL_Rect PANEL     = {40, 120, 460, 920};   // 10項目＋説明＋警告が入る高さ（下端 1040）
     inline constexpr int      ROW_TOP   = 120 + 90;
     inline constexpr int      ROW_H     = 66;
-    inline constexpr SDL_Color PANEL_FILL   = {10, 10, 20, 215};
-    inline constexpr SDL_Color PANEL_BORDER = {0, 200, 255, 255};
 }
 
 namespace{
@@ -167,7 +166,7 @@ const char* const ITEM_DESCRIPTIONS[ITEM_COUNT] = {
     "押したときの光がレーンの何 % まで届くか（0 % = 出さない）",
     "+ でノーツが早めに表示されます",
     "+ で判定が遅くなります（メトロノームとノーツの重なり方が変わります）",
-    "GOOD・BAD のとき FAST / LATE を出します",
+    "GOOD・FAIR のとき FAST / LATE を出します",
     "叩いたズレを ms で出します",
     "OFF にすると、自分のキーで叩けます",
     "120 BPM のメトロノームを鳴らします"
@@ -199,6 +198,7 @@ GameScene noteSettingScene(SDL_Window* window, SDL_Renderer* renderer, PlayerSet
     std::vector<KeyBeam> keyBeams;
     std::vector<TickParticle> tickParticles;
     JudgeEffect laneJudge[6] = {};
+    JudgeEffect lastTimedJudge = {};   // 最後に叩いた判定（±ms の表示を残すため。GameContext.h）
     std::vector<Note> notes;
     bool prevPressed[6] = {false, false, false, false, false, false};
     int comboCount = 0;
@@ -251,9 +251,10 @@ GameScene noteSettingScene(SDL_Window* window, SDL_Renderer* renderer, PlayerSet
     }
 
     // 判定文字・キーの文字（PlayScene と同じ作り方）
-    SDL_Surface* perfect = TTF_RenderUTF8_Blended(judgeFont, "PERFECT!!", {255, 215, 0, 255});
-    SDL_Surface* good    = TTF_RenderUTF8_Blended(judgeFont, "GOOD!",     {0, 255, 255, 255});
-    SDL_Surface* bad     = TTF_RenderUTF8_Blended(judgeFont, "BAD",       {90, 255, 25, 255});
+    SDL_Surface* sPerfect = renderSPerfectText(judgeFont);
+    SDL_Surface* perfect = TTF_RenderUTF8_Blended(judgeFont, "PERFECT!!", JUDGE_COLOR_PERFECT);
+    SDL_Surface* good    = TTF_RenderUTF8_Blended(judgeFont, "GOOD!",     JUDGE_COLOR_GOOD);
+    SDL_Surface* bad     = TTF_RenderUTF8_Blended(judgeFont, "FAIR",      JUDGE_COLOR_FAIR);   // 前の BAD
     SDL_Surface* miss    = TTF_RenderUTF8_Blended(judgeFont, "MISS...",   {100, 100, 100, 255});
     SDL_Surface* waku_init = SDL_CreateRGBSurfaceWithFormat(0, laneWidth * 6, TTF_FontHeight(font_init_waku), 32, SDL_PIXELFORMAT_RGBA32);
     for(int i = 0; i < 6; i++){
@@ -268,6 +269,7 @@ GameScene noteSettingScene(SDL_Window* window, SDL_Renderer* renderer, PlayerSet
     }
 
     Tex tex;
+    tex.sPerfect  = sPerfect ? SDL_CreateTextureFromSurface(renderer, sPerfect) : nullptr;
     tex.perfect   = SDL_CreateTextureFromSurface(renderer, perfect);
     tex.good      = SDL_CreateTextureFromSurface(renderer, good);
     tex.bad       = SDL_CreateTextureFromSurface(renderer, bad);
@@ -278,12 +280,13 @@ GameScene noteSettingScene(SDL_Window* window, SDL_Renderer* renderer, PlayerSet
     auto centered = [&](SDL_Surface* s){
         return SDL_Rect{SCREEN_W / 2 - s->w / 2, SCREEN_H / 2 - s->h / 2, s->w, s->h};
     };
+    sq.sPerfect = sPerfect ? centered(sPerfect) : centered(perfect);
     sq.perfect = centered(perfect);
     sq.good    = centered(good);
     sq.bad     = centered(bad);
     sq.miss    = centered(miss);
     sq.waku_init = {startX, (int)(SCREEN_H * (3.0 / 4.0) + 100), waku_init->w, waku_init->h};
-    for(SDL_Surface* s : {perfect, good, bad, miss, waku_init}) SDL_FreeSurface(s);
+    for(SDL_Surface* s : {sPerfect, perfect, good, bad, miss, waku_init}) if(s) SDL_FreeSurface(s);
     TTF_CloseFont(judgeFont);
 
     DigitFont digitFont;
@@ -502,6 +505,7 @@ GameScene noteSettingScene(SDL_Window* window, SDL_Renderer* renderer, PlayerSet
             .laneCoverRatio = edit.laneCoverPercent / 100.0,
             .keyBeamRatio = edit.keyBeamPercent / 100.0
         };
+        ctx.lastTimedJudge = &lastTimedJudge;
 
         // ===== 判定（PlayScene と同じ順番） =====
         if(autoplay) applyAutoplay(ctx, prevMusicTime);
@@ -520,14 +524,8 @@ GameScene noteSettingScene(SDL_Window* window, SDL_Renderer* renderer, PlayerSet
         renderGamePlayScreen(ctx, tex, sq, currentNoteSpeed, laneX, false, &boxFx);
 
         // 左のウィンドウ
+        drawHoloWindow(renderer, PANEL, 1.0, true, 3, 0x4E07u);
         SDL_SetRenderDrawBlendMode(renderer, SDL_BLENDMODE_BLEND);
-        SDL_SetRenderDrawColor(renderer, PANEL_FILL.r, PANEL_FILL.g, PANEL_FILL.b, PANEL_FILL.a);
-        SDL_RenderFillRect(renderer, &PANEL);
-        SDL_SetRenderDrawColor(renderer, PANEL_BORDER.r, PANEL_BORDER.g, PANEL_BORDER.b, PANEL_BORDER.a);
-        for(int t = 0; t < 3; t++){
-            SDL_Rect b = {PANEL.x + t, PANEL.y + t, PANEL.w - t * 2, PANEL.h - t * 2};
-            SDL_RenderDrawRect(renderer, &b);
-        }
         text.draw(rowFont, "ノーツの詳細設定", SDL_Color{0, 255, 255, 255}, PANEL.x + 24, PANEL.y + 44, 0);
 
         for(int i = 0; i < ITEM_COUNT; i++){
@@ -594,7 +592,7 @@ GameScene noteSettingScene(SDL_Window* window, SDL_Renderer* renderer, PlayerSet
     timingDisplay.destroy();
     digitFont.destroy();
     laneTilt.destroy();
-    for(SDL_Texture* t : {tex.perfect, tex.good, tex.bad, tex.miss, tex.waku_init}) if(t) SDL_DestroyTexture(t);
+    for(SDL_Texture* t : {tex.sPerfect, tex.perfect, tex.good, tex.bad, tex.miss, tex.waku_init}) if(t) SDL_DestroyTexture(t);
     for(TTF_Font* f : {font, font_init_waku, rowFont, smallFont, timingFont}) if(f) TTF_CloseFont(f);
     if(tap_sound) Mix_FreeChunk(tap_sound);
     if(tap_sound_c) Mix_FreeChunk(tap_sound_c);

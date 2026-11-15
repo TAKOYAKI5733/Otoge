@@ -9,6 +9,8 @@
 #include "Play/drawFrame.h"
 #include "Play/LaneTilt.h"
 #include "Play/PlayBackground.h"
+#include "Play/FalseNotes.h"      // false ノーツ（見た目だけのノーツ）
+#include "Play/BSpeedEvent.h"     // B_SpeedEvent：スクロール位置 S(t)
 #include "Play/GlitchLayer.h"      // 始まりの演出：レーンをグリッチで出す   // 背景：藍色を含んだ灰色 ＋ 真ん中にぼかしたジャケット
 
 constexpr SDL_Color kPerfectColor = {250, 250, 150, 255};
@@ -18,6 +20,79 @@ constexpr float kShadowSpread = 0.0f;
 // ===== 判定文字のポップ =====
 inline constexpr double JUDGE_POP_MS    = 120.0;   // 出てから元の大きさに収まるまで
 inline constexpr double JUDGE_POP_AMOUNT = 0.15;    // 出た瞬間の大きさ（元の何倍か）
+
+// ===== 判定文字のホログラム =====
+//   ・半透明：全体の濃さを JUDGE_HOLO_ALPHA にし、ほんの少し明るさをゆらす
+//   ・走査線：文字を JUDGE_HOLO_LINE px の横の帯に分けて貼り、1 本おきに薄くする（帯はゆっくり下へ流れる）
+//     → 線は文字の上にだけ出る（文字の無い所に線は描かれない）
+//   ・グリッチ：JUDGE_HOLO_GLITCH_SLOT_MS ごとに JUDGE_HOLO_GLITCH_CHANCE の確率で、
+//     文字の一部の帯が左右に数 px ずれ、赤と青の色ずれが重なる。出た直後の一瞬（JUDGE_HOLO_SPAWN_MS）も色ずれを出す
+inline constexpr double JUDGE_HOLO_ALPHA          = 0.78;
+inline constexpr int    JUDGE_HOLO_LINE           = 3;      // 走査線の帯の高さ(元の文字の px)
+inline constexpr double JUDGE_HOLO_LINE_DIM       = 0.55;   // 薄い方の帯の濃さ（濃い方を 1 として）
+inline constexpr double JUDGE_HOLO_LINE_SPEED     = 8.0;    // 走査線が流れる速さ(px/秒)
+inline constexpr Uint32 JUDGE_HOLO_GLITCH_SLOT_MS = 70;
+inline constexpr double JUDGE_HOLO_GLITCH_CHANCE  = 0.05;   // だいたい 1.4 秒に 1 回、70ms だけ
+inline constexpr double JUDGE_HOLO_SPAWN_MS       = 60.0;
+
+inline double judgeHoloHash(uint32_t x){
+    x ^= x >> 16; x *= 0x7feb352dU;
+    x ^= x >> 15; x *= 0x846ca68bU;
+    x ^= x >> 16;
+    return (x & 0xFFFFFF) / static_cast<double>(0x1000000);
+}
+
+// tex（元の大きさ srcW × srcH）を dst に、ホログラムの見た目で描く。sinceSpawnMs = 出てからの時間
+inline void drawHoloJudgeText(SDL_Renderer* r, SDL_Texture* tex, int srcW, int srcH, const SDL_Rect& dst, double sinceSpawnMs){
+    if(!tex || srcW <= 0 || srcH <= 0) return;
+    const Uint32 ticks = SDL_GetTicks();
+    const double t = ticks / 1000.0;
+    const double flick = 0.93 + 0.07 * std::sin(t * 11.0) * std::sin(t * 3.7);
+    const double baseA = 255.0 * JUDGE_HOLO_ALPHA * flick;
+    const double sy = static_cast<double>(dst.h) / srcH;
+
+    // グリッチ：ずらす帯（元の文字の y の範囲）と、ずらす量
+    const uint32_t slot = ticks / JUDGE_HOLO_GLITCH_SLOT_MS;
+    const bool glitch = judgeHoloHash(slot * 2654435761u + 17u) < JUDGE_HOLO_GLITCH_CHANCE;
+    const bool spawnSplit = sinceSpawnMs < JUDGE_HOLO_SPAWN_MS;
+    int gy0 = 0, gy1 = 0, gShift = 0;
+    if(glitch){
+        const int gh = std::max(2, static_cast<int>(srcH * (0.15 + 0.2 * judgeHoloHash(slot * 31u + 3u))));
+        gy0 = static_cast<int>((srcH - gh) * judgeHoloHash(slot * 31u + 5u));
+        gy1 = gy0 + gh;
+        gShift = (judgeHoloHash(slot * 31u + 7u) < 0.5 ? -1 : 1) * (4 + static_cast<int>(judgeHoloHash(slot * 31u + 9u) * 8.0));
+    }
+
+    // 色ずれ（赤を左・青を右に、うすく重ねる）
+    if(glitch || spawnSplit){
+        const int split = glitch ? 4 : 3;
+        const Uint8 ga = static_cast<Uint8>(baseA * 0.35);
+        SDL_SetTextureAlphaMod(tex, ga);
+        SDL_SetTextureColorMod(tex, 255, 60, 90);
+        SDL_Rect d1 = {dst.x - split, dst.y, dst.w, dst.h};
+        SDL_RenderCopy(r, tex, nullptr, &d1);
+        SDL_SetTextureColorMod(tex, 60, 170, 255);
+        SDL_Rect d2 = {dst.x + split, dst.y, dst.w, dst.h};
+        SDL_RenderCopy(r, tex, nullptr, &d2);
+        SDL_SetTextureColorMod(tex, 255, 255, 255);
+    }
+
+    // 本体：横の帯に分けて貼る（1 本おきに薄く＝走査線。帯の区切りはゆっくり下へ流れる）
+    const int off = static_cast<int>(std::fmod(t * JUDGE_HOLO_LINE_SPEED, JUDGE_HOLO_LINE * 2.0));
+    for(int y = -off; y < srcH; y += JUDGE_HOLO_LINE){
+        const int y0 = std::max(0, y), y1 = std::min(srcH, y + JUDGE_HOLO_LINE);
+        if(y1 <= y0) continue;
+        const bool dim = (((y + off) / JUDGE_HOLO_LINE) & 1) != 0;
+        SDL_SetTextureAlphaMod(tex, static_cast<Uint8>(baseA * (dim ? JUDGE_HOLO_LINE_DIM : 1.0)));
+        const int dx = (glitch && y0 < gy1 && y1 > gy0) ? gShift : 0;
+        SDL_Rect src = {0, y0, srcW, y1 - y0};
+        const int dy0 = dst.y + static_cast<int>(std::lround(y0 * sy));
+        const int dy1 = dst.y + static_cast<int>(std::lround(y1 * sy));
+        SDL_Rect d = {dst.x + dx, dy0, dst.w, std::max(1, dy1 - dy0)};
+        SDL_RenderCopy(r, tex, &src, &d);
+    }
+    SDL_SetTextureAlphaMod(tex, 255);
+}
 
 // 終わりで少し行き過ぎてから戻るイージング（1.0 を一度超えて 1.0 に収まる）
 inline double easeOutBack(double t){
@@ -179,11 +254,19 @@ inline constexpr SDL_Color LANE_COVER_EDGE_COLOR = {0, 200, 255, 255};   // 壁�
 inline constexpr float     LANE_COVER_EDGE_H     = 4.0f;                 // 下の端の線の太さ(px、判定ラインでの太さ)
 inline constexpr float     LANE_COVER_SIDE       = 4.0f;                 // 壁をレーンの左右の端よりどれだけ広くするか(px)      // 「COMBO」とコンボ数の間(px)。離れて見えるときはマイナスに
 
+// スクロール位置 S(t)（Play/BSpeedEvent.h）。B_SpeedEvent がない譜面では t のまま
+//   ノーツの位置 = 判定ライン − (S(ノーツの時刻) − S(今)) × 速さ
+//   ・B_SpeedEvent がない間は S(t) = t なので、前の「座標を求める式」(ノーツの時刻 − 今) × 速さ と同じ
+//   ・B_SpeedEvent の倍率が 0 の間は S(今) が増えないので、ノーツが全部その場で止まる
+inline double scrollAt(const GameContext& ctx, double t){
+    return ctx.scrollMap ? ctx.scrollMap->at(t) : t;
+}
+
 // ノーツの中心の y 座標を求める（ノーツ本体の描画と補助線で共通に使う）
 inline int computeNoteY(const GameContext& ctx, const Note& note, double currentNoteSpeed){
     const double t = ctx.musicTimeExact + ctx.visualOffsetMs;   // 表示用の時刻（判定には使わない）
     double effectiveSpeed = note.hasCustomSpeed ? note.customSpeed : currentNoteSpeed;
-    return ctx.judgeY - static_cast<int>((static_cast<double>(note.targetTime) - t) * effectiveSpeed);
+    return ctx.judgeY - static_cast<int>((scrollAt(ctx, static_cast<double>(note.targetTime)) - scrollAt(ctx, t)) * effectiveSpeed);
 }
 
 // 太さのある線を描く（2点を結ぶ細長い四角形を三角形2枚で描く）
@@ -851,12 +934,14 @@ inline void renderGamePlayScreen(GameContext& ctx, Tex& tex, Sq& sq, double curr
 
         // ② ロングノーツの帯 ＋ まわりの光 ＋ 中央の芯（ヘッドより先に足す = ヘッドの奥）
         if(isLong){
-            int tailY = ctx.judgeY - static_cast<int>((static_cast<double>(note.targetTime + note.durationMs) - visualTime) * effectiveSpeed);
+            //   位置は computeNoteY と同じく、スクロール位置 S の差で出す（B_SpeedEvent で止まる・速まるのに合わせる）
+            const double visualScroll = scrollAt(ctx, visualTime);
+            int tailY = ctx.judgeY - static_cast<int>((scrollAt(ctx, static_cast<double>(note.targetTime + note.durationMs)) - visualScroll) * effectiveSpeed);
 
             // 帯の下端：通常はヘッドの位置。失敗したら「失敗した時刻」の位置にして、判定ラインを越えて流す
             int bottomY = headY;
             if(note.isFailed){
-                bottomY = ctx.judgeY - static_cast<int>((static_cast<double>(note.failCutTime) - visualTime) * effectiveSpeed);
+                bottomY = ctx.judgeY - static_cast<int>((scrollAt(ctx, static_cast<double>(note.failCutTime)) - visualScroll) * effectiveSpeed);
             }
 
             // ホールド中、終端がヘッド（判定ライン）より下に来たら止める（帯が裏返らないように）
@@ -958,6 +1043,12 @@ inline void renderGamePlayScreen(GameContext& ctx, Tex& tex, Sq& sq, double curr
         }
     }
 
+    // false ノーツ（見た目だけ。判定なし）：ふつうのノーツより奥に描く（Play/FalseNotes.h）
+    if(ctx.falseNotes && !ctx.falseNotes->empty()){
+        drawFalseNotes(ctx.renderer, *ctx.falseNotes, visualTime, static_cast<float>(laneX[0]), static_cast<float>(ctx.laneWidth),
+                       static_cast<float>(ctx.judgeY), [&](double y){ return headHAt(y); });
+    }
+
     // 奥のレイヤーから順に描く：ロング → ドラッグ → 単発 → レーン
     for(int i = 0; i < LAYER_COUNT; i++) layers[i].flush(ctx.renderer);
     if constexpr(useShadow) shadowBatch.flush(ctx.renderer);
@@ -983,7 +1074,7 @@ inline void renderGamePlayScreen(GameContext& ctx, Tex& tex, Sq& sq, double curr
         SDL_Color c;
         if(fx.judgeType == 1)      c = kPerfectColor;               // PERFECT：淡い黄色
         else if(fx.judgeType == 2) c = SDL_Color{0, 255, 255, 255}; // GOOD：シアン
-        else                       c = SDL_Color{230, 70, 70, 255}; // BAD：赤
+        else                       c = JUDGE_COLOR_FAIR;            // FAIR（前の BAD）：明るい緑
 
         // ① 破裂の一瞬だけ、ノーツの周り（レーン幅 × 80px）を白く光らせる
         if(p < 0.15){
@@ -1288,12 +1379,19 @@ inline void renderGamePlayScreen(GameContext& ctx, Tex& tex, Sq& sq, double curr
             int cy = je.rect.y + je.rect.h / 2;
             SDL_Rect dst = {cx - w / 2, cy - h / 2, w, h};
 
-            SDL_SetTextureAlphaMod(je.texture, 255);
-            SDL_RenderCopy(ctx.renderer, je.texture, NULL, &dst);
+            drawHoloJudgeText(ctx.renderer, je.texture, je.rect.w, je.rect.h, dst, ctx.musicTimeExact - je.spawnTime);
 
             // FAST/LATE・±ms は元の大きさの位置に出す（ポップに合わせて揺れないように）
-            if(ctx.timing && je.hasTiming){
-                ctx.timing->draw(je.rect, je.judgeType, je.diffMs);
+            //   ドラッグ・ロングの中継点や終点など、叩いた瞬間で測らない判定（hasTiming = false）が出ても、
+            //   ±ms は「最後に叩いた判定」（ctx.lastTimedJudge）の値をそのまま出し続ける（次に叩くまで変わらない）
+            //   FAST/LATE は、出ている判定文字が叩いた判定のときだけ（judgeType = 1 を渡すと FAST/LATE は出ない）
+            if(ctx.timing){
+                if(je.hasTiming){
+                    ctx.timing->draw(je.rect, je.judgeType, je.diffMs);
+                }
+                else if(ctx.lastTimedJudge && ctx.lastTimedJudge->hasTiming){
+                    ctx.timing->draw(je.rect, 1, ctx.lastTimedJudge->diffMs);
+                }
             }
         }
     }

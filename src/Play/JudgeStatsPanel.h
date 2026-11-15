@@ -3,9 +3,12 @@
 //  プレイ画面の右に出すウィンドウ（JudgeStatsPanel.h）
 //    ・共通の部品（ウィンドウの枠・文字のテクスチャ・出現アニメーション）
 //    ・JUDGE ウィンドウ：判定の数をリアルタイムに出す（リザルトの SCORE ウィンドウと同じ並び・色）
-//        PERFECT
+//        101.0000%   ← パーセントのスコア（scoreTracker.h の getPercent。101% から減っていく）
+//        ─────
+//        S-PERFECT   ← 文字は上が PERFECT の色、下が GOOD の色のグラデーション
+//        PERFECT     ← S-PERFECT を除いた PERFECT の数
 //        GOOD     [FAST 数] [LATE 数]
-//        BAD      [FAST 数] [LATE 数]
+//        FAIR     [FAST 数] [LATE 数]   ← 前の BAD
 //        MISS
 //        ─────
 //        FAST / LATE（合計）
@@ -25,6 +28,9 @@
 // =====================================================================
 #include "GameCommon.h"
 #include "Play/scoreTracker.h"
+#include "Play/type.h"       // S-PERFECT の文字（グラデーション）
+#include "HoloWindow.h"      // ウィンドウの見た目（Cube の色のホログラム）
+#include <cstdio>
 #include <algorithm>
 #include <cmath>
 #include <string>
@@ -44,7 +50,8 @@ constexpr double ALL_APPEARED_MS = APPEAR_DELAY_MS + STAGGER_MS * (PANEL_COUNT -
 
 // ----- JUDGE ウィンドウの位置と大きさ -----
 //   レーンは x = 600〜1320。その右（1350〜1890）に置く。上には RANK ウィンドウ（RankGaugePanel.h）
-constexpr SDL_Rect RECT = {1350, 450, 540, 400};
+//   上にパーセントのスコアの段（PCT_AREA_H）、判定の行は S-PERFECT を足して 8 行
+constexpr SDL_Rect RECT = {1350, 450, 540, 508};
 
 // 列の位置（ウィンドウの左端 + PAD_X からの距離）。リザルト画面と同じ考え方で幅だけ詰めたもの
 constexpr int PAD_X           = 24;
@@ -54,7 +61,9 @@ constexpr int COL_FAST_RIGHT  = 352;   // FAST の数（右揃え）
 constexpr int COL_LATE_TAG    = 380;   // 「LATE」の文字（左揃え）
 constexpr int COL_LATE_RIGHT  = 492;   // LATE の数（右揃え）= ウィンドウの右端 - PAD_X
 
-constexpr int ROW_TOP  = 42;   // 1行目の縦の中心（ウィンドウの上端から）
+constexpr int PCT_CENTER_Y = 40;   // パーセントのスコアの縦の中心（ウィンドウの上端から）
+constexpr int PCT_AREA_H   = 64;   // パーセントのスコアの段の高さ（この下に区切り線）
+constexpr int ROW_TOP  = 42 + PCT_AREA_H;   // 判定の 1 行目の縦の中心（ウィンドウの上端から）
 constexpr int ROW_STEP = 44;   // 行の間隔
 constexpr int SEP_GAP  = 8;    // 区切り線のところで足す隙間
 
@@ -66,7 +75,7 @@ constexpr SDL_Color SEP_COLOR    = { 70,  70,  90, 255};
 
 constexpr SDL_Color COLOR_PERFECT = {255, 215,   0, 255};
 constexpr SDL_Color COLOR_GOOD    = {  0, 255, 255, 255};
-constexpr SDL_Color COLOR_BAD     = {230,  70,  70, 255};
+constexpr SDL_Color COLOR_BAD     = JUDGE_COLOR_FAIR;   // FAIR（前の BAD）の行：明るい緑
 constexpr SDL_Color COLOR_MISS    = {130, 130, 130, 255};
 constexpr SDL_Color COLOR_FAST    = { 80, 170, 255, 255};
 constexpr SDL_Color COLOR_LATE    = {255, 140,  60, 255};
@@ -125,20 +134,15 @@ inline void fillHud(SDL_Renderer* r, const SDL_Rect& rect, SDL_Color c, Uint8 al
     SDL_RenderFillRect(r, &rect);
 }
 
-// 選曲画面・リザルト画面と同じウィンドウ：左上のタブ＋半透明の塗り＋シアンの枠
+// 選曲画面・リザルト画面と同じウィンドウ：左上のタブ＋ホログラムのウィンドウ（HoloWindow.h）
 inline void drawHudPanel(SDL_Renderer* r, const SDL_Rect& rect, const HudText& tabText, Uint8 alpha){
     SDL_SetRenderDrawBlendMode(r, SDL_BLENDMODE_BLEND);
     if(tabText.tex){
         SDL_Rect tab = {rect.x, rect.y - tabText.h - 6, tabText.w + 28, tabText.h + 6};
-        fillHud(r, tab, PANEL_BORDER, alpha);
+        fillHud(r, tab, HOLO_WINDOW_COLOR, alpha);
         blitHudText(r, tabText, tab.x + 14, tab.y + 3 + tabText.h / 2, HAlign::Left, alpha);
     }
-    fillHud(r, rect, PANEL_FILL, alpha);
-    SDL_SetRenderDrawColor(r, PANEL_BORDER.r, PANEL_BORDER.g, PANEL_BORDER.b, alpha);
-    for(int t = 0; t < PANEL_BORDER_W; t++){
-        SDL_Rect b = {rect.x + t, rect.y + t, rect.w - t * 2, rect.h - t * 2};
-        SDL_RenderDrawRect(r, &b);
-    }
+    drawHoloWindow(r, rect, alpha / 255.0, true, PANEL_BORDER_W, static_cast<uint32_t>(rect.y * 131));
 }
 
 // 出現途中のウィンドウの位置：右から APPEAR_SLIDE_PX だけスライドしてくる
@@ -163,10 +167,18 @@ public:
         tagFont_ = TTF_OpenFont("fonts/prac.ttf", 20);
         if(!font_ || !tagFont_) return false;
 
-        const char* labels[ROW_COUNT] = {"PERFECT", "GOOD", "BAD", "MISS", "FAST", "LATE", "MAX COMBO"};
-        const SDL_Color colors[ROW_COUNT] = {COLOR_PERFECT, COLOR_GOOD, COLOR_BAD, COLOR_MISS,
+        const char* labels[ROW_COUNT] = {"S-PERFECT", "PERFECT", "GOOD", "FAIR", "MISS", "FAST", "LATE", "MAX COMBO"};
+        const SDL_Color colors[ROW_COUNT] = {COLOR_PERFECT, COLOR_PERFECT, COLOR_GOOD, COLOR_BAD, COLOR_MISS,
                                              COLOR_FAST, COLOR_LATE, COLOR_WHITE};
-        for(int i = 0; i < ROW_COUNT; i++) labels_[i] = makeHudText(renderer_, font_, labels[i], colors[i]);
+        for(int i = 1; i < ROW_COUNT; i++) labels_[i] = makeHudText(renderer_, font_, labels[i], colors[i]);
+        if(SDL_Surface* sp = renderGradientText(font_, labels[0], JUDGE_COLOR_PERFECT, JUDGE_COLOR_GOOD)){
+            labels_[0].tex = SDL_CreateTextureFromSurface(renderer_, sp);
+            if(labels_[0].tex) SDL_SetTextureBlendMode(labels_[0].tex, SDL_BLENDMODE_BLEND);
+            labels_[0].w = sp->w;
+            labels_[0].h = sp->h;
+            SDL_FreeSurface(sp);
+        }
+        pctFont_ = TTF_OpenFont("fonts/prac.ttf", 40);
 
         fastTag_ = makeHudText(renderer_, tagFont_, "FAST", COLOR_FAST);
         lateTag_ = makeHudText(renderer_, tagFont_, "LATE", COLOR_LATE);
@@ -180,10 +192,12 @@ public:
         freeHudText(fastTag_);
         freeHudText(lateTag_);
         freeHudText(tab_);
+        freeHudText(pctText_);
         for(auto& n : nums_) freeHudText(n.text);
         if(font_)    TTF_CloseFont(font_);
         if(tagFont_) TTF_CloseFont(tagFont_);
-        font_ = tagFont_ = nullptr;
+        if(pctFont_) TTF_CloseFont(pctFont_);
+        font_ = tagFont_ = pctFont_ = nullptr;
     }
 
     // 毎フレーム呼ぶ：今の数を集める（FAST / LATE は増えた分だけ数える）
@@ -200,7 +214,9 @@ public:
             else if(s.diffMs > 0) lateOf_[jt]++;
         }
 
-        values_[N_PERFECT]  = st.getPerfectCount();
+        values_[N_SPERFECT] = st.getSPerfectCount();
+        values_[N_PERFECT]  = st.getPerfectCount() - st.getSPerfectCount();
+        percent_ = st.getPercent();
         values_[N_GOOD]     = st.getGoodCount();
         values_[N_GOOD_F]   = fastOf_[2];
         values_[N_GOOD_L]   = lateOf_[2];
@@ -225,22 +241,27 @@ public:
 
         drawHudPanel(renderer, r, tab_, a);
 
+        // パーセントのスコア（判定の行の上）
+        blitHudText(renderer, percentText(), r.x + r.w - PAD_X, r.y + PCT_CENTER_Y, HAlign::Right, a);
+        fillHud(renderer, SDL_Rect{r.x + PAD_X, r.y + PCT_AREA_H + 4, r.w - PAD_X * 2, 1}, SEP_COLOR, a);
+
         //   row: 項目名の番号, count: 数の番号, fast / late: 内訳の番号（-1 = なし）
         struct Line{ int row; int count; int fast; int late; };
         const Line lines[ROW_COUNT] = {
-            {0, N_PERFECT,  -1,       -1},
-            {1, N_GOOD,     N_GOOD_F, N_GOOD_L},
-            {2, N_BAD,      N_BAD_F,  N_BAD_L},
-            {3, N_MISS,     -1,       -1},
-            {4, N_FAST,     -1,       -1},
-            {5, N_LATE,     -1,       -1},
-            {6, N_MAXCOMBO, -1,       -1},
+            {0, N_SPERFECT, -1,       -1},
+            {1, N_PERFECT,  -1,       -1},
+            {2, N_GOOD,     N_GOOD_F, N_GOOD_L},
+            {3, N_BAD,      N_BAD_F,  N_BAD_L},
+            {4, N_MISS,     -1,       -1},
+            {5, N_FAST,     -1,       -1},
+            {6, N_LATE,     -1,       -1},
+            {7, N_MAXCOMBO, -1,       -1},
         };
 
         const int left = r.x + PAD_X;
         int y = r.y + ROW_TOP;
         for(int i = 0; i < ROW_COUNT; i++){
-            if(i == 4 || i == 6){
+            if(i == 5 || i == 7){
                 // 判定数 / FAST・LATE / MAX COMBO の間に細い区切り
                 fillHud(renderer, SDL_Rect{left, y - ROW_STEP / 2, r.w - PAD_X * 2, 1}, SEP_COLOR, a);
                 y += SEP_GAP;
@@ -264,13 +285,19 @@ private:
     struct Num{ HudText text; int value = -1; bool dimZero = false; };
 
     // 数の番号
-    enum{ N_PERFECT, N_GOOD, N_GOOD_F, N_GOOD_L, N_BAD, N_BAD_F, N_BAD_L, N_MISS,
+    enum{ N_SPERFECT, N_PERFECT, N_GOOD, N_GOOD_F, N_GOOD_L, N_BAD, N_BAD_F, N_BAD_L, N_MISS,
           N_FAST, N_LATE, N_MAXCOMBO, N_COUNT };
-    static constexpr int ROW_COUNT = 7;
+    static constexpr int ROW_COUNT = 8;
 
     SDL_Renderer* renderer_ = nullptr;
     TTF_Font* font_ = nullptr;
     TTF_Font* tagFont_ = nullptr;
+    TTF_Font* pctFont_ = nullptr;
+
+    // パーセントのスコア：小数 4 桁で切り捨てた値が変わったときだけ文字を作り直す
+    double  percent_ = 101.0;
+    long long pctShown_ = -1;
+    HudText pctText_;
 
     HudText labels_[ROW_COUNT];
     HudText fastTag_, lateTag_, tab_;
@@ -279,6 +306,18 @@ private:
 
     size_t processed_ = 0;      // timingLog のうち、もう数えた数
     int fastOf_[4] = {}, lateOf_[4] = {};
+
+    const HudText& percentText(){
+        const long long v = static_cast<long long>(std::floor(percent_ * 10000.0 + 1e-6));
+        if(v != pctShown_ || !pctText_.tex){
+            judgestats::freeHudText(pctText_);
+            char buf[32];
+            std::snprintf(buf, sizeof(buf), "%lld.%04lld%%", v / 10000, v % 10000);
+            pctText_ = judgestats::makeHudText(renderer_, pctFont_ ? pctFont_ : font_, buf, judgestats::COLOR_WHITE);
+            pctShown_ = v;
+        }
+        return pctText_;
+    }
 
     // 数のテクスチャ：値（と 0 のときの色）が変わったときだけ作り直す
     const HudText& number(int idx, bool dimZero){

@@ -69,7 +69,11 @@ struct JudgeEffect{
     int judgeType = 0;        //1 = PERFECT、2 = GOOD、3 = BAD
 };
 
-struct SpeedEvent{
+// ===== A_SpeedEvent（前の SpeedEvent。中身はそのまま） =====
+//   ノーツの位置を「座標を求める式」で出すときの速さ（倍率）を、ある時刻から変える。
+//   画面のノーツ全部の間隔が一緒に伸び縮みする（位置 = (ノーツの時刻 − 今) × 速さ）
+//   譜面ファイルでは今まで通り "speedEvents" に入る
+struct A_SpeedEvent{
     int32_t triggerTime;
     int32_t duration = 500;
     double targetspeed;
@@ -77,6 +81,8 @@ struct SpeedEvent{
     int easing;
     bool isTriggered = false;
 };
+// 前の名前でも使えるようにしておく（loadScore.h・updateSpeed.h などは SpeedEvent のままで動く）
+using SpeedEvent = A_SpeedEvent;
 
 struct ScorePopEffect{
     double scale = 1.0;
@@ -91,20 +97,64 @@ struct ComboPopEffect{
 };
 
 struct Tex{
-    SDL_Texture* perfect;
-    SDL_Texture* good;
-    SDL_Texture* bad;
-    SDL_Texture* miss;
-    SDL_Texture* waku_init;
+    SDL_Texture* perfect   = nullptr;
+    SDL_Texture* good      = nullptr;
+    SDL_Texture* bad       = nullptr;
+    SDL_Texture* miss      = nullptr;
+    SDL_Texture* waku_init = nullptr;
+    SDL_Texture* sPerfect  = nullptr;   // S-PERFECT（PERFECT の中でも ±40ms 以内）
 };
 
 struct Sq{
-    SDL_Rect perfect;
-    SDL_Rect good;
-    SDL_Rect bad;
-    SDL_Rect miss;
-    SDL_Rect waku_init;
+    SDL_Rect perfect{};
+    SDL_Rect good{};
+    SDL_Rect bad{};
+    SDL_Rect miss{};
+    SDL_Rect waku_init{};
+    SDL_Rect sPerfect{};
 };
+
+// =====================================================================
+//  判定の幅と色
+//    S-PERFECT ±40ms ⊂ PERFECT ±60ms ⊂ GOOD ±80ms ⊂ BAD ±90ms
+//    S-PERFECT の文字は、上半分が PERFECT の色・下半分が GOOD の色のグラデーション
+// =====================================================================
+inline constexpr int       S_PERFECT_MS          = 40;
+inline constexpr SDL_Color JUDGE_COLOR_PERFECT   = {255, 215,   0, 255};
+inline constexpr SDL_Color JUDGE_COLOR_GOOD      = {  0, 255, 255, 255};
+inline constexpr SDL_Color JUDGE_COLOR_FAIR      = {130, 255, 130, 255};   // FAIR（前の BAD）：明るい緑
+
+// 文字を白で作り、1 行ずつ色を塗り替えて縦のグラデーションにする（不透明度は文字のまま）
+//   上から 30% までは top の色、下から 30% までは bottom の色、その間はなめらかに変わる
+inline SDL_Surface* renderGradientText(TTF_Font* font, const char* text, SDL_Color top, SDL_Color bottom){
+    SDL_Surface* src = TTF_RenderUTF8_Blended(font, text, SDL_Color{255, 255, 255, 255});
+    if(!src) return nullptr;
+    SDL_Surface* s = SDL_ConvertSurfaceFormat(src, SDL_PIXELFORMAT_RGBA32, 0);
+    SDL_FreeSurface(src);
+    if(!s) return nullptr;
+    SDL_LockSurface(s);
+    for(int y = 0; y < s->h; y++){
+        const double v = (s->h > 1) ? static_cast<double>(y) / (s->h - 1) : 0.0;
+        const double k = std::clamp((v - 0.3) / 0.4, 0.0, 1.0);
+        const Uint8 r = static_cast<Uint8>(top.r + (bottom.r - top.r) * k);
+        const Uint8 g = static_cast<Uint8>(top.g + (bottom.g - top.g) * k);
+        const Uint8 b = static_cast<Uint8>(top.b + (bottom.b - top.b) * k);
+        Uint8* row = static_cast<Uint8*>(s->pixels) + y * s->pitch;
+        for(int x = 0; x < s->w; x++){
+            Uint8* px = row + x * 4;   // RGBA32：バイトの並びが R, G, B, A
+            px[0] = r;
+            px[1] = g;
+            px[2] = b;
+        }
+    }
+    SDL_UnlockSurface(s);
+    return s;
+}
+
+// S-PERFECT の判定文字
+inline SDL_Surface* renderSPerfectText(TTF_Font* font){
+    return renderGradientText(font, "PERFECT!!", JUDGE_COLOR_PERFECT, JUDGE_COLOR_GOOD);
+}
 
 struct KeyBeam{
     int lane;

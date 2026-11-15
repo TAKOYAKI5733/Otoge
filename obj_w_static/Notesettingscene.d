@@ -7,8 +7,9 @@ obj_w_static/Notesettingscene.o: src/Notesettingscene.cpp \
  nlohmann/json.hpp src/Play/updateAndRenderTexture.h \
  src/Play/renderGame.h src/Play/tutorialOverlay.h src/Play/tutorialAnim.h \
  src/Play/visualizer.h src/Play/LaneTilt.h src/Play/PlayBackground.h \
- src/Play/GlitchLayer.h src/Play/updateSpeed.h src/Play/noteJudge.h \
- src/Play/Autoplay.h src/TapSound.h
+ src/Play/FalseNotes.h src/Play/BSpeedEvent.h src/Play/GlitchLayer.h \
+ src/Play/updateSpeed.h src/Play/noteJudge.h src/Play/Autoplay.h \
+ src/TapSound.h src/HoloWindow.h
 src/GameCommon.h:
 src/Scene.h:
 src/InputBinding.h:
@@ -33,8 +34,11 @@ src/Play/tutorialAnim.h:
 src/Play/visualizer.h:
 src/Play/LaneTilt.h:
 src/Play/PlayBackground.h:
+src/Play/FalseNotes.h:
+src/Play/BSpeedEvent.h:
 src/Play/GlitchLayer.h:
 src/Play/updateSpeed.h:
 src/Play/noteJudge.h:
 src/Play/Autoplay.h:
 src/TapSound.h:
+src/HoloWindow.h:

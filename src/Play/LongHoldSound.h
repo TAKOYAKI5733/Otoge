@@ -9,6 +9,14 @@
 //    ・ミキサーのチャンネルを1つ「ロング専用」に取っておき、そこでくり返し鳴らす
 //    ・押しているロングが1つでもあれば鳴らし、1つもなくなったら短くフェードアウトして止める
 //    ・同時に何本押していても、鳴るのは1つだけ（音が重なって大きくならない）
+//
+//  ■ 短いロングで音が残っていた理由
+//    Mix_FadeInChannel は、鳴らし始めにチャンネルの音量をいったん 0 にして、音を送るたびに少しずつ上げる。
+//    Mix_FadeOutChannel は「音量が 0 より大きいとき」しか受け付けない（SDL_mixer の作り）。
+//    短いロングだと、鳴らし始めたすぐ後（音量がまだ 0 のうち）に止めようとするので、止める命令が無視され、
+//    そのままくり返し鳴り続けていた。
+//    → 止めるとき、フェードアウトが受け付けられなかったら（戻り値 0）、その場で Mix_HaltChannel で止める。
+//      まだ音量 0 のうちなので、いきなり止めてもブツッという音にはならない
 // =====================================================================
 class LongHoldSound{
 public:
@@ -55,8 +63,7 @@ public:
             playing_ = true;
         }
         else if(!holding && playing_){
-            Mix_FadeOutChannel(channel_, FADE_OUT_MS);
-            playing_ = false;
+            stop();
         }
     }
 
@@ -78,4 +85,10 @@ private:
     int  channel_ = -1;
     bool playing_ = false;
     bool pausedNow_ = false;
+
+    // フェードアウトで止める。受け付けられなかった（鳴らし始めで音量がまだ 0）ときは、すぐ止める
+    void stop(){
+        if(Mix_FadeOutChannel(channel_, FADE_OUT_MS) == 0) Mix_HaltChannel(channel_);
+        playing_ = false;
+    }
 };

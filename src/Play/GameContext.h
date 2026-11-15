@@ -19,6 +19,9 @@ struct CubeHud{
 };
 class LaneTilt;
 class PlayBackground;
+class ScrollMap;   // Play/BSpeedEvent.h
+struct FalseNote;  // Play/FalseNotes.h
+
 struct GameContext{
     SDL_Renderer* renderer;
     TTF_Font* font;
@@ -110,11 +113,17 @@ struct GameContext{
     const int32_t* releaseTimes = nullptr;   // レーンごと：このフレームまでに離した瞬間の「曲の時刻」。NO_PRESS_TIME = 離していない
 
     bool isAutoplay = false;                 // オートプレイ中か（ノーツを取っても Cube を出さない）
+    const ScrollMap* scrollMap = nullptr;   // B_SpeedEvent のスクロール位置（Play/BSpeedEvent.h）。nullptr = 使わない（S(t) = t）
+    const std::vector<FalseNote>* falseNotes = nullptr;   // false ノーツ（見た目だけ。Play/FalseNotes.h）。nullptr = なし
 
     // 始まりの演出（PlayScene.cpp が時間で決める。1 = 終わっていて、いつも通り）
     double laneFrameIntro = 1.0;             // レーンの外枠の線が、判定ラインから上下・左右へ伸びていく進み具合（0〜1）
     double laneIntro      = 1.0;             // レーン（背景・区切り線・判定枠・ノーツ）がグリッチで出てくる進み具合（0〜1）
     bool   laneOutro      = false;           // 曲の終わりの演出中（laneIntro を 1 → 0 にしてレーンをグリッチで消している）
+
+    // 最後に「叩いた瞬間で測った」判定（noteJudge.h の recordTiming が写す）。nullptr なら使わない
+    //   ドラッグ・ロングの PERFECT など、測らない判定が出ても ±ms の表示をこの値のまま残すため
+    JudgeEffect* lastTimedJudge = nullptr;
 };
 
 // レーンの左右の傾きで、上下に余分に描く量(px)

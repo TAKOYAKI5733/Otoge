@@ -7,10 +7,11 @@ obj_w_static/PlayScene.o: src/PlayScene.cpp src/GameCommon.h src/Scene.h \
  nlohmann/json.hpp src/Play/updateAndRenderTexture.h \
  src/Play/renderGame.h src/Play/tutorialOverlay.h src/Play/tutorialAnim.h \
  src/Play/visualizer.h src/Play/LaneTilt.h src/Play/PlayBackground.h \
- src/Play/GlitchLayer.h src/Play/updateSpeed.h src/Play/noteJudge.h \
- src/Play/Autoplay.h src/TapSound.h src/Play/LongHoldSound.h \
- src/Play/JudgeStatsPanel.h src/Play/RankGaugePanel.h \
- src/Play/PreciseInput.h src/Play/CubeWallet.h src/Play/PlayInfoHud.h
+ src/Play/FalseNotes.h src/Play/BSpeedEvent.h src/Play/GlitchLayer.h \
+ src/Play/updateSpeed.h src/Play/noteJudge.h src/Play/Autoplay.h \
+ src/TapSound.h src/Play/LongHoldSound.h src/Play/JudgeStatsPanel.h \
+ src/HoloWindow.h src/Play/RankGaugePanel.h src/Play/PreciseInput.h \
+ src/Play/CubeWallet.h src/Play/PlayInfoHud.h
 src/GameCommon.h:
 src/Scene.h:
 src/InputBinding.h:
@@ -36,6 +37,8 @@ src/Play/tutorialAnim.h:
 src/Play/visualizer.h:
 src/Play/LaneTilt.h:
 src/Play/PlayBackground.h:
+src/Play/FalseNotes.h:
+src/Play/BSpeedEvent.h:
 src/Play/GlitchLayer.h:
 src/Play/updateSpeed.h:
 src/Play/noteJudge.h:
@@ -43,6 +46,7 @@ src/Play/Autoplay.h:
 src/TapSound.h:
 src/Play/LongHoldSound.h:
 src/Play/JudgeStatsPanel.h:
+src/HoloWindow.h:
 src/Play/RankGaugePanel.h:
 src/Play/PreciseInput.h:
 src/Play/CubeWallet.h:

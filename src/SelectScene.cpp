@@ -9,6 +9,8 @@
 #include "Play/CubeWallet.h"    // 持っている Cube の総数（cubes.json）
 #include "CubeShowcase.h"       // 画面の真ん中の回る台座と立方体（メニュー画面と共通）
 #include "QuarryReveal.h"        // ウィンドウを Cube から作り出す出方（光の線 → 枠 → 上から生成）
+#include "SongGenre.h"
+#include "HoloWindow.h"         // ウィンドウの見た目（Cube の色のホログラム・走査線・たまにグリッチ）
 #include <algorithm>
 #include <unordered_map>
 #include <cmath>
@@ -33,7 +35,8 @@ struct SongInfo{
     std::string audioExtName = "";
     std::string ChartCreator = "Unknown";
     double previewStartMs = 0.0;   // 試聴の開始位置（曲ファイル上の ms）
-    std::filesystem::file_time_type fileTime = std::filesystem::file_time_type::max();   // 譜面ファイルの更新日時（ジャンル選択中の背景に使う。分からなければ一番新しい扱い）
+    std::filesystem::file_time_type fileTime = std::filesystem::file_time_type::max();
+    std::vector<std::string> genres;   // 譜面ファイルの更新日時（ジャンル選択中の背景に使う。分からなければ一番新しい扱い）
 
     double currentScale = 1.0;
     double currentY = -1.0;
@@ -118,6 +121,39 @@ static SDL_Texture* g_infoLayer  = nullptr;
 static SDL_Rect     g_infoRect   = {0, 0, 0, 0};   // 情報のウィンドウの枠（draw_songDetail が描くたびに覚える）
 static bool         g_detailLastSongMode = false;   // 前のフレームで曲選択だったか（曲選択になった瞬間を見つける）
 
+enum class GenreSort{ Default, Genre, Kana };
+static GenreSort g_genreSort = GenreSort::Default;
+static bool      g_songSortChosen = false;
+static SortKey   g_songSortKey = SortKey::Title;
+static bool      g_songSortDesc = false;
+
+static const SDL_Rect SORT_WIN = {830, 80, 290, 120};
+
+static int    g_listDiffCursor = 0;
+static int    g_diffPrevCursor = 0;
+static Uint32 g_diffChangeTick = 0;
+static constexpr double DIFF_OUT_MS = 110.0;
+static constexpr double DIFF_IN_MS  = 220.0;
+static std::vector<SDL_Rect> g_hitDiffMarks;
+static std::unordered_map<std::string, double> g_songLengthMs;
+static Uint32 g_songLengthFrame = 0;
+static SDL_Rect g_hitSort = {0, 0, 0, 0};
+static SDL_Rect g_hitSortCard[3] = {};
+static SDL_Rect g_hitSortOrder[2] = {};
+static SDL_Texture* g_sortWinLayer = nullptr;
+static SDL_Texture* g_sortLayer = nullptr;
+
+struct SortOverlay{
+    bool   open = false;
+    bool   closing = false;
+    Uint32 openTick = 0;
+    Uint32 closeTick = 0;
+    bool   songMode = false;
+    int    cursor = 0;
+    bool   desc = false;
+};
+static constexpr double SORT_CLOSE_MS = 260.0;
+
 static bool pointIn(const SDL_Rect& r, int x, int y){
     return r.w > 0 && r.h > 0 && x >= r.x && x < r.x + r.w && y >= r.y && y < r.y + r.h;
 }
@@ -134,10 +170,31 @@ static void pushKey(SDL_Keycode key){
     SDL_PushEvent(&ev);
 }
 
-// 「プレイヤーが選んだ順番」を、その曲に存在する範囲に収める
-inline int clampDifficulty(int preferred, size_t count){
-    if(count == 0) return 0;
-    return std::min(preferred, static_cast<int>(count) - 1);
+static int difficultyRank(const std::string& name);
+
+static int diffKeyAt(const std::vector<DifficultyInfo>& diffs, size_t i){
+    const int r = difficultyRank(diffs[i].name);
+    int ord = 0;
+    for(size_t j = 0; j < i; j++){
+        if(difficultyRank(diffs[j].name) == r) ord++;
+    }
+    return r * 8 + ord;
+}
+
+static int diffIndexExact(const std::vector<DifficultyInfo>& diffs, int key){
+    for(size_t i = 0; i < diffs.size(); i++){
+        if(diffKeyAt(diffs, i) == key) return static_cast<int>(i);
+    }
+    return -1;
+}
+
+static int diffIndexNear(const std::vector<DifficultyInfo>& diffs, int key){
+    int best = 0, bestD = 1 << 30;
+    for(size_t i = 0; i < diffs.size(); i++){
+        const int d = std::abs(diffKeyAt(diffs, i) - key);
+        if(d < bestD){ bestD = d; best = static_cast<int>(i); }
+    }
+    return best;
 }
 
 //プロトタイプ宣言
@@ -156,6 +213,7 @@ void draw_Jacket(SDL_Renderer* renderer, TTF_Font* labelFont, JacketManager& jm,
 void destroySongLayer();
 void draw_CubeWindow(SDL_Renderer* renderer, TTF_Font* font, TTF_Font* labelFont, float cubeX, float cubeY);
 void destroyCubeWindow();
+static void clearTextCache();
 static bool hitBandLeftEdge(const JacketManager& jm, int mx, int my);
 static double bandLoadTravel();
 static double loadMax();
@@ -166,6 +224,10 @@ void draw_DetailWindows(SDL_Renderer* renderer, TTF_Font* font, TTF_Font* labelF
                         const DifficultyInfo* diff, double animation, double slide, double chartAnim, bool songMode);
 void draw_JacketVisualizer(SDL_Renderer* renderer, const JacketManager& jm, const JacketSpectrum& viz);
 void sortAllSongs(GenreInfo& all, SortKey key, bool descending, int difficultyCursor, int& songCursor);
+std::vector<GenreInfo> buildSortedCategories(const std::vector<GenreInfo>& base, GenreSort mode);
+void draw_SortWindow(SDL_Renderer* renderer, TTF_Font* font, TTF_Font* labelFont, bool songMode, bool overlayOpen);
+void draw_SortOverlay(SDL_Renderer* renderer, TTF_Font* font, TTF_Font* labelFont, const SortOverlay& ov);
+void destroySortLayers();
 
 //メイン関数
 // ジャンルの中で一番時期が早い曲（譜面ファイルの更新日時が一番古い曲）の番号。曲が無ければ -1
@@ -179,17 +241,18 @@ static int earliestSongIndex(const GenreInfo& genre){
 }
 
 GameScene selectSongScene(SDL_Window* window, SDL_Renderer* renderer, std::string& outSelectedScorePath, int& outSelectedDifficulty, PlayerSettings& playerSettings, bool& outAutoplay, SDL_Texture* targetTex){
-    std::vector<GenreInfo> categories = scanScoreFolder("scores");
-    if(categories.empty()){
+    const std::vector<GenreInfo> baseCategories = scanScoreFolder("scores");
+    if(baseCategories.empty()){
         std::cout << "[エラー]曲がねぇ\n";
         return GameScene::Shutdown;
     }
+    std::vector<GenreInfo> categories = buildSortedCategories(baseCategories, g_genreSort);
 
     {
         GenreInfo all;
         all.genreName = "ALL";
         all.isAll = true;
-        for(const auto& genre : categories){
+        for(const auto& genre : baseCategories){
             all.songList.insert(all.songList.end(), genre.songList.begin(), genre.songList.end());
         }
         int unusedCursor = 0;
@@ -232,8 +295,137 @@ GameScene selectSongScene(SDL_Window* window, SDL_Renderer* renderer, std::strin
         }
     }
 
-    SortKey sortKey = SortKey::Title;   // ALL の並べ替えの基準
-    bool sortDescending = false;        // true で降順
+    SortKey& sortKey = g_songSortKey;
+    bool& sortDescending = g_songSortDesc;
+    if(g_songSortChosen){
+        for(auto& g : categories){
+            if(g.isTutorial) continue;
+            int unused = 0;
+            sortAllSongs(g, sortKey, sortDescending, difficultyCursor, unused);
+        }
+        if(currentMode == SelectMode::SelectSong && !categories[genreCursor].isTutorial){
+            for(size_t si = 0; si < categories[genreCursor].songList.size(); si++){
+                if(categories[genreCursor].songList[si].scorePath == g_selectMemory.scorePath) songCursor = static_cast<int>(si);
+            }
+        }
+    }
+    SortOverlay sortOv;
+
+    if(!g_selectMemory.hasLast){
+        std::unordered_map<int, int> keyCount;
+        for(const auto& so : categories.front().songList){
+            for(size_t di = 0; di < so.difficulties.size(); di++) keyCount[diffKeyAt(so.difficulties, di)]++;
+        }
+        int bestCount = 0;
+        for(const auto& kv : keyCount){
+            if(kv.second > bestCount || (kv.second == bestCount && kv.first < difficultyCursor)){
+                bestCount = kv.second;
+                difficultyCursor = kv.first;
+            }
+        }
+    }
+
+    std::vector<GenreInfo> fullCategories = categories;
+
+    auto currentSongPath = [&]() -> std::string{
+        const auto& list = categories[genreCursor].songList;
+        if(categories[genreCursor].isTutorial || list.empty()) return "";
+        return list[std::clamp(songCursor, 0, static_cast<int>(list.size()) - 1)].scorePath;
+    };
+
+    auto applyDiffFilter = [&](const std::string& keepPath){
+        for(size_t gi = 0; gi < categories.size() && gi < fullCategories.size(); gi++){
+            if(fullCategories[gi].isTutorial) continue;
+            std::vector<SongInfo> list;
+            for(const auto& so : fullCategories[gi].songList){
+                if(so.difficulties.empty() || diffIndexExact(so.difficulties, difficultyCursor) >= 0) list.push_back(so);
+            }
+            if(list.empty()) list = fullCategories[gi].songList;
+            for(auto& so : list){
+                for(const auto& old : categories[gi].songList){
+                    if(old.scorePath != so.scorePath) continue;
+                    so.currentScale = old.currentScale;
+                    so.currentX = old.currentX;
+                    so.currentY = old.currentY;
+                    so.positionInittailized = old.positionInittailized;
+                    break;
+                }
+            }
+            categories[gi].songList = std::move(list);
+        }
+        songCursor = 0;
+        const auto& cur = categories[genreCursor].songList;
+        for(size_t si = 0; si < cur.size(); si++){
+            if(cur[si].scorePath == keepPath){ songCursor = static_cast<int>(si); break; }
+        }
+    };
+    applyDiffFilter((currentMode == SelectMode::SelectSong) ? g_selectMemory.scorePath : std::string());
+
+    auto rebuildCategories = [&](){
+        const std::string keepName = categories[genreCursor].genreName;
+        GenreInfo allCopy, tutCopy;
+        for(const auto& g : fullCategories){
+            if(g.isAll) allCopy = g;
+            if(g.isTutorial) tutCopy = g;
+        }
+        fullCategories = buildSortedCategories(baseCategories, g_genreSort);
+        fullCategories.insert(fullCategories.begin(), allCopy);
+        fullCategories.push_back(tutCopy);
+        if(g_songSortChosen){
+            for(auto& g : fullCategories){
+                if(g.isTutorial) continue;
+                int unused = 0;
+                sortAllSongs(g, sortKey, sortDescending, difficultyCursor, unused);
+            }
+        }
+        categories = fullCategories;
+        genreCursor = 0;
+        for(size_t gi = 0; gi < categories.size(); gi++){
+            if(categories[gi].genreName == keepName){ genreCursor = static_cast<int>(gi); break; }
+        }
+        applyDiffFilter("");
+    };
+    auto applySongSort = [&](){
+        g_songSortChosen = true;
+        if(categories[genreCursor].isTutorial) return;
+        const std::string keep = currentSongPath();
+        for(auto& g : fullCategories){
+            if(g.isTutorial) continue;
+            int unused = 0;
+            sortAllSongs(g, sortKey, sortDescending, difficultyCursor, unused);
+        }
+        applyDiffFilter(keep);
+    };
+    auto openSortOverlay = [&](){
+        sortOv = SortOverlay{};
+        sortOv.open = true;
+        sortOv.openTick = SDL_GetTicks();
+        sortOv.songMode = (currentMode == SelectMode::SelectSong);
+        if(sortOv.songMode){
+            sortOv.cursor = (sortKey == SortKey::Level) ? 0 : 1;
+            sortOv.desc = sortDescending;
+        }
+        else{
+            sortOv.cursor = static_cast<int>(g_genreSort);
+        }
+    };
+    auto decideSortOverlay = [&](){
+        if(sortOv.songMode){
+            sortKey = (sortOv.cursor == 0) ? SortKey::Level : SortKey::Title;
+            sortDescending = sortOv.desc;
+            applySongSort();
+        }
+        else{
+            g_genreSort = static_cast<GenreSort>(std::clamp(sortOv.cursor, 0, 2));
+            rebuildCategories();
+        }
+        sortOv.closing = true;
+        sortOv.closeTick = SDL_GetTicks();
+    };
+    auto cancelSortOverlay = [&](){
+        sortOv.closing = true;
+        sortOv.closeTick = SDL_GetTicks();
+    };
 
     TTF_Font* font = TTF_OpenFont("fonts/prac.ttf", 40);
     TTF_Font* sub_font = TTF_OpenFont("fonts/prac.ttf", 35);
@@ -259,6 +451,26 @@ GameScene selectSongScene(SDL_Window* window, SDL_Renderer* renderer, std::strin
     double chartAnimation = 0.0;   // 譜面製作者の行の表示量 (0.0〜1.0)
     double diffSlide = 0.0;        // 難易度切替時のスライド量 (-1.0〜1.0、0で停止)
 
+    auto setDifficulty = [&](int next){
+        if(next == difficultyCursor) return;
+        const auto& diffs = categories[genreCursor].songList[songCursor].difficulties;
+        const int current = diffs.empty() ? difficultyCursor : diffKeyAt(diffs, diffIndexNear(diffs, difficultyCursor));
+        diffSlide = (next > current) ? 1.0 : -1.0;
+        g_diffPrevCursor = current;
+        g_diffChangeTick = SDL_GetTicks();
+        const std::string keep = currentSongPath();
+        difficultyCursor = next;
+        g_listDiffCursor = next;
+        if(sortKey == SortKey::Level){
+            for(auto& g : fullCategories){
+                if(g.isTutorial || !(g.isAll || g_songSortChosen)) continue;
+                int unused = 0;
+                sortAllSongs(g, sortKey, sortDescending, difficultyCursor, unused);
+            }
+        }
+        applyDiffFilter(keep);
+    };
+
     auto moveCursor = [&](int dir){
         if(currentMode == SelectMode::SelectGenre){
             int n = static_cast<int>(categories.size());
@@ -267,7 +479,6 @@ GameScene selectSongScene(SDL_Window* window, SDL_Renderer* renderer, std::strin
         else if(currentMode == SelectMode::SelectSong){
             int n = static_cast<int>(categories[genreCursor].songList.size());
             songCursor = (songCursor + dir + n) % n;
-            detailAnimation = 0.2;   // 曲が変わったときの詳細パネルのアニメ
         }
     };
 
@@ -405,11 +616,42 @@ GameScene selectSongScene(SDL_Window* window, SDL_Renderer* renderer, std::strin
             }
             if(toMenu) continue;   // メニューへ戻る途中は操作を受け付けない
 
+            if(sortOv.open){
+                if(sortOv.closing) continue;
+                const int cardCount = sortOv.songMode ? 2 : 3;
+                if(e.type == SDL_MOUSEBUTTONDOWN && e.button.button == SDL_BUTTON_LEFT){
+                    const int mx = e.button.x, my = e.button.y;
+                    bool hit = false;
+                    for(int c = 0; c < cardCount; c++){
+                        if(pointIn(g_hitSortCard[c], mx, my)){ sortOv.cursor = c; decideSortOverlay(); hit = true; break; }
+                    }
+                    if(!hit && sortOv.songMode){
+                        if(pointIn(g_hitSortOrder[0], mx, my)){ sortOv.desc = false; hit = true; }
+                        else if(pointIn(g_hitSortOrder[1], mx, my)){ sortOv.desc = true; hit = true; }
+                    }
+                }
+                if(e.type == SDL_KEYDOWN){
+                    switch(e.key.keysym.sym){
+                        case SDLK_LEFT:   sortOv.cursor = (sortOv.cursor + cardCount - 1) % cardCount; break;
+                        case SDLK_RIGHT:  sortOv.cursor = (sortOv.cursor + 1) % cardCount; break;
+                        case SDLK_UP:
+                        case SDLK_DOWN:   if(sortOv.songMode) sortOv.desc = !sortOv.desc; break;
+                        case SDLK_RETURN: decideSortOverlay(); break;
+                        case SDLK_ESCAPE: cancelSortOverlay(); break;
+                        default: break;
+                    }
+                }
+                continue;
+            }
+
             // 真ん中の立方体をクリック：台座と立方体が勢いよく回り、Cube の数のウィンドウを開く／閉じる
             if(e.type == SDL_MOUSEBUTTONDOWN && e.button.button == SDL_BUTTON_LEFT && !settings.isOpen()){
                 const int mx = e.button.x, my = e.button.y;
                 const bool songMode = (currentMode == SelectMode::SelectSong);
-                if(hitShowcaseCube(mx, my)){
+                if(pointIn(g_hitSort, mx, my)){
+                    openSortOverlay();
+                }
+                else if(hitShowcaseCube(mx, my)){
                     countShowcaseClick();   // 0.3 秒以内の連打を数える（20 回で十二面体）
                     g_showcase.boost = std::min(SPIN_BOOST_MAX, g_showcase.boost + SPIN_BOOST_ADD);
                     g_showcase.windowOpen = !g_showcase.windowOpen;
@@ -421,8 +663,15 @@ GameScene selectSongScene(SDL_Window* window, SDL_Renderer* renderer, std::strin
                 }
                 else if(!songMode && pointIn(g_hitGenre, mx, my)) pushKey(SDLK_RETURN);   // ジャンルを決定
                 else if(songMode && pointIn(g_hitSong, mx, my))   pushKey(SDLK_RETURN);   // 曲を決定（プレイへ）
-                else if(songMode && pointIn(g_hitDiffL, mx, my))  pushKey(SDLK_LEFT);
-                else if(songMode && pointIn(g_hitDiffR, mx, my))  pushKey(SDLK_RIGHT);
+            }
+            if(e.type == SDL_MOUSEMOTION && !jackets.dragging && currentMode == SelectMode::SelectSong && !settings.isOpen()){
+                for(size_t mi = 0; mi < g_hitDiffMarks.size(); mi++){
+                    if(pointIn(g_hitDiffMarks[mi], e.motion.x, e.motion.y)){
+                        const auto& diffs = categories[genreCursor].songList[songCursor].difficulties;
+                        if(mi < diffs.size() && diffIndexNear(diffs, difficultyCursor) != static_cast<int>(mi)) setDifficulty(diffKeyAt(diffs, mi));
+                        break;
+                    }
+                }
             }
             // ロード：つかんでいる間は、右へ動かした分だけ進む（最大 LOAD_MAX = 99.9%）
             if(e.type == SDL_MOUSEMOTION && jackets.dragging){
@@ -496,15 +745,10 @@ GameScene selectSongScene(SDL_Window* window, SDL_Renderer* renderer, std::strin
                         if(diffs.empty()) break;
 
                         bool toRight = (e.key.keysym.sym == SDLK_RIGHT);
-                        int current = clampDifficulty(difficultyCursor, diffs.size());
+                        int current = diffIndexNear(diffs, difficultyCursor);
                         int next = current + (toRight ? 1 : -1);
-                        if(next < 0 || next >= static_cast<int>(diffs.size())) break;   // 端で止める
-
-                        difficultyCursor = next;
-                        diffSlide = toRight ? 1.0 : -1.0;   // 押した方向から次の難易度が入ってくる
-                        if(sortKey == SortKey::Level && categories[genreCursor].isAll){
-                            sortAllSongs(categories[genreCursor], sortKey, sortDescending, difficultyCursor, songCursor);
-                        }
+                        if(next < 0 || next >= static_cast<int>(diffs.size())) break;
+                        setDifficulty(diffKeyAt(diffs, static_cast<size_t>(next)));
                         break;
                     }
 
@@ -530,7 +774,7 @@ GameScene selectSongScene(SDL_Window* window, SDL_Renderer* renderer, std::strin
                             }
                             else{
                                 // ←→ で表示している難易度の、JSON 上の元の番号を渡す
-                                int idx = clampDifficulty(difficultyCursor, song.difficulties.size());
+                                int idx = diffIndexNear(song.difficulties, difficultyCursor);
                                 outSelectedDifficulty = song.difficulties[idx].fileIndex;
                             }
 
@@ -565,8 +809,7 @@ GameScene selectSongScene(SDL_Window* window, SDL_Renderer* renderer, std::strin
 
                     case SDLK_F3:
                     case SDLK_F4:{
-                        // ALL の曲選択中だけ有効
-                        if(currentMode != SelectMode::SelectSong || !categories[genreCursor].isAll) break;
+                        if(currentMode != SelectMode::SelectSong || categories[genreCursor].isTutorial) break;
 
                         if(e.key.keysym.sym == SDLK_F3){
                             sortKey = (sortKey == SortKey::Title) ? SortKey::Level : SortKey::Title;
@@ -574,14 +817,12 @@ GameScene selectSongScene(SDL_Window* window, SDL_Renderer* renderer, std::strin
                         else{
                             sortDescending = !sortDescending;
                         }
-                        sortAllSongs(categories[genreCursor], sortKey, sortDescending, difficultyCursor, songCursor);
+                        applySongSort();
                         break;
                     }
                 }
                 
-                if(cursorMoved && currentMode == SelectMode::SelectSong){
-                    detailAnimation = 0.2;
-                }
+                (void)cursorMoved;
             }
         }
 
@@ -640,7 +881,7 @@ GameScene selectSongScene(SDL_Window* window, SDL_Renderer* renderer, std::strin
         // 画面の真ん中の奥：回る台座と立方体（一覧などより先に描くので、一番奥になる）
         draw_CubeShowcase(renderer);
 
-        if(currentMode == SelectMode::SelectSong && categories[genreCursor].isAll){
+        if(currentMode == SelectMode::SelectSong && (categories[genreCursor].isAll || g_songSortChosen) && !categories[genreCursor].isTutorial){
             songPanel.title = std::string("MUSIC / ")
                             + (sortKey == SortKey::Title ? "TITLE" : "LEVEL")
                             + (sortDescending ? " DESC" : " ASC")
@@ -651,15 +892,19 @@ GameScene selectSongScene(SDL_Window* window, SDL_Renderer* renderer, std::strin
         }
 
         g_hitGenre = g_hitSong = g_hitDiffL = g_hitDiffR = SDL_Rect{0, 0, 0, 0};   // このフレームで描いた物だけ押せる
+        g_listDiffCursor = difficultyCursor;
         draw_ListsInPanels(renderer, font, label_font, categories, genreCursor, songCursor,
                            currentMode, genrePanel, songPanel);
+        g_hitSort = SDL_Rect{0, 0, 0, 0};
+        g_listDiffCursor = difficultyCursor;
+        draw_SortWindow(renderer, font, label_font, currentMode == SelectMode::SelectSong, sortOv.open);
         draw_Jacket(renderer, label_font, jackets, categories[genreCursor].songList[songCursor], currentMode, selectBg);
 
         draw_JacketVisualizer(renderer, jackets, visualizer);
 
         if(detailAnimation > 0.001){
             const SongInfo& song = categories[genreCursor].songList[songCursor];
-            int diffIndex = clampDifficulty(difficultyCursor, song.difficulties.size());
+            int diffIndex = diffIndexNear(song.difficulties, difficultyCursor);
             const DifficultyInfo* diff = song.difficulties.empty() ? nullptr : &song.difficulties[diffIndex];
 
             // 難易度・情報のウィンドウ：曲選択になった瞬間は Cube から作り出す（それ以外はいつも通りのスライド）
@@ -671,7 +916,7 @@ GameScene selectSongScene(SDL_Window* window, SDL_Renderer* renderer, std::strin
         //   右端をそろえて2行で出す。設定ウィンドウを開いているときは、その下に隠れる
         {
             const bool songMode = (currentMode == SelectMode::SelectSong);
-            const bool sortable = songMode && categories[genreCursor].isAll;
+            const bool sortable = songMode && !categories[genreCursor].isTutorial;
             const std::string line1 = songMode
                 ? "[↑↓]:曲を選ぶ   [←→]:難易度   [ENTER]:プレイ   [Ctrl+ENTER]:オートプレイ"
                 : "[↑↓]:ジャンルを選ぶ   [ENTER]:決定";
@@ -704,6 +949,15 @@ GameScene selectSongScene(SDL_Window* window, SDL_Renderer* renderer, std::strin
             draw_CubeWindow(renderer, font, label_font, cubeX, cubeY);
         }
 
+        if(sortOv.open){
+            if(sortOv.closing && SDL_GetTicks() - sortOv.closeTick >= SORT_CLOSE_MS){
+                sortOv.open = false;
+            }
+            else{
+                draw_SortOverlay(renderer, font, label_font, sortOv);
+            }
+        }
+
 
         SDL_RenderPresent(renderer);
 
@@ -724,6 +978,8 @@ GameScene selectSongScene(SDL_Window* window, SDL_Renderer* renderer, std::strin
     destroyJackets(jackets);
     destroySongLayer();
     destroyCubeWindow();
+    destroySortLayers();
+    clearTextCache();
     g_showcase.windowOpen = false;   // 次に選曲画面に来たときは閉じた状態から
     g_showcase.easter = 0;           // 十二面体のまま画面を離れても、次は立方体から
     g_showcase.combo = 0;
@@ -800,9 +1056,6 @@ static void drawItemFrame(SDL_Renderer* renderer, const SDL_Rect& rect, SDL_Colo
 }
 
 // ===== 一覧ウィンドウまわり =====
-static const SDL_Color PANEL_FILL          = { 10,  10,  20, 190};
-static const SDL_Color PANEL_BORDER_FOCUS  = {  0, 200, 255, 255};  // 操作中のウィンドウ
-static const SDL_Color PANEL_BORDER_NORMAL = { 90,  90, 120, 255};  // それ以外
 static const int PANEL_BORDER_W = 3;
 
 // 各モードでのウィンドウの目標矩形 {x, y, w, h}
@@ -846,37 +1099,14 @@ static void updatePanel(PanelWindow& p, const SDL_Rect& target, double targetTit
     p.titleAlpha += (targetTitleAlpha - p.titleAlpha) * k;
 }
 
-// ウィンドウ本体とタイトルタブを描く
+// ウィンドウ本体とタイトルタブを描く（HoloWindow.h のホログラムのウィンドウ）
+//   グリッチの起き方は、ウィンドウの名前から作った数（seed）でウィンドウごとに変える
 static void drawPanelBack(SDL_Renderer* renderer, TTF_Font* labelFont, const PanelWindow& p, bool focused, double alphaMul = 1.0){
-    SDL_Rect r = panelRect(p);
-    SDL_Color border = focused ? PANEL_BORDER_FOCUS : PANEL_BORDER_NORMAL;
-    SDL_Color fill = PANEL_FILL;
-    border.a = static_cast<Uint8>(border.a * alphaMul);
-    fill.a   = static_cast<Uint8>(fill.a * alphaMul);
-
-    // タイトルタブ：ウィンドウ上辺の左端に乗せる
-    if(p.titleAlpha > 0.01 && labelFont){
-        SDL_Surface* surf = TTF_RenderUTF8_Blended(labelFont, p.title.c_str(), SDL_Color{15, 15, 25, 255});
-        if(surf){
-            Uint8 a = static_cast<Uint8>(p.titleAlpha * 255);
-            SDL_Rect tab = {r.x, r.y - surf->h - 6, surf->w + 28, surf->h + 6};
-
-            SDL_SetRenderDrawBlendMode(renderer, SDL_BLENDMODE_BLEND);
-            SDL_SetRenderDrawColor(renderer, border.r, border.g, border.b, a);
-            SDL_RenderFillRect(renderer, &tab);
-
-            SDL_Texture* tex = SDL_CreateTextureFromSurface(renderer, surf);
-            SDL_SetTextureBlendMode(tex, SDL_BLENDMODE_BLEND);
-            SDL_SetTextureAlphaMod(tex, a);
-            SDL_Rect textRect = {tab.x + 14, tab.y + 3, surf->w, surf->h};
-            SDL_RenderCopy(renderer, tex, NULL, &textRect);
-
-            SDL_DestroyTexture(tex);
-            SDL_FreeSurface(surf);
-        }
-    }
-
-    drawItemFrame(renderer, r, fill, border, PANEL_BORDER_W);
+    const SDL_Rect r = panelRect(p);
+    uint32_t seed = 2166136261u;
+    for(unsigned char c : p.title) seed = (seed ^ c) * 16777619u;
+    if(p.titleAlpha > 0.01) drawHoloWindowTab(renderer, labelFont, p.title.c_str(), r, static_cast<Uint8>(p.titleAlpha * alphaMul * 255));
+    drawHoloWindow(renderer, r, alphaMul, focused, PANEL_BORDER_W, seed);
 }
 
 // ウィンドウの内側（枠線の内側）だけを描画可能にする
@@ -1103,7 +1333,7 @@ static const float  CUBE_WIN_DY    = -120.0f;  //   縦のずれ(px)（マイナ
 static const int    CUBE_WIN_W     = 320;
 static const int    CUBE_WIN_H     = 130;
 static const float  CUBE_WIN_ICON_RATIO = 0.6f;   // 数の右の立方体の大きさ（数のフォントの高さの何倍か。0.6 ≒ 数字の高さ）
-static const SDL_Color CUBE_WIN_COLOR = {0, 200, 255, 255};   // 枠と線の色（操作中のウィンドウの枠と同じ水色）
+static const SDL_Color CUBE_WIN_COLOR = HOLO_WINDOW_COLOR;   // 線の色（ウィンドウの枠と同じ Cube の色）
 static const double CUBE_WIN_IN_MS  = QuarryReveal::TOTAL_MS;
 static const double CUBE_WIN_OUT_MS = 160.0;
 
@@ -1146,7 +1376,7 @@ void draw_CubeWindow(SDL_Renderer* renderer, TTF_Font* font, TTF_Font* labelFont
         // 線：立方体の中心 → ウィンドウの左下の角（作り出している途中は、光の線が代わりになる）
         if(withLine) drawThickLine(renderer, cubeX, cubeY, static_cast<float>(win.x), static_cast<float>(win.y + win.h), 2.5f, CUBE_WIN_COLOR);
         // ウィンドウ
-        drawItemFrame(renderer, win, PANEL_FILL, CUBE_WIN_COLOR, PANEL_BORDER_W);
+        drawHoloWindow(renderer, win, 1.0, true, PANEL_BORDER_W, 0xC0BEu);
         // 文字：上に小さく「TOTAL CUBE」、その下に大きく数
         auto text = [&](TTF_Font* f, const std::string& str, SDL_Color c, int x, int cy){
             if(!f) return;
@@ -1207,6 +1437,243 @@ void draw_CubeWindow(SDL_Renderer* renderer, TTF_Font* font, TTF_Font* labelFont
     SDL_RenderSetClipRect(renderer, nullptr);
 }
 
+
+struct FitText{
+    SDL_Texture* tex = nullptr;
+    int w = 0, h = 0;
+    bool owned = false;
+};
+
+struct CachedText{
+    SDL_Texture* tex = nullptr;
+    int w = 0, h = 0;
+};
+static std::unordered_map<std::string, CachedText> g_textCache;
+
+static void clearTextCache(){
+    for(auto& kv : g_textCache){
+        if(kv.second.tex) SDL_DestroyTexture(kv.second.tex);
+    }
+    g_textCache.clear();
+}
+
+static const CachedText* cachedText(SDL_Renderer* renderer, TTF_Font* font, const std::string& text, SDL_Color color){
+    std::string key;
+    key.reserve(text.size() + 24);
+    key.append(reinterpret_cast<const char*>(&font), sizeof(font));
+    key.push_back(static_cast<char>(color.r));
+    key.push_back(static_cast<char>(color.g));
+    key.push_back(static_cast<char>(color.b));
+    key += text;
+    auto it = g_textCache.find(key);
+    if(it != g_textCache.end()) return &it->second;
+    if(g_textCache.size() > 600) clearTextCache();
+    SDL_Surface* surf = TTF_RenderUTF8_Blended(font, text.c_str(), color);
+    if(!surf) return nullptr;
+    CachedText c;
+    c.tex = SDL_CreateTextureFromSurface(renderer, surf);
+    c.w = surf->w;
+    c.h = surf->h;
+    SDL_FreeSurface(surf);
+    if(!c.tex) return nullptr;
+    SDL_SetTextureBlendMode(c.tex, SDL_BLENDMODE_BLEND);
+    SDL_SetTextureScaleMode(c.tex, SDL_ScaleModeLinear);
+    return &g_textCache.emplace(std::move(key), c).first->second;
+}
+
+static void releaseFit(FitText& ft){
+    if(ft.owned && ft.tex) SDL_DestroyTexture(ft.tex);
+    ft.tex = nullptr;
+}
+
+static void popUtf8(std::string& s){
+    if(s.empty()) return;
+    size_t i = s.size() - 1;
+    while(i > 0 && (static_cast<unsigned char>(s[i]) & 0xC0) == 0x80) i--;
+    s.erase(i);
+}
+
+static FitText makeFitText(SDL_Renderer* renderer, TTF_Font* font, const std::string& text, SDL_Color color,
+                           double scale, int maxW, double minRatio = 0.55){
+    FitText out;
+    if(!font || text.empty()) return out;
+    if(const CachedText* c = cachedText(renderer, font, text, color)){
+        double sc = scale;
+        if(maxW > 0 && c->w * sc > maxW) sc = std::max(static_cast<double>(maxW) / c->w, scale * minRatio);
+        if(maxW <= 0 || c->w * sc <= maxW + 0.5){
+            SDL_SetTextureAlphaMod(c->tex, 255);
+            out.tex = c->tex;
+            out.w = static_cast<int>(c->w * sc);
+            out.h = static_cast<int>(c->h * sc);
+            return out;
+        }
+    }
+    out.owned = true;
+    std::string t = text;
+    bool cut = false;
+    for(int guard = 0; guard < 400; guard++){
+        SDL_Surface* surf = TTF_RenderUTF8_Blended(font, (cut ? t + "…" : t).c_str(), color);
+        if(!surf) return out;
+        double sc = scale;
+        if(maxW > 0 && surf->w * sc > maxW) sc = std::max(static_cast<double>(maxW) / surf->w, scale * minRatio);
+        if(maxW > 0 && surf->w * sc > maxW + 0.5 && !t.empty()){
+            SDL_FreeSurface(surf);
+            popUtf8(t);
+            cut = true;
+            continue;
+        }
+        out.tex = SDL_CreateTextureFromSurface(renderer, surf);
+        if(out.tex){
+            SDL_SetTextureBlendMode(out.tex, SDL_BLENDMODE_BLEND);
+            SDL_SetTextureScaleMode(out.tex, SDL_ScaleModeLinear);
+        }
+        out.w = static_cast<int>(surf->w * sc);
+        out.h = static_cast<int>(surf->h * sc);
+        SDL_FreeSurface(surf);
+        return out;
+    }
+    return out;
+}
+
+static void drawGlitchTex(SDL_Renderer* renderer, SDL_Texture* tex, const SDL_Rect& dst, double vis, Uint8 alpha, uint32_t salt){
+    if(!tex || vis <= 0.0) return;
+    if(vis >= 1.0){
+        SDL_SetTextureAlphaMod(tex, alpha);
+        SDL_RenderCopy(renderer, tex, nullptr, &dst);
+        return;
+    }
+    int tw = 0, th = 0;
+    SDL_QueryTexture(tex, nullptr, nullptr, &tw, &th);
+    const int bands = 8;
+    const float strength = static_cast<float>(1.0 - vis);
+    const uint32_t seed = SDL_GetTicks() / 30u;
+    for(int b = 0; b < bands; b++){
+        const uint32_t k = seed * 977u + salt * 131u + static_cast<uint32_t>(b) * 17u;
+        if(holoHash01(k) >= vis) continue;
+        const int sy0 = th * b / bands, sy1 = th * (b + 1) / bands;
+        const float dy0 = dst.y + static_cast<float>(dst.h) * b / bands;
+        const float dh  = static_cast<float>(dst.h) / bands + 0.5f;
+        const float sh  = (holoHash01(k * 3u + 1u) < 0.6) ? static_cast<float>(holoHash01(k * 7u + 5u) * 2.0 - 1.0) * 18.0f * strength : 0.0f;
+        SDL_Rect src = {0, sy0, tw, sy1 - sy0};
+        SDL_SetTextureColorMod(tex, 255, 40, 60);
+        SDL_SetTextureAlphaMod(tex, static_cast<Uint8>(alpha * 0.6f * strength));
+        SDL_FRect d1 = {dst.x + sh - 5.0f * strength, dy0, static_cast<float>(dst.w), dh};
+        SDL_RenderCopyF(renderer, tex, &src, &d1);
+        SDL_SetTextureColorMod(tex, 40, 200, 255);
+        SDL_FRect d2 = {dst.x + sh + 5.0f * strength, dy0, static_cast<float>(dst.w), dh};
+        SDL_RenderCopyF(renderer, tex, &src, &d2);
+        SDL_SetTextureColorMod(tex, 255, 255, 255);
+        SDL_SetTextureAlphaMod(tex, alpha);
+        SDL_FRect d0 = {dst.x + sh, dy0, static_cast<float>(dst.w), dh};
+        SDL_RenderCopyF(renderer, tex, &src, &d0);
+    }
+    SDL_SetTextureColorMod(tex, 255, 255, 255);
+}
+
+static void drawFitText(SDL_Renderer* renderer, TTF_Font* font, const std::string& text, SDL_Color color,
+                        int x, int cy, double scale, int maxW, int align = 0, Uint8 alpha = 255, double vis = 1.0, uint32_t salt = 0){
+    FitText ft = makeFitText(renderer, font, text, color, scale, maxW);
+    if(!ft.tex) return;
+    const int dx = (align == 0) ? x : (align == 1 ? x - ft.w / 2 : x - ft.w);
+    SDL_Rect dst = {dx, cy - ft.h / 2, ft.w, ft.h};
+    drawGlitchTex(renderer, ft.tex, dst, vis, alpha, salt);
+    releaseFit(ft);
+}
+
+static int diffShownCursor(double& vis){
+    const double t = static_cast<double>(SDL_GetTicks() - g_diffChangeTick);
+    if(g_diffChangeTick != 0 && t < DIFF_OUT_MS){ vis = 1.0 - t / DIFF_OUT_MS; return g_diffPrevCursor; }
+    if(g_diffChangeTick != 0 && t < DIFF_OUT_MS + DIFF_IN_MS){ vis = (t - DIFF_OUT_MS) / DIFF_IN_MS; return g_listDiffCursor; }
+    vis = 1.0;
+    return g_listDiffCursor;
+}
+
+static void drawDiffMark(SDL_Renderer* renderer, float cx, float cy, float size, SDL_Color c, double alphaMul, uint32_t salt){
+    const Uint32 ticks = SDL_GetTicks();
+    const float t = ticks / 1000.0f;
+    const float ang = t * 1.1f + salt * 0.7f;
+    const HoloFx holo = holoNow();
+    const float flick = holo.flicker * (0.88f + 0.12f * std::sin(t * 9.0f + salt));
+    const uint32_t slot = ticks / 60u;
+    const bool gl = holo.glitch || holoHash01(slot * 31u + salt * 7u) < 0.07;
+    const float gx = gl ? static_cast<float>(holoHash01(slot * 13u + salt) * 2.0 - 1.0) * size * 0.12f : 0.0f;
+    const float a = static_cast<float>(std::clamp(alphaMul, 0.0, 1.0)) * 255.0f * flick;
+
+    SDL_Vertex v[20];
+    int idx[42];
+    int nv = 0, ni = 0;
+    auto quad = [&](float x, float y, float half, float th, SDL_Color col){
+        const float cs = std::cos(th) * half, sn = std::sin(th) * half;
+        const int b0 = nv;
+        v[nv++] = {{x - cs + sn, y - sn - cs}, col, {0, 0}};
+        v[nv++] = {{x + cs + sn, y + sn - cs}, col, {0, 0}};
+        v[nv++] = {{x + cs - sn, y + sn + cs}, col, {0, 0}};
+        v[nv++] = {{x - cs - sn, y - sn + cs}, col, {0, 0}};
+        const int q[6] = {0, 1, 2, 0, 2, 3};
+        for(int k = 0; k < 6; k++) idx[ni++] = b0 + q[k];
+    };
+    const float half = size * 0.5f;
+    if(gl){
+        const Uint8 ga = static_cast<Uint8>(a * 0.35f);
+        quad(cx + gx - 3.0f, cy, half, ang, SDL_Color{255, 40, 60, ga});
+        quad(cx + gx + 3.0f, cy, half, ang, SDL_Color{40, 200, 255, ga});
+    }
+    quad(cx + gx, cy, half, ang, SDL_Color{c.r, c.g, c.b, static_cast<Uint8>(a * 0.62f)});
+
+    const float rOut = size * 0.31f + 1.0f;
+    const float rIn  = size * 0.31f - 1.0f;
+    const float th = -ang * 1.4f;
+    const float cs = std::cos(th), sn = std::sin(th);
+    const float lx[4] = {-1.0f, 1.0f, 1.0f, -1.0f};
+    const float ly[4] = {-1.0f, -1.0f, 1.0f, 1.0f};
+    const SDL_Color wc = {255, 255, 255, static_cast<Uint8>(a * 0.9f)};
+    const int b0 = nv;
+    for(int k = 0; k < 4; k++){
+        v[nv++] = {{cx + gx + (lx[k] * cs - ly[k] * sn) * rOut, cy + (lx[k] * sn + ly[k] * cs) * rOut}, wc, {0, 0}};
+        v[nv++] = {{cx + gx + (lx[k] * cs - ly[k] * sn) * rIn,  cy + (lx[k] * sn + ly[k] * cs) * rIn},  wc, {0, 0}};
+    }
+    for(int k = 0; k < 4; k++){
+        const int o0 = b0 + k * 2, i0 = o0 + 1;
+        const int o1 = b0 + ((k + 1) % 4) * 2, i1 = o1 + 1;
+        idx[ni++] = o0; idx[ni++] = o1; idx[ni++] = i1;
+        idx[ni++] = o0; idx[ni++] = i1; idx[ni++] = i0;
+    }
+    SDL_RenderGeometry(renderer, nullptr, v, nv, idx, ni);
+}
+
+static std::string songLengthLabel(const SongInfo& song){
+    auto it = g_songLengthMs.find(song.scorePath);
+    if(it == g_songLengthMs.end()){
+        const Uint32 frame = SDL_GetTicks() / 16u;
+        if(frame == g_songLengthFrame) return "--:--";
+        g_songLengthFrame = frame;
+        double ms = -1.0;
+        std::string path;
+        if(!song.audioExtName.empty() && std::filesystem::exists("sounds/" + song.audioExtName)) path = "sounds/" + song.audioExtName;
+        else if(std::filesystem::exists("sounds/" + song.title + ".mp3")) path = "sounds/" + song.title + ".mp3";
+        else if(std::filesystem::exists("sounds/" + song.title + ".wav")) path = "sounds/" + song.title + ".wav";
+#if defined(SDL_MIXER_VERSION_ATLEAST)
+#if SDL_MIXER_VERSION_ATLEAST(2, 6, 0)
+        if(!path.empty()){
+            Mix_Music* m = Mix_LoadMUS(path.c_str());
+            if(m){
+                ms = Mix_MusicDuration(m) * 1000.0;
+                Mix_FreeMusic(m);
+            }
+        }
+#endif
+#endif
+        it = g_songLengthMs.emplace(song.scorePath, ms).first;
+    }
+    if(it->second <= 0.0) return "--:--";
+    const int sec = static_cast<int>(it->second / 1000.0 + 0.5);
+    char buf[16];
+    std::snprintf(buf, sizeof(buf), "%d:%02d", sec / 60, sec % 60);
+    return buf;
+}
+
+static SDL_Color difficultyColor(const std::string& name);
+
 void draw_GenreList(SDL_Renderer* renderer, TTF_Font* font, std::vector<GenreInfo>& categories,size_t genreCursor, bool isSongMode, SDL_Rect* outSelectedGenreRect){
     int lineGap = 80;
     int centerY = SCREEN_H / 2;
@@ -1256,35 +1723,39 @@ void draw_GenreList(SDL_Renderer* renderer, TTF_Font* font, std::vector<GenreInf
             displayName = ">> " + displayName;
         }
 
-        SDL_Surface* surf = TTF_RenderUTF8_Blended(font, displayName.c_str(), textColor);
-        if(!surf) continue;
+        const bool isCursor = (i == genreCursor);
+        const double sc = categories[i].currentScale;
+        const std::string countText = categories[i].isTutorial ? "" : std::to_string(categories[i].songList.size()) + "曲";
+        const int countW = countText.empty() ? 0 : 110;
+        FitText ft = makeFitText(renderer, font, displayName, textColor, sc, GENRE_FRAME_MIN_W - FRAME_PAD_X * 2 - countW);
+        if(!ft.tex) continue;
+        const int baseH = TTF_FontHeight(font);
 
-        SDL_Texture* tex = SDL_CreateTextureFromSurface(renderer, surf);
         SDL_Rect destRect;
-        destRect.w = static_cast<int>(surf->w * categories[i].currentScale);
-        destRect.h = static_cast<int>(surf->h * categories[i].currentScale);
-
+        destRect.w = ft.w;
+        destRect.h = ft.h;
         destRect.x = static_cast<int>(categories[i].currentX);
+        const int scaledH = static_cast<int>(baseH * sc);
+        destRect.y = static_cast<int>(categories[i].currentY) - (scaledH - baseH) / 2 + (scaledH - ft.h) / 2;
 
-        int baseY = static_cast<int>(categories[i].currentY);
-        destRect.y =baseY - (destRect.h - surf->h) / 2;
-
-        bool isCursor = (i == genreCursor);
-        SDL_Rect frameRect = makeFrameRect(destRect, GENRE_FRAME_MIN_W);
+        SDL_Rect frameRect = makeFrameRect(SDL_Rect{destRect.x, static_cast<int>(categories[i].currentY) - (scaledH - baseH) / 2, destRect.w, scaledH},
+                                           GENRE_FRAME_MIN_W);
         drawItemFrame(renderer, frameRect,
                       isCursor ? FRAME_FILL_ACTIVE : FRAME_FILL_NORMAL,
                       isCursor ? textColor : FRAME_BORDER_NORMAL,
                       isCursor ? 3 : 1);
 
-        SDL_RenderCopy(renderer, tex, NULL, &destRect);
+        SDL_RenderCopy(renderer, ft.tex, NULL, &destRect);
+        releaseFit(ft);
+        if(!countText.empty()){
+            drawFitText(renderer, font, countText, isCursor ? textColor : SDL_Color{170, 170, 190, 255},
+                        frameRect.x + frameRect.w - FRAME_PAD_X, frameRect.y + frameRect.h / 2, 0.6 * sc, countW, 2);
+        }
 
         if(isSongMode && isCursor && outSelectedGenreRect != nullptr){
             *outSelectedGenreRect = frameRect;
         }
         if(!isSongMode && isCursor) g_hitGenre = frameRect;   // ジャンル選択中：選んでいるラベルをクリック → ENTER
-
-        SDL_DestroyTexture(tex);
-        SDL_FreeSurface(surf);
     }
 }
 
@@ -1336,44 +1807,68 @@ void draw_SongList(SDL_Renderer* renderer, TTF_Font* font, std::vector<SongInfo>
             displayName = ">> " + displayName; 
         }
 
-        SDL_Surface* surf  = TTF_RenderUTF8_Blended(font, displayName.c_str(), textColor);
-        if(!surf) continue;
+        const double sc = songList[i].currentScale;
+        const bool hasMark = !songList[i].scorePath.empty() && songList[i].scorePath.find("tutorial/") != 0;
+        const int baseH = TTF_FontHeight(font);
+        const int scaledH = static_cast<int>(baseH * sc);
+        const float markSize = (scaledH + FRAME_PAD_Y * 2) * 0.76f;
+        const int markW = hasMark ? std::max(0, static_cast<int>(markSize * 1.42f) + 12 - FRAME_PAD_X) : 0;
+        const int rightW = hasMark ? 90 : 0;
+        FitText ft = makeFitText(renderer, font, displayName, textColor, sc, SONG_FRAME_MIN_W - FRAME_PAD_X * 2 - rightW - markW);
+        if(!ft.tex) continue;
 
         SDL_Rect destRect;
-        destRect.w = static_cast<int>(surf->w * songList[i].currentScale);
-        destRect.h = static_cast<int>(surf->h * songList[i].currentScale);
-        destRect.x = static_cast<int>(songList[i].currentX);
+        destRect.w = ft.w;
+        destRect.h = ft.h;
+        const int left = static_cast<int>(songList[i].currentX);
+        destRect.x = left + markW;
+        const int baseY = static_cast<int>(songList[i].currentY);
+        const int rowTop = baseY - (scaledH - baseH) / 2 - scaledH / 2;
+        destRect.y = rowTop + (scaledH - ft.h) / 2;
 
-        int baseY = static_cast<int>(songList[i].currentY);
-        destRect.y = baseY - (destRect.h - surf->h) / 2 - destRect.h / 2;
+        SDL_Rect frameRect = makeFrameRect(SDL_Rect{left, rowTop, destRect.w + markW, scaledH}, SONG_FRAME_MIN_W);
 
-        SDL_Rect frameRect = makeFrameRect(destRect, SONG_FRAME_MIN_W);
-
-        // 上に退避したジャンル枠と重なる項目は描かない
         if(priorityRect != nullptr && SDL_HasIntersection(&frameRect, priorityRect)){
-            SDL_FreeSurface(surf);
+            releaseFit(ft);
             continue;
         }
 
-        // 枠の色を状態で切り替え
         bool highlight = isCursor && colorActive;
         SDL_Color fill, border;
-        if(!colorActive){            // ジャンル選択中のプレビュー（灰色）
+        if(!colorActive){
             fill = FRAME_FILL_INACTIVE;  border = FRAME_BORDER_INACTIVE;
         }
-        else if(highlight){          // カーソル位置
+        else if(highlight){
             fill = FRAME_FILL_ACTIVE;    border = textColor;
         }
         else{
             fill = FRAME_FILL_NORMAL;    border = FRAME_BORDER_NORMAL;
         }
         drawItemFrame(renderer, frameRect, fill, border, highlight ? 3 : 1);
-        if(highlight) g_hitSong = frameRect;   // 曲選択中：選んでいる曲のラベルをクリック → ENTER
+        SDL_RenderCopy(renderer, ft.tex, NULL, &destRect);
+        releaseFit(ft);
 
-        SDL_Texture* tex = SDL_CreateTextureFromSurface(renderer, surf);
-        SDL_RenderCopy(renderer, tex, NULL, &destRect);
-        SDL_DestroyTexture(tex);
-        SDL_FreeSurface(surf);
+        const bool visible = frameRect.y + frameRect.h > SONG_PANEL_LIST.y && frameRect.y < SONG_PANEL_LIST.y + SONG_PANEL_LIST.h;
+        if(visible && hasMark){
+            const int midY = frameRect.y + frameRect.h / 2;
+            const int right = frameRect.x + frameRect.w;
+            drawFitText(renderer, font, songLengthLabel(songList[i]), colorActive ? SDL_Color{190, 190, 210, 255} : textColor,
+                        right - FRAME_PAD_X, midY, 0.6 * sc, rightW, 2);
+            if(!songList[i].difficulties.empty()){
+                double vis = 1.0;
+                const int shown = diffShownCursor(vis);
+                const DifficultyInfo& d = songList[i].difficulties[diffIndexNear(songList[i].difficulties, shown)];
+                SDL_Color dc = difficultyColor(d.name);
+                if(!colorActive) dc = SDL_Color{static_cast<Uint8>(dc.r / 2 + 40), static_cast<Uint8>(dc.g / 2 + 40), static_cast<Uint8>(dc.b / 2 + 40), 255};
+                const float markX = frameRect.x + markSize * 0.71f + 5.0f;
+                drawDiffMark(renderer, markX, static_cast<float>(midY), markSize, dc, colorActive ? 1.0 : 0.5, static_cast<uint32_t>(i));
+                const SDL_Color lc = colorActive ? HOLO_FRONT_COLOR : SDL_Color{150, 175, 180, 255};
+                drawFitText(renderer, font, d.level, lc, static_cast<int>(markX), midY,
+                            0.6 * sc, static_cast<int>(markSize * 0.95f), 1, 255, vis, static_cast<uint32_t>(i) + 50u);
+            }
+        }
+        if(highlight) g_hitSong = frameRect;   // 曲選択中：選んでいる曲のラベルをクリック → ENTER
+        if(highlight) g_hitSong = frameRect;   // 曲選択中：選んでいる曲のラベルをクリック → ENTER
     }
 }
 
@@ -1409,15 +1904,15 @@ void draw_songDetail(SDL_Renderer* renderer, TTF_Font* font, TTF_Font* labelFont
     }
 
     // 1. 全行をサーフェスにして、幅と高さを測る
-    std::vector<SDL_Surface*> surfs;
+    std::vector<FitText> surfs;
     int maxW = 0;
     int firstH = 0;
     for(size_t i = 0; i < infoLines.size(); i++){
-        SDL_Surface* s = TTF_RenderUTF8_Blended(font, infoLines[i].text.c_str(), infoLines[i].color);
+        FitText s = makeFitText(renderer, font, infoLines[i].text, infoLines[i].color, 1.0, INFO_PANEL_MIN_W - INFO_PANEL_PAD_X * 2);
         surfs.push_back(s);
-        if(s){
-            maxW = std::max(maxW, s->w);
-            if(i == 0) firstH = s->h;
+        if(s.tex){
+            maxW = std::max(maxW, s.w);
+            if(i == 0) firstH = TTF_FontHeight(font);
         }
     }
 
@@ -1442,18 +1937,12 @@ void draw_songDetail(SDL_Renderer* renderer, TTF_Font* font, TTF_Font* labelFont
     // 3. 文字：伸びている途中のウィンドウからはみ出さないようにクリップ
     setPanelClip(renderer, info);
     for(size_t i = 0; i < surfs.size(); i++){
-        SDL_Surface* surf = surfs[i];
-        if(!surf) continue;
-
-        SDL_Texture* tex = SDL_CreateTextureFromSurface(renderer, surf);
-        SDL_SetTextureBlendMode(tex, SDL_BLENDMODE_BLEND);
-        SDL_SetTextureAlphaMod(tex, static_cast<Uint8>(alpha * infoLines[i].anim));
-
-        SDL_Rect destrect = {baseX, baseY + static_cast<int>(i * lineGap), surf->w, surf->h};
-        SDL_RenderCopy(renderer, tex, NULL, &destrect);
-
-        SDL_DestroyTexture(tex);
-        SDL_FreeSurface(surf);
+        FitText& ft = surfs[i];
+        if(!ft.tex) continue;
+        SDL_SetTextureAlphaMod(ft.tex, static_cast<Uint8>(alpha * infoLines[i].anim));
+        SDL_Rect destrect = {baseX, baseY + static_cast<int>(i * lineGap) + (TTF_FontHeight(font) - ft.h) / 2, ft.w, ft.h};
+        SDL_RenderCopy(renderer, ft.tex, NULL, &destrect);
+        releaseFit(ft);
     }
     SDL_RenderSetClipRect(renderer, nullptr);
 }
@@ -1524,6 +2013,11 @@ SongInfo parseScoreFile(const std::filesystem::path& filePath){
     song.ChartCreator = j.value("chartCreator", std::string("Unknown"));
     song.jacket = j.value("jacket", std::string(""));
     song.previewStartMs = j.value("previewStart", 0.0);   // 試聴の開始位置（無ければ曲の頭）
+    if(j.contains("genres") && j.at("genres").is_array()){
+        for(const auto& g : j.at("genres")){
+            if(g.is_string()) song.genres.push_back(g.get<std::string>());
+        }
+    }
 
     song.difficulties = listDifficulties(song.scorePath);
 
@@ -1907,51 +2401,38 @@ static void drawTextCentered(SDL_Renderer* renderer, TTF_Font* font, const std::
 
 void draw_DifficultyBadge(SDL_Renderer* renderer, TTF_Font* font, TTF_Font* labelFont,
                           const std::vector<DifficultyInfo>& diffs, int index, double animation, double slide){
+    (void)slide;
+    g_hitDiffMarks.clear();
     if(diffs.empty()) return;
-    const DifficultyInfo& d = diffs[index];
+    const Uint8 alpha = static_cast<Uint8>(animation * 255);
+    const int offsetX = static_cast<int>((1.0 - animation) * 100);
+    const int left = BADGE_X + offsetX;
+    const int cy = BADGE_Y + BADGE_H / 2;
 
-    Uint8 alpha = static_cast<Uint8>(animation * 255);
-    int offsetX = static_cast<int>((1.0 - animation) * 100);   // INFO と同じスライドイン
-    int left = BADGE_X + offsetX;
-    int cy = BADGE_Y + BADGE_H / 2;
-
-    // 1. ウィンドウ ＋ 難易度色の枠線を上書き
-    PanelWindow panel;
-    panel.title = "DIFFICULTY";
-    panel.x = left;
-    panel.y = BADGE_Y;
-    panel.w = BADGE_W;
-    panel.h = BADGE_H;
-    panel.titleAlpha = animation;
-    drawPanelBack(renderer, labelFont, panel, false, animation);
-
-    SDL_Color dc = difficultyColor(d.name);
-    SDL_Color border = dc;
-    border.a = alpha;
-    drawItemFrame(renderer, panelRect(panel), SDL_Color{0, 0, 0, 0}, border, PANEL_BORDER_W);
-
-    // 2. 左右の矢印：これ以上進めない側は薄くする
-    bool canLeft  = (index > 0);
-    bool canRight = (index < static_cast<int>(diffs.size()) - 1);
-    SDL_Color arrowColor = {255, 255, 255, 255};
-    drawTextCentered(renderer, font, "<", arrowColor, left + 35, cy,
-                     canLeft ? alpha : static_cast<Uint8>(alpha * 0.2), true);
-    drawTextCentered(renderer, font, ">", arrowColor, left + BADGE_W - 35, cy,
-                     canRight ? alpha : static_cast<Uint8>(alpha * 0.2), true);
-    // 矢印をクリック → ← / →（出きっていて、その向きに進めるときだけ）
-    if(animation > 0.9){
-        if(canLeft)  g_hitDiffL = SDL_Rect{left, BADGE_Y, 70, BADGE_H};
-        if(canRight) g_hitDiffR = SDL_Rect{left + BADGE_W - 70, BADGE_Y, 70, BADGE_H};
+    const int n = static_cast<int>(diffs.size());
+    const float step = std::min(108.0f, 400.0f / std::max(1, n));
+    const float baseSize = std::min(64.0f, step * 0.7f);
+    int mx = 0, my = 0;
+    SDL_GetMouseState(&mx, &my);
+    for(int i = 0; i < n; i++){
+        const float x = left + 40.0f + step * (i + 0.5f);
+        const bool sel = (i == index);
+        const SDL_Rect hit = {static_cast<int>(x - step * 0.5f), BADGE_Y, static_cast<int>(step), BADGE_H};
+        const bool hov = pointIn(hit, mx, my);
+        const float size = baseSize * (sel ? 1.25f : (hov ? 1.08f : 1.0f));
+        drawDiffMark(renderer, x, static_cast<float>(cy), size, difficultyColor(diffs[i].name), animation * (sel ? 1.0 : 0.55), static_cast<uint32_t>(i) + 300u);
+        drawFitText(renderer, font, diffs[i].level, HOLO_FRONT_COLOR, static_cast<int>(x), cy, sel ? 0.66 : 0.52,
+                    static_cast<int>(size * 1.2f), 1, static_cast<Uint8>(alpha * (sel ? 1.0 : 0.7)));
+        if(animation > 0.9) g_hitDiffMarks.push_back(hit);
     }
 
-    // 3. 難易度名とレベル：切替直後は押した方向からスライドしながらフェードイン
-    int textOffset = static_cast<int>(slide * 60);
-    Uint8 textAlpha = static_cast<Uint8>(alpha * (1.0 - std::fabs(slide)));
-    std::string label = d.name + "   Lv." + d.level;
-
-    setPanelClip(renderer, panel);   // スライド中に矢印の外へはみ出さないように
-    drawTextCentered(renderer, font, label, dc, left + BADGE_W / 2 + textOffset, cy, textAlpha, true);
-    SDL_RenderSetClipRect(renderer, nullptr);
+    double vis = 1.0;
+    const int shown = diffIndexNear(diffs, diffShownCursor(vis));
+    const DifficultyInfo& d = diffs[shown];
+    const int textL = static_cast<int>(left + 40.0f + step * n + 30.0f);
+    const int textMaxW = left + BADGE_W - 20 - textL;
+    drawFitText(renderer, font, d.name, difficultyColor(d.name), textL, cy - 16, 0.9, textMaxW, 0, alpha, vis, 900u);
+    drawFitText(renderer, labelFont, "Lv." + d.level, SDL_Color{235, 235, 245, 255}, textL, cy + 24, 1.1, textMaxW, 0, alpha, vis, 901u);
 }
 
 // =====================================================================
@@ -2076,25 +2557,39 @@ static std::vector<char32_t> decodeUtf8(const std::string& s){
     return out;
 }
 
-// 1文字を「グループ（0:英数字 1:かな 2:その他）」と「比較用の番号」に変換する
 struct CollateChar{
     int group;
     char32_t key;
+    char32_t raw;
 };
 
-static CollateChar collateKey(char32_t c){
-    if(c >= 0xFF01 && c <= 0xFF5E) c -= 0xFEE0;            // 全角英数記号 → 半角
-    if(c >= 'a' && c <= 'z') c -= 32;                      // 小文字 → 大文字
-    if(c < 0x80) return {0, c};                            // 英数字・記号
-
-    if(c >= 0x30A1 && c <= 0x30F6) c -= 0x60;              // カタカナ → ひらがな
-    if((c >= 0x3041 && c <= 0x3096) || c == 0x30FC){       // ひらがな・長音「ー」
-        return {1, c};
+static char32_t kanaBase(char32_t c){
+    switch(c){
+        case 0x3041: case 0x3043: case 0x3045: case 0x3047: case 0x3049:
+        case 0x3083: case 0x3085: case 0x3087: return c + 1;
+        case 0x3063: return 0x3064;
+        case 0x308E: return 0x308F;
+        case 0x3095: return 0x304B;
+        case 0x3096: return 0x3051;
+        case 0x3094: return 0x3046;
+        default: break;
     }
-    return {2, c};                                         // 漢字など
+    if(c >= 0x304B && c <= 0x3062) return ((c - 0x304B) % 2 == 1) ? c - 1 : c;
+    if(c >= 0x3064 && c <= 0x3069) return ((c - 0x3064) % 2 == 1) ? c - 1 : c;
+    if(c >= 0x306F && c <= 0x307D) return c - (c - 0x306F) % 3;
+    return c;
 }
 
-// 曲名の比較：a が b より前なら true
+static CollateChar collateKey(char32_t c){
+    if(c >= 0xFF01 && c <= 0xFF5E) c -= 0xFEE0;
+    if(c >= 'a' && c <= 'z') c -= 32;
+    if(c >= 'A' && c <= 'Z') return {0, c, c};
+    if(c >= 0x30A1 && c <= 0x30F6) c -= 0x60;
+    if(c >= 0x3041 && c <= 0x3096) return {1, kanaBase(c), c};
+    if(c == 0x30FC) return {1, 0x30FC, c};
+    return {2, c, c};
+}
+
 static bool titleLess(const std::string& a, const std::string& b){
     std::vector<char32_t> ca = decodeUtf8(a);
     std::vector<char32_t> cb = decodeUtf8(b);
@@ -2106,7 +2601,22 @@ static bool titleLess(const std::string& a, const std::string& b){
         if(ka.group != kb.group) return ka.group < kb.group;
         if(ka.key != kb.key)     return ka.key < kb.key;
     }
-    return ca.size() < cb.size();   // 途中まで同じなら短いほうが前
+    if(ca.size() != cb.size()) return ca.size() < cb.size();
+    for(size_t i = 0; i < n; i++){
+        CollateChar ka = collateKey(ca[i]);
+        CollateChar kb = collateKey(cb[i]);
+        if(ka.raw != kb.raw) return ka.raw < kb.raw;
+    }
+    return false;
+}
+
+static std::string encodeUtf8(char32_t c){
+    std::string out;
+    if(c < 0x80){ out += static_cast<char>(c); }
+    else if(c < 0x800){ out += static_cast<char>(0xC0 | (c >> 6)); out += static_cast<char>(0x80 | (c & 0x3F)); }
+    else if(c < 0x10000){ out += static_cast<char>(0xE0 | (c >> 12)); out += static_cast<char>(0x80 | ((c >> 6) & 0x3F)); out += static_cast<char>(0x80 | (c & 0x3F)); }
+    else{ out += static_cast<char>(0xF0 | (c >> 18)); out += static_cast<char>(0x80 | ((c >> 12) & 0x3F)); out += static_cast<char>(0x80 | ((c >> 6) & 0x3F)); out += static_cast<char>(0x80 | (c & 0x3F)); }
+    return out;
 }
 
 // レベルの文字列を数値にする（"12" → 12、"12+" → 12.5、数字で始まらない → -1）
@@ -2133,7 +2643,7 @@ void sortAllSongs(GenreInfo& all, SortKey key, bool descending, int difficultyCu
     // 表示中の難易度のレベル（←→ で選んでいる順番を、その曲の範囲に収めて使う）
     auto levelOf = [difficultyCursor](const SongInfo& s){
         if(s.difficulties.empty()) return parseLevel(s.level);
-        int idx = clampDifficulty(difficultyCursor, s.difficulties.size());
+        int idx = diffIndexNear(s.difficulties, difficultyCursor);
         return parseLevel(s.difficulties[idx].level);
     };
 
@@ -2157,5 +2667,232 @@ void sortAllSongs(GenreInfo& all, SortKey key, bool descending, int difficultyCu
             songCursor = static_cast<int>(i);
             break;
         }
+    }
+}
+
+static const char* KANA_SYMBOL_GROUP = "記号";
+
+std::vector<GenreInfo> buildSortedCategories(const std::vector<GenreInfo>& base, GenreSort mode){
+    if(mode == GenreSort::Default) return base;
+
+    std::vector<const SongInfo*> songs;
+    for(const auto& g : base) for(const auto& s : g.songList) songs.push_back(&s);
+
+    std::vector<GenreInfo> out;
+    if(mode == GenreSort::Genre){
+        for(int gi = 0; gi < SONG_GENRE_COUNT; gi++){
+            GenreInfo g;
+            g.genreName = SONG_GENRES[gi].name;
+            for(const SongInfo* s : songs){
+                if(std::find(s->genres.begin(), s->genres.end(), SONG_GENRES[gi].name) != s->genres.end()) g.songList.push_back(*s);
+            }
+            if(!g.songList.empty()) out.push_back(g);
+        }
+        GenreInfo other;
+        other.genreName = "未分類";
+        for(const SongInfo* s : songs){
+            bool known = false;
+            for(const auto& name : s->genres) known = known || songGenreIndex(name) >= 0;
+            if(!known) other.songList.push_back(*s);
+        }
+        if(!other.songList.empty()) out.push_back(other);
+        return out;
+    }
+
+    struct Group{ int order; char32_t key; std::string name; std::vector<SongInfo> list; };
+    std::vector<Group> groups;
+    for(const SongInfo* s : songs){
+        const std::vector<char32_t> cs = decodeUtf8(s->title);
+        int order = 2;
+        char32_t key = 0;
+        std::string name = KANA_SYMBOL_GROUP;
+        if(!cs.empty()){
+            const CollateChar k = collateKey(cs[0]);
+            if(k.group == 0 || (k.group == 1 && k.key != 0x30FC)){
+                order = k.group;
+                key = k.key;
+                name = encodeUtf8(k.key);
+            }
+        }
+        auto it = std::find_if(groups.begin(), groups.end(), [&](const Group& g){ return g.order == order && g.key == key; });
+        if(it == groups.end()){
+            groups.push_back({order, key, name, {}});
+            it = groups.end() - 1;
+        }
+        it->list.push_back(*s);
+    }
+    std::sort(groups.begin(), groups.end(), [](const Group& a, const Group& b){
+        if(a.order != b.order) return a.order < b.order;
+        return a.key < b.key;
+    });
+    for(auto& g : groups){
+        GenreInfo gi;
+        gi.genreName = g.name;
+        gi.songList = std::move(g.list);
+        std::stable_sort(gi.songList.begin(), gi.songList.end(), [](const SongInfo& a, const SongInfo& b){ return titleLess(a.title, b.title); });
+        out.push_back(std::move(gi));
+    }
+    return out;
+}
+
+static const char* genreSortName(GenreSort m){
+    switch(m){
+        case GenreSort::Genre: return "ジャンル順";
+        case GenreSort::Kana:  return "五十音順";
+        default:               return "デフォルト";
+    }
+}
+
+static void drawTextAt(SDL_Renderer* renderer, TTF_Font* font, const std::string& text, int x, int y, SDL_Color color, int align = 0){
+    if(!font || text.empty()) return;
+    SDL_Surface* surf = TTF_RenderUTF8_Blended(font, text.c_str(), color);
+    if(!surf) return;
+    SDL_Texture* tex = SDL_CreateTextureFromSurface(renderer, surf);
+    if(tex){
+        SDL_SetTextureBlendMode(tex, SDL_BLENDMODE_BLEND);
+        const int dx = (align == 0) ? x : (align == 1 ? x - surf->w / 2 : x - surf->w);
+        SDL_Rect dst = {dx, y - surf->h / 2, surf->w, surf->h};
+        SDL_RenderCopy(renderer, tex, nullptr, &dst);
+        SDL_DestroyTexture(tex);
+    }
+    SDL_FreeSurface(surf);
+}
+
+static SDL_Texture* ensureFullLayer(SDL_Renderer* renderer, SDL_Texture*& layer){
+    if(!layer) layer = SDL_CreateTexture(renderer, SDL_PIXELFORMAT_RGBA8888, SDL_TEXTUREACCESS_TARGET, SCREEN_W, SCREEN_H);
+    return layer;
+}
+
+void destroySortLayers(){
+    if(g_sortWinLayer){ SDL_DestroyTexture(g_sortWinLayer); g_sortWinLayer = nullptr; }
+    if(g_sortLayer){ SDL_DestroyTexture(g_sortLayer); g_sortLayer = nullptr; }
+}
+
+void draw_SortWindow(SDL_Renderer* renderer, TTF_Font* font, TTF_Font* labelFont, bool songMode, bool overlayOpen){
+    if(g_genreAppear <= 0.0) return;
+
+    PanelWindow p;
+    p.title = "SORT";
+    p.x = SORT_WIN.x; p.y = SORT_WIN.y; p.w = SORT_WIN.w; p.h = SORT_WIN.h;
+    p.titleAlpha = 1.0;
+    p.initialized = true;
+
+    int mx = 0, my = 0;
+    SDL_GetMouseState(&mx, &my);
+    const bool hov = !overlayOpen && pointIn(SORT_WIN, mx, my);
+
+    std::string line1, line2;
+    if(songMode){
+        line1 = "曲";
+        if(g_songSortChosen) line2 = std::string(g_songSortKey == SortKey::Level ? "レベル順" : "五十音順") + (g_songSortDesc ? "  降順" : "  昇順");
+        else                 line2 = "デフォルト";
+    }
+    else{
+        line1 = "ジャンル";
+        line2 = genreSortName(g_genreSort);
+    }
+
+    auto drawWin = [&](){
+        drawPanelBack(renderer, labelFont, p, hov);
+        drawTextAt(renderer, labelFont, line1, SORT_WIN.x + 22, SORT_WIN.y + 34, SDL_Color{150, 150, 175, 255});
+        drawFitText(renderer, font, line2, SDL_Color{235, 235, 245, 255}, SORT_WIN.x + 22, SORT_WIN.y + 78, 1.0, SORT_WIN.w - 44);
+    };
+
+    if(g_genreAppear >= 1.0){
+        drawWin();
+        g_hitSort = SORT_WIN;
+        return;
+    }
+    if(!ensureFullLayer(renderer, g_sortWinLayer)){
+        drawWin();
+        return;
+    }
+    SDL_Texture* prev = quarryBeginLayer(renderer, g_sortWinLayer);
+    drawWin();
+    SDL_SetRenderTarget(renderer, prev);
+    const SDL_Rect area = {SORT_WIN.x - 8, SORT_WIN.y - 50, SORT_WIN.w + 16, SORT_WIN.h + 58};
+    if(g_genreAppearing){
+        float cubeX, cubeY;
+        showcaseCubeCenter(cubeX, cubeY);
+        QuarryReveal::draw(renderer, g_sortWinLayer, SORT_WIN, area, cubeX, cubeY, g_genreAppear * QuarryReveal::TOTAL_MS);
+    }
+    else{
+        SDL_RenderSetClipRect(renderer, &area);
+        drawGlitchLayer(renderer, g_sortWinLayer, area, g_genreAppear);
+        SDL_RenderSetClipRect(renderer, nullptr);
+    }
+}
+
+void draw_SortOverlay(SDL_Renderer* renderer, TTF_Font* font, TTF_Font* labelFont, const SortOverlay& ov){
+    const SDL_Rect full = {0, 0, SCREEN_W, SCREEN_H};
+    const int cardCount = ov.songMode ? 2 : 3;
+    const int cardW = 380, cardH = 220, gap = 50;
+    const int totalW = cardW * cardCount + gap * (cardCount - 1);
+    const int cx0 = (SCREEN_W - totalW) / 2, cy0 = SCREEN_H / 2 - cardH / 2 - 40;
+
+    static const char* genreTitles[3] = {"デフォルト", "ジャンル順", "五十音順"};
+    static const char* genreSubs[3]   = {"フォルダの並び", "Pops / Vocaloid / Inst. ...", "A〜Z  あ〜ん  記号"};
+    static const char* songTitles[2]  = {"レベル順", "五十音順"};
+    static const char* songSubs[2]    = {"表示中の難易度のレベル", "A〜Z  あ〜ん  記号"};
+
+    int mx = 0, my = 0;
+    SDL_GetMouseState(&mx, &my);
+
+    auto drawContent = [&](){
+        SDL_SetRenderDrawBlendMode(renderer, SDL_BLENDMODE_BLEND);
+        SDL_SetRenderDrawColor(renderer, 6, 6, 14, 150);
+        SDL_RenderFillRect(renderer, &full);
+        drawHoloWindow(renderer, full, 1.0, true, 3, 0x5047u);
+        drawTextAt(renderer, font, ov.songMode ? "MUSIC SORT" : "GENRE SORT", SCREEN_W / 2, 200, SDL_Color{0, 220, 255, 255}, 1);
+        drawTextAt(renderer, labelFont, "[←→]:選ぶ   " + std::string(ov.songMode ? "[↑↓]:昇順/降順   " : "") + "[ENTER]:決定   [ESC]:戻る",
+                   SCREEN_W / 2, 250, SDL_Color{150, 150, 175, 255}, 1);
+        for(int c = 0; c < cardCount; c++){
+            const SDL_Rect r = {cx0 + c * (cardW + gap), cy0, cardW, cardH};
+            g_hitSortCard[c] = r;
+            const bool sel = (c == ov.cursor);
+            const bool hov = pointIn(r, mx, my);
+            drawHoloWindow(renderer, r, 1.0, sel || hov, sel ? 4 : 2, 0x50A0u + static_cast<uint32_t>(c));
+            drawTextAt(renderer, font, ov.songMode ? songTitles[c] : genreTitles[c], r.x + cardW / 2, r.y + 90, SDL_Color{240, 240, 250, 255}, 1);
+            drawTextAt(renderer, labelFont, ov.songMode ? songSubs[c] : genreSubs[c], r.x + cardW / 2, r.y + 150, SDL_Color{150, 150, 175, 255}, 1);
+        }
+        for(int c = cardCount; c < 3; c++) g_hitSortCard[c] = SDL_Rect{0, 0, 0, 0};
+        if(ov.songMode){
+            const char* names[2] = {"昇順", "降順"};
+            const int ow = 200, oh = 70, og = 30;
+            const int ox0 = (SCREEN_W - (ow * 2 + og)) / 2, oy = cy0 + cardH + 60;
+            for(int o = 0; o < 2; o++){
+                const SDL_Rect r = {ox0 + o * (ow + og), oy, ow, oh};
+                g_hitSortOrder[o] = r;
+                const bool sel = (o == 1) == ov.desc;
+                drawHoloWindow(renderer, r, 1.0, sel, sel ? 4 : 2, 0x50B0u + static_cast<uint32_t>(o));
+                drawTextAt(renderer, font, names[o], r.x + ow / 2, r.y + oh / 2, SDL_Color{240, 240, 250, 255}, 1);
+            }
+        }
+        else{
+            g_hitSortOrder[0] = g_hitSortOrder[1] = SDL_Rect{0, 0, 0, 0};
+        }
+    };
+
+    const Uint32 now = SDL_GetTicks();
+    const double openMs = static_cast<double>(now - ov.openTick);
+    if(!ov.closing && QuarryReveal::done(openMs)){
+        drawContent();
+        return;
+    }
+    if(!ensureFullLayer(renderer, g_sortLayer)){
+        if(!ov.closing) drawContent();
+        return;
+    }
+    SDL_Texture* prev = quarryBeginLayer(renderer, g_sortLayer);
+    drawContent();
+    SDL_SetRenderTarget(renderer, prev);
+    if(ov.closing){
+        const double p = 1.0 - std::min(1.0, (now - ov.closeTick) / SORT_CLOSE_MS);
+        drawGlitchLayer(renderer, g_sortLayer, full, p);
+    }
+    else{
+        float cubeX, cubeY;
+        showcaseCubeCenter(cubeX, cubeY);
+        QuarryReveal::draw(renderer, g_sortLayer, full, full, cubeX, cubeY, openMs);
     }
 }

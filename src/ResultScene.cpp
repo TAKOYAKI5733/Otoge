@@ -1,4 +1,6 @@
 #include "GameCommon.h"
+#include "Play/type.h"     // 判定の色（JUDGE_COLOR_FAIR など）
+#include "HoloWindow.h"     // ウィンドウの見た目（Cube の色のホログラム・走査線・たまにグリッチ）
 #include <vector>
 #include <string>
 #include <cmath>
@@ -11,7 +13,8 @@
 // =====================================================================
 //  リザルト画面：選曲画面と同じウィンドウ表示で3つに分ける
 //    ・RANK   （左上）評価（SSS など）と ALL PERFECT / FULL COMBO
-//    ・SCORE  （左）  スコア・判定数（GOOD / BAD は FAST・LATE の内訳つき）・FAST/LATE・MAX COMBO
+//    ・SCORE  （左）  スコア・判定数（GOOD / FAIR は FAST・LATE の内訳つき）・FAST/LATE・MAX COMBO
+//    ・FAIR は前の BAD（表記と色だけ変えた。中身の名前 badCount・BAD_MS はそのまま）
 //    ・TIMING （右）  叩いたズレの分布グラフ
 // =====================================================================
 
@@ -41,13 +44,11 @@ constexpr int COL_LATE_TAG    = 540;   // 「LATE」の文字（左揃え）
 constexpr int COL_LATE_RIGHT  = 700;   // LATE の数（右揃え）= ウィンドウの右端 - 40
 
 // 選曲画面のウィンドウと同じ色
-constexpr SDL_Color PANEL_FILL   = { 10,  10,  20, 190};
-constexpr SDL_Color PANEL_BORDER = {  0, 200, 255, 255};
 constexpr int       PANEL_BORDER_W = 3;
 
 constexpr SDL_Color COLOR_PERFECT = {255, 215,   0, 255};
 constexpr SDL_Color COLOR_GOOD    = {  0, 255, 255, 255};
-constexpr SDL_Color COLOR_BAD     = {230,  70,  70, 255};
+constexpr SDL_Color COLOR_BAD     = JUDGE_COLOR_FAIR;   // FAIR（前の BAD）：明るい緑
 constexpr SDL_Color COLOR_MISS    = {130, 130, 130, 255};
 constexpr SDL_Color COLOR_FAST    = { 80, 170, 255, 255};
 constexpr SDL_Color COLOR_LATE    = {255, 140,  60, 255};
@@ -118,30 +119,13 @@ void fillRect(SDL_Renderer* renderer, const SDL_Rect& r, SDL_Color c, Uint8 alph
     SDL_RenderFillRect(renderer, &r);
 }
 
-// 選曲画面と同じウィンドウ：半透明の塗り＋枠線＋左上のタイトルタブ
+// 選曲画面と同じウィンドウ：左上のタイトルタブ＋ホログラムのウィンドウ（HoloWindow.h）
+//   グリッチの起き方はウィンドウの名前から作った数（seed）でウィンドウごとに変える
 void drawPanel(SDL_Renderer* renderer, TTF_Font* tabFont, const SDL_Rect& r, const char* title, Uint8 alpha){
-    // タブ
-    if(tabFont){
-        SDL_Surface* surf = TTF_RenderUTF8_Blended(tabFont, title, SDL_Color{15, 15, 25, 255});
-        if(surf){
-            SDL_Rect tab = {r.x, r.y - surf->h - 6, surf->w + 28, surf->h + 6};
-            fillRect(renderer, tab, PANEL_BORDER, alpha);
-            SDL_Texture* tex = SDL_CreateTextureFromSurface(renderer, surf);
-            SDL_SetTextureBlendMode(tex, SDL_BLENDMODE_BLEND);
-            SDL_SetTextureAlphaMod(tex, alpha);
-            SDL_Rect dst = {tab.x + 14, tab.y + 3, surf->w, surf->h};
-            SDL_RenderCopy(renderer, tex, NULL, &dst);
-            SDL_DestroyTexture(tex);
-            SDL_FreeSurface(surf);
-        }
-    }
-    // 本体
-    fillRect(renderer, r, PANEL_FILL, alpha);
-    SDL_SetRenderDrawColor(renderer, PANEL_BORDER.r, PANEL_BORDER.g, PANEL_BORDER.b, alpha);
-    for(int t = 0; t < PANEL_BORDER_W; t++){
-        SDL_Rect b = {r.x + t, r.y + t, r.w - t * 2, r.h - t * 2};
-        SDL_RenderDrawRect(renderer, &b);
-    }
+    uint32_t seed = 2166136261u;
+    for(const char* c = title; *c; c++) seed = (seed ^ static_cast<unsigned char>(*c)) * 16777619u;
+    if(tabFont) drawHoloWindowTab(renderer, tabFont, title, r, alpha);
+    drawHoloWindow(renderer, r, alpha / 255.0, true, PANEL_BORDER_W, seed);
 }
 
 // 何番目のウィンドウかと経過時間から、出現の進み具合(0〜1)を求める
@@ -264,7 +248,7 @@ GameScene resultScene(SDL_Window* window, SDL_Renderer* renderer, const ResultDa
             const Row rows[] = {
                 {"PERFECT",   result.perfectCount, COLOR_PERFECT, 0},
                 {"GOOD",      result.goodCount,    COLOR_GOOD,    2},
-                {"BAD",       result.badCount,     COLOR_BAD,     3},
+                {"FAIR",      result.badCount,     COLOR_BAD,     3},
                 {"MISS",      result.missCount,    COLOR_MISS,    0},
                 {"FAST",      fastCount,           COLOR_FAST,    0},
                 {"LATE",      lateCount,           COLOR_LATE,    0},
@@ -316,8 +300,8 @@ GameScene resultScene(SDL_Window* window, SDL_Renderer* renderer, const ResultDa
             drawText(renderer, fontMed, "FAST", COLOR_FAST, px, r.y + 50, Align::Left, a);
             drawText(renderer, fontMed, "LATE", COLOR_LATE, px + pw, r.y + 50, Align::Right, a);
 
-            // 判定の幅を背景の帯で示す（外側から BAD → GOOD → PERFECT）
-            fillRect(renderer, SDL_Rect{toX(-BAD_MS),     py, toX(BAD_MS)     - toX(-BAD_MS),     ph}, SDL_Color{230,  70,  70, 28}, a);
+            // 判定の幅を背景の帯で示す（外側から FAIR → GOOD → PERFECT）
+            fillRect(renderer, SDL_Rect{toX(-BAD_MS),     py, toX(BAD_MS)     - toX(-BAD_MS),     ph}, SDL_Color{COLOR_BAD.r, COLOR_BAD.g, COLOR_BAD.b, 28}, a);
             fillRect(renderer, SDL_Rect{toX(-GOOD_MS),    py, toX(GOOD_MS)    - toX(-GOOD_MS),    ph}, SDL_Color{  0, 255, 255, 28}, a);
             fillRect(renderer, SDL_Rect{toX(-PERFECT_MS), py, toX(PERFECT_MS) - toX(-PERFECT_MS), ph}, SDL_Color{255, 215,   0, 28}, a);
 

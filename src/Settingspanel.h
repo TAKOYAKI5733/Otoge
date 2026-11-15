@@ -3,6 +3,7 @@
 #include "GameCommon.h"
 #include "Displaymode.h"
 #include "TapSound.h"
+#include "HoloWindow.h"   // ウィンドウの見た目（Cube の色のホログラム・走査線・たまにグリッチ）
 #include <string>
 #include <vector>
 #include <algorithm>
@@ -186,8 +187,7 @@ public:
         SDL_Rect panel = {x, PANEL_Y, PANEL_W, PANEL_H};
 
         drawTab(renderer, smallFont, "SETTINGS", panel, a);
-        drawFrame(renderer, panel, SDL_Color{10, 10, 20, static_cast<Uint8>(225 * anim_)},
-                  SDL_Color{0, 200, 255, a}, 3);
+        drawHoloWindow(renderer, panel, anim_, true, 3, 0x5E77u);
 
         // 3. 分類のタブ（選んでいる分類だけシアンで塗る）
         {
@@ -197,9 +197,9 @@ public:
                 bool active = (c == category_);
                 SDL_Rect tab = {x + 30 + c * (tabW + TAB_GAP), tabY, tabW, TAB_H};
                 drawFrame(renderer, tab,
-                          active ? SDL_Color{0, 200, 255, static_cast<Uint8>(230 * anim_)}
+                          active ? SDL_Color{HOLO_WINDOW_COLOR.r, HOLO_WINDOW_COLOR.g, HOLO_WINDOW_COLOR.b, static_cast<Uint8>(230 * anim_)}
                                  : SDL_Color{30, 30, 50, static_cast<Uint8>(170 * anim_)},
-                          active ? SDL_Color{0, 255, 255, a}
+                          active ? SDL_Color{HOLO_WINDOW_COLOR.r, HOLO_WINDOW_COLOR.g, HOLO_WINDOW_COLOR.b, a}
                                  : SDL_Color{110, 110, 150, a},
                           active ? 2 : 1);
                 drawText(renderer, smallFont, CATEGORY_NAMES[c],
@@ -585,21 +585,9 @@ private:
         }
     }
 
-    // ウィンドウ上辺に乗せるタイトルタブ
+    // ウィンドウ上辺に乗せるタイトルタブ（HoloWindow.h のホログラムのタブ）
     static void drawTab(SDL_Renderer* renderer, TTF_Font* font, const char* title, const SDL_Rect& panel, Uint8 alpha){
-        SDL_Surface* surf = TTF_RenderUTF8_Blended(font, title, SDL_Color{15, 15, 25, 255});
-        if(!surf) return;
-        SDL_Rect tab = {panel.x, panel.y - surf->h - 6, surf->w + 28, surf->h + 6};   // タブは文字に合わせて伸びるので、縮める必要はない
-        SDL_SetRenderDrawColor(renderer, 0, 200, 255, alpha);
-        SDL_RenderFillRect(renderer, &tab);
-
-        SDL_Texture* tex = SDL_CreateTextureFromSurface(renderer, surf);
-        SDL_SetTextureBlendMode(tex, SDL_BLENDMODE_BLEND);
-        SDL_SetTextureAlphaMod(tex, alpha);
-        SDL_Rect dst = {tab.x + 14, tab.y + 3, surf->w, surf->h};
-        SDL_RenderCopy(renderer, tex, NULL, &dst);
-        SDL_DestroyTexture(tex);
-        SDL_FreeSurface(surf);
+        drawHoloWindowTab(renderer, font, title, panel, alpha);
     }
 
     // 文字を描く。y は文字の縦の中心、x は Left なら左端・Right なら右端・Center なら中心

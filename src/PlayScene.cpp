@@ -13,6 +13,8 @@
 #include "Play/CubeWallet.h"        // ゲーム内の通貨「Cube」の保存と読み込み
 #include "Play/GlitchLayer.h"       // ポーズメニューをグリッチで出す
 #include "Play/PlayInfoHud.h"       // 左下の難易度・右下の曲名（ホログラム）
+#include "Play/BSpeedEvent.h"       // B_SpeedEvent（速度で動かすノーツの速さ）
+#include "Play/FalseNotes.h"        // false ノーツ（見た目だけのノーツ）
 
 //グローバル変数
 double bpm = 120;
@@ -56,9 +58,13 @@ GameScene playGame(SDL_Window* window, SDL_Renderer* renderer, const std::string
     std::vector<KeyBeam> keyBeams;
     std::vector<TickParticle> tickParticles;
     JudgeEffect laneJudge[6] = {};
+    JudgeEffect lastTimedJudge = {};   // 最後に叩いた判定（±ms の表示を残すため。GameContext.h）
     std::vector<Note> notes;
     std::string bgmName;
-    std::vector<SpeedEvent> speedEvents;
+    std::vector<A_SpeedEvent> speedEvents;      // A_SpeedEvent：座標の式の速さ（前の SpeedEvent）
+    std::vector<B_SpeedEvent> bSpeedEvents;     // B_SpeedEvent：速度の式の倍率（Play/BSpeedEvent.h）
+    ScrollMap scrollMap;                        // B_SpeedEvent から作るスクロール位置 S(t)
+    std::vector<FalseNote> falseNotes;          // false ノーツ（見た目だけ・判定なし。Play/FalseNotes.h）
 
     double noteSpeed = 1.8;
     bool prevPressed[6] = {false, false, false, false, false, false};
@@ -104,6 +110,12 @@ GameScene playGame(SDL_Window* window, SDL_Renderer* renderer, const std::string
     if(!loadScore(selectedScorePath, bgmName, notes, speedEvents, bpm, offsetMs, selectedDifficulty)){
         return GameScene::Select;
     }
+    // B_SpeedEvent（無い譜面では空のまま → スクロール位置は時刻そのまま＝今まで通りの動き）
+    loadBSpeedEvents(selectedScorePath, selectedDifficulty, bSpeedEvents);
+    //   B_SpeedEvent の値は A_SpeedEvent と同じ単位：今のノーツ速度（プレイヤーの速度設定を掛ける前の値）を「ふつう」にする
+    scrollMap.build(bSpeedEvents, noteSpeed);
+    // false ノーツ（無い譜面では空のまま）
+    loadFalseNotes(selectedScorePath, selectedDifficulty, falseNotes);
 
     offsetMs += playerSettings.offsetMs;
 
@@ -151,6 +163,11 @@ GameScene playGame(SDL_Window* window, SDL_Renderer* renderer, const std::string
     for(auto& n : notes){
         if(n.hasCustomSpeed) n.customSpeed *= speedRate;
     }
+    for(auto& f : falseNotes){
+        f.speed *= speedRate;   // false ノーツの進む速さにも、ノーツ速度の設定を掛ける（ふつうのノーツと同じ速さに見えるように）
+        if(f.posMode == 1) f.y *= speedRate;   // スナップの高さも、ふつうのノーツの間隔と同じだけ広げる
+        f.longPx *= speedRate;                 // ロングの形の長さも、ふつうのロングと同じだけ伸ばす
+    }
 
     double currentNoteSpeed = noteSpeed;
 
@@ -197,10 +214,11 @@ GameScene playGame(SDL_Window* window, SDL_Renderer* renderer, const std::string
     TTF_Font* judgeFont = TTF_OpenFont("fonts/prac.ttf", JUDGE_FONT_SIZE);
     if(!judgeFont) judgeFont = font;   // 開けなかったときは従来のフォントで代用
 
-    SDL_Surface *perfect, *good, *bad, *miss, *waku_init;
-    perfect = TTF_RenderUTF8_Blended(judgeFont, "PERFECT!!", {255, 215, 0, 255});
-    good    = TTF_RenderUTF8_Blended(judgeFont, "GOOD!",     {0, 255, 255, 255});
-    bad     = TTF_RenderUTF8_Blended(judgeFont, "BAD",       {90, 255, 25, 255});
+    SDL_Surface *sPerfect, *perfect, *good, *bad, *miss, *waku_init;
+    sPerfect = renderSPerfectText(judgeFont);   // S-PERFECT：上が PERFECT の色、下が GOOD の色のグラデーション（type.h）
+    perfect = TTF_RenderUTF8_Blended(judgeFont, "PERFECT!!", JUDGE_COLOR_PERFECT);
+    good    = TTF_RenderUTF8_Blended(judgeFont, "GOOD!",     JUDGE_COLOR_GOOD);
+    bad     = TTF_RenderUTF8_Blended(judgeFont, "FAIR",      JUDGE_COLOR_FAIR);   // 前の BAD
     miss    = TTF_RenderUTF8_Blended(judgeFont, "MISS...",   {100, 100, 100, 255});
 
     {
@@ -224,6 +242,7 @@ GameScene playGame(SDL_Window* window, SDL_Renderer* renderer, const std::string
 
     SDL_Texture *comboTexture, *scoreTexture;
     Tex tex;
+    tex.sPerfect = sPerfect ? SDL_CreateTextureFromSurface(renderer, sPerfect) : nullptr;
     tex.perfect = SDL_CreateTextureFromSurface(renderer, perfect);
     tex.good = SDL_CreateTextureFromSurface(renderer, good);
     tex.bad = SDL_CreateTextureFromSurface(renderer, bad);
@@ -272,6 +291,7 @@ GameScene playGame(SDL_Window* window, SDL_Renderer* renderer, const std::string
     auto centered = [&](SDL_Surface* s){
         return SDL_Rect{SCREEN_W / 2 - s->w / 2, JUDGE_TEXT_CENTER_Y - s->h / 2, s->w, s->h};
     };
+    sq.sPerfect = sPerfect ? centered(sPerfect) : centered(perfect);
     sq.perfect = centered(perfect);
     sq.good    = centered(good);
     sq.bad     = centered(bad);
@@ -280,6 +300,7 @@ GameScene playGame(SDL_Window* window, SDL_Renderer* renderer, const std::string
         // 画像の左端を一番左のレーン（W）の左端にそろえる
     sq.waku_init = {startX, (int)(SCREEN_H * (3.0 / 4.0) + 100), waku_init->w, waku_init->h};
 
+    if(sPerfect) SDL_FreeSurface(sPerfect);
     SDL_FreeSurface(perfect);
     SDL_FreeSurface(good);
     SDL_FreeSurface(bad);
@@ -606,8 +627,9 @@ GameScene playGame(SDL_Window* window, SDL_Renderer* renderer, const std::string
         // ① 「本来あるべき補正量」だけを更新する
         //   曲の頭の 3 秒は 100ms ごと・ずれの 50% ずつ（早く合わせる）、その後は 200ms ごと・20% ずつ（ぶれないように）
         //   Mix_GetMusicPosition は音を送るまとまり（256 サンプル ≒ 6ms）ごとにしか進まないので、3ms 以下のずれは直さない
+        //   曲が鳴り終わった後は Mix_GetMusicPosition がもう進まない（曲の頭や終わりのまま）ので、合わせない（合わせると時刻が止まり、曲の後のノーツが流れてこない）
         const bool earlyPhase = bgmStarted && (globalMs - bgmStartedAtMs) < 3000.0;
-        if(bgmStarted && (globalMs - lastDriftCheckMs) >= (earlyPhase ? 100.0 : 200.0)){
+        if(bgmStarted && Mix_PlayingMusic() && !Mix_PausedMusic() && (globalMs - lastDriftCheckMs) >= (earlyPhase ? 100.0 : 200.0)){
             lastDriftCheckMs = globalMs;
 
             double actualPosMs = Mix_GetMusicPosition(bgm) * 1000.0;
@@ -793,8 +815,11 @@ GameScene playGame(SDL_Window* window, SDL_Renderer* renderer, const std::string
             .cubeHud = &cubeHud,
             .preciseHeld = preciseHeld,
             .releaseTimes = releaseTimes,
-            .isAutoplay = isAutoplay
+            .isAutoplay = isAutoplay,
+            .scrollMap = scrollMap.empty() ? nullptr : &scrollMap,
+            .falseNotes = falseNotes.empty() ? nullptr : &falseNotes
             };
+        ctx.lastTimedJudge = &lastTimedJudge;
         {
             const double introMs = globalMs - sceneStartMs;
             ctx.laneFrameIntro = std::clamp(introMs / LANE_FRAME_MS, 0.0, 1.0);
@@ -1041,6 +1066,7 @@ GameScene playGame(SDL_Window* window, SDL_Renderer* renderer, const std::string
     if(noteTextureDrag) SDL_DestroyTexture(noteTextureDrag);
     if(noteTextureLane) SDL_DestroyTexture(noteTextureLane);
     if(comboLabelTex) SDL_DestroyTexture(comboLabelTex);
+    if(tex.sPerfect) SDL_DestroyTexture(tex.sPerfect);
     SDL_DestroyTexture(tex.perfect);
     SDL_DestroyTexture(tex.good);
     SDL_DestroyTexture(tex.bad);

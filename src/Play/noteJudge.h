@@ -58,6 +58,7 @@ inline void recordTiming(JudgeEffect& je, const GameContext& ctx, const Note& no
     je.diffMs = pressTime - note.targetTime;   // - = 早い、+ = 遅い
     je.judgeType = judgeType;
     if(ctx.timingLog) ctx.timingLog->push_back({je.diffMs, judgeType});
+    if(ctx.lastTimedJudge) *ctx.lastTimedJudge = je;   // ±ms の表示を、次に叩くまでこの値で残す
 }
 
 inline void playHitSound(const GameContext& ctx, const Note& note){
@@ -258,7 +259,9 @@ inline void NoteJudge(GameContext& ctx, Tex& tex, Sq& sq){
                         newEffect.spawnTime = tPress;   // 破裂は押した瞬間から始める
 
                         if(timeDiff <= 60){
-                            ctx.laneJudge[i] = {tex.perfect, sq.perfect, ctx.musicTime};
+                            // ±40ms 以内は S-PERFECT（PERFECT の中の一番いい判定。スコアは PERFECT と同じ）
+                            const bool sp = (timeDiff <= S_PERFECT_MS);
+                            ctx.laneJudge[i] = {sp ? tex.sPerfect : tex.perfect, sp ? sq.sPerfect : sq.perfect, ctx.musicTime};
                             recordTiming(ctx.laneJudge[i], ctx, note, 1, tPress);
                             note.isHit = true;
                             newEffect.lane = note.lane;
@@ -266,7 +269,7 @@ inline void NoteJudge(GameContext& ctx, Tex& tex, Sq& sq){
                             newEffect.judgeType = 1;
                             ctx.effects.push_back(newEffect);
                             spawnNoteCubes(ctx, note);
-                            ctx.scoreTracker.registerJudge("PERFECT");
+                            ctx.scoreTracker.registerJudge(sp ? "S_PERFECT" : "PERFECT");
                             ctx.scorePop.startTime = ctx.musicTime;
                             ctx.comboPop.startTime = ctx.musicTime;
 
@@ -314,7 +317,7 @@ inline void NoteJudge(GameContext& ctx, Tex& tex, Sq& sq){
                             newEffect.lane = note.lane;
                             newEffect.widthLanes = note.widthLanes;
 
-                            ctx.isAP = ctx.isFC = false;
+                            ctx.isAP = false;   // BAD ではコンボが切れないので、フルコンボは続く
                             ctx.effects.push_back(newEffect);
                             // BAD のときは Cube を出さない
                             ctx.scoreTracker.registerJudge("BAD");
@@ -355,7 +358,7 @@ inline void NoteJudge(GameContext& ctx, Tex& tex, Sq& sq){
             //     ±20ms の間に一度押していれば（dragArmed）、判定ラインに来る前に離していても取れる
             //   ・押し始めの時刻は、レーンごとの「今の長押しが始まった時刻」（LaneHoldTracker）を使う
             //     → フレームの間隔に関係なく、押した瞬間の時刻で決まる
-            constexpr int32_t DRAG_WINDOW_MS = 60;
+            constexpr int32_t DRAG_WINDOW_MS = 20;
             bool isAreaPresssed = false;
             int32_t pressStart = INT32_MAX;   // 押しているレーンのうち、一番早い押し始め
             for(int l = std::max(0, note.lane); l <= std::min(5, note.lane + note.widthLanes - 1); l++){
@@ -386,10 +389,11 @@ inline void NoteJudge(GameContext& ctx, Tex& tex, Sq& sq){
                 if(timeDiff >= 0){
                     // 破裂の時刻：判定ラインより前から押していた → targetTime ちょうど、後から押した → 押した瞬間
                     const int32_t burstAt = std::clamp(std::max(note.targetTime, note.hitTime), note.targetTime, ctx.musicTime);
-                    ctx.laneJudge[i] = {tex.perfect, sq.perfect, ctx.musicTime};
+                    // 押した瞬間でずれを測らない判定なので、一番いい S-PERFECT にする（全部取れば 101% に届くように）
+                    ctx.laneJudge[i] = {tex.sPerfect, sq.sPerfect, ctx.musicTime};
                     note.isHit = true;
                     note.hitTime = burstAt;
-                    ctx.scoreTracker.registerJudge("PERFECT");
+                    ctx.scoreTracker.registerJudge("S_PERFECT");
                     ctx.scorePop.startTime = ctx.musicTime;
                     ctx.comboPop.startTime = ctx.musicTime;
 
@@ -433,10 +437,11 @@ inline void NoteJudge(GameContext& ctx, Tex& tex, Sq& sq){
             note.isHit = true;
             note.hitTime = tPress;
             if(bestDiff <= 60){
-                ctx.laneJudge[lane] = {tex.perfect, sq.perfect, ctx.musicTime};
+                const bool sp = (bestDiff <= S_PERFECT_MS);
+                ctx.laneJudge[lane] = {sp ? tex.sPerfect : tex.perfect, sp ? sq.sPerfect : sq.perfect, ctx.musicTime};
                 recordTiming(ctx.laneJudge[lane], ctx, note, 1, tPress);
                 e.judgeType = 1;
-                ctx.scoreTracker.registerJudge("PERFECT");
+                ctx.scoreTracker.registerJudge(sp ? "S_PERFECT" : "PERFECT");
                 note.isHolding = true;
                 note.lastTickTime = ctx.musicTime;
             }
@@ -454,7 +459,7 @@ inline void NoteJudge(GameContext& ctx, Tex& tex, Sq& sq){
                 recordTiming(ctx.laneJudge[lane], ctx, note, 3, tPress);
                 e.judgeType = 3;
                 markLongFailed(note, note.targetTime);
-                ctx.isAP = ctx.isFC = false;
+                ctx.isAP = false;   // BAD ではコンボが切れないので、フルコンボは続く
                 ctx.scoreTracker.registerJudge("BAD");
             }
             ctx.scorePop.startTime = ctx.musicTime;
@@ -477,12 +482,12 @@ inline void NoteJudge(GameContext& ctx, Tex& tex, Sq& sq){
             if(!isAreaHeld(ctx, note) || !hasChainedLongBefore(ctx, note)) continue;
 
             const int i = note.lane;
-            ctx.laneJudge[i] = {tex.perfect, sq.perfect, ctx.musicTime};   // 押した瞬間が無いので、ズレ（FAST/LATE・ms）は記録しない
+            ctx.laneJudge[i] = {tex.sPerfect, sq.sPerfect, ctx.musicTime};   // 押した瞬間が無いので、ズレ（FAST/LATE・ms）は記録しない（S-PERFECT 扱い）
             note.isHit = true;
             note.hitTime = note.targetTime;
             note.isHolding = true;
             note.lastTickTime = ctx.musicTime;
-            ctx.scoreTracker.registerJudge("PERFECT");
+            ctx.scoreTracker.registerJudge("S_PERFECT");
             ctx.scorePop.startTime = ctx.musicTime;
             ctx.comboPop.startTime = ctx.musicTime;
 
@@ -587,7 +592,7 @@ inline void NoteJudge(GameContext& ctx, Tex& tex, Sq& sq){
                 ln.nextTick++;
                 ctx.scoreTracker.registerTick();
                 ctx.comboPop.startTime = ctx.musicTime;
-                ctx.laneJudge[i] = {tex.perfect, sq.perfect, ctx.musicTime};   // hasTiming = false → FAST/LATE は出ない
+                ctx.laneJudge[i] = {tex.sPerfect, sq.sPerfect, ctx.musicTime};   // hasTiming = false → FAST/LATE は出ない
                 spawnTickParticles(ctx, ln);
             }
 
@@ -597,11 +602,11 @@ inline void NoteJudge(GameContext& ctx, Tex& tex, Sq& sq){
                 ln.isHit = true;
                 ln.endHeld = isHoldingArea;   // 押したまま終点に来た → すぐ後につながったロングがあれば、押しっぱなしで取れる
                 ln.hitTime = ctx.musicTime;   // 終点の判定の時刻：表示がここに来るまでホールドの見た目を続ける
-                ctx.scoreTracker.registerJudge("PERFECT");
+                ctx.scoreTracker.registerJudge("S_PERFECT");   // 終点は押した瞬間で測らないので S-PERFECT
                 ctx.scorePop.startTime = ctx.musicTime;
                 ctx.comboPop.startTime = ctx.musicTime;
 
-                ctx.laneJudge[i] = {tex.perfect, sq.perfect, ctx.musicTime};
+                ctx.laneJudge[i] = {tex.sPerfect, sq.sPerfect, ctx.musicTime};
                 ctx.comboCount++;
                 Mix_PlayChannel(-1, ctx.tap_sound, 0);
                 spawnNoteCubes(ctx, ln);   // 終点

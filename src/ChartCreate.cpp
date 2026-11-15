@@ -1,11 +1,15 @@
 #include "GameCommon.h"
 #include "ScoreMirror.h"   // 保存した譜面を、ビルド用の scores フォルダにも書く
+#include "SongGenre.h"     // 楽曲のジャンル（Pops・Vocaloid など。譜面の "genres"）
 #include <nlohmann/json.hpp>
 #include <limits>
 #include <cfloat>
 #include <string>
 #include <vector>
+#include <unordered_map>
+#include <cstring>
 #include <ctime>       // ブループリントにコピーした時刻を出す
+#include <functional>
 #include "Editortempo.h"
 #include "bpmdetect.h"
 #include "musicAnalyze.h"   // Music Settings：オフセット・BPM・BPM の変化を自動で決める
@@ -13,6 +17,7 @@
 #include "Play/drawFrame.h"      // NOTE_SIDE_MARGIN などノーツの形（プレイ画面と共通）
 #include "Play/roundedRect.h"    // 角丸の描画（プレイ画面と共通）
 #include "imgui.h"
+#include "imgui_internal.h"   // BringWindowToDisplayFront：配置のウィンドウをパネルより手前に保つ
 #include "imgui_impl_sdl2.h"
 #include "imgui_impl_sdlrenderer2.h"
 
@@ -46,12 +51,171 @@ inline int noteTypeToComboIndex(int typeValue){
     }
     return 0;
 }
+// 速度イベント（A_SpeedEvent と B_SpeedEvent を同じ形・同じ並びで持つ。isB で見分ける）
+//   A_SpeedEvent（前の SPEED）：座標の式の速さ。画面のノーツの間隔が一緒に伸び縮みする → 譜面の "speedEvents"
+//   B_SpeedEvent              ：速度の式の速さ（A と同じ単位。1.8 = ふつう、0 でノーツが止まる、3.6 で 2 倍の速さ）→ 譜面の "bSpeedEvents"
+//   1 つの並びで持つので、線のドラッグ・Ctrl+ドラッグで長さを変える・編集ウィンドウ・BPM 変更の追従は、A も B も同じ処理で動く
 struct EditorSpeedEvent{
     int32_t time = 0;
     double target = 1.0;
     int easing = 1;
     int32_t duration = 500;
+    bool isB = false;   // true = B_SpeedEvent
 };
+// 速度イベントの色（線・帯・文字・枠）：A は黄色、B は赤
+inline SDL_Color speedEventColor(bool isB){ return isB ? SDL_Color{255, 80, 80, 255} : SDL_Color{255, 220, 80, 255}; }
+inline const char* speedEventName(bool isB){ return isB ? "B_SPEED" : "A_SPEED"; }
+// =====================================================================
+//  false ノーツ（当たり判定のない、見た目だけのノーツ。プレイ側は Play/FalseNotes.h）
+//    エディタでは Ctrl+N で「false ノーツ編集」に切り替えて置く・直す
+//    譜面ファイルでは各難易度の "falseNotes" に入る（中身の意味は Play/FalseNotes.h の説明と同じ）
+// =====================================================================
+struct EditorFalseLook{
+    int32_t time = 0;     // この時刻から、この見た目になる
+    int  type = 0;        // 0 = 通常、3 = DRAG、4 = LANE
+    bool isLong = false;
+};
+struct EditorFalseNote{
+    int32_t start = 0, end = 1000;   // 出現・消滅する時刻(ms)
+    double  x = 0.0;                 // 出現する横の位置（レーン単位。小数も可）
+    int     width = 1;               // 幅（レーン数）
+    double  y = 400.0;               // 出現する縦の位置（判定ラインからの高さ px）。posMode = 0 のとき使う
+    // 縦の位置の決め方
+    //   0 = px 固定：y の高さに出す
+    //   1 = スナップ：「出現の時刻から aheadCount × (1/aheadDiv) 小節先（4 分なら 1 拍）の時刻のノーツ」が、
+    //       出現の瞬間にいる高さに出す（スナップの間隔だけ判定ラインから空ける）。そこから流れはしない
+    //       （動くのは、ほかと同じく「進む方向・速さ」の分だけ）
+    int     posMode = 0;
+    int     aheadDiv = 16;           // 何分か（4 = 4 分、16 = 16 分）
+    int     aheadCount = 4;          // その何マス先か
+    double  dirDeg = 180.0;          // 進む方向（0 = 上、90 = 右、180 = 下、270 = 左）
+    double  speed = 0.0;             // 進む速さ（A_SPEED と同じ単位。0 = 止まったまま）
+    int     appear = 1;              // 出現の方法（0 = すぐ、1 = グリッチ）。新しく置くときはグリッチ
+    int32_t appearMs = 250;
+    int     disappear = 1;           // 消滅の方法（0 = すぐ、1 = グリッチ）。新しく置くときはグリッチ
+    int32_t disappearMs = 250;
+    int     type = 0;                // 見た目（最初）
+    bool    isLong = false;
+    double  longPx = 200.0;          // ロングの形のときの帯の長さ(px)。保存のときに longDiv・longCount から計算する（プレイ用）
+    // ロングの形の長さ：ふつうのロングと同じく「何分の何マス」（4 分 × 1 = 4 分のロングと同じ長さ）
+    int     longDiv = 4;
+    int     longCount = 1;
+    std::vector<EditorFalseLook> changes;   // 途中で見た目を変える（時刻の順）
+
+    bool    selected = false;        // 範囲選択で選ばれているか（エディタ専用。JSON には保存しない）
+};
+
+// スナップの配置で選べる「何分」
+inline constexpr int FALSE_PLACE_DIVS[] = {4, 8, 12, 16, 24, 32};
+inline constexpr const char* FALSE_PLACE_DIV_NAMES[] = {"4 分", "8 分", "12 分", "16 分", "24 分", "32 分"};
+inline constexpr int FALSE_PLACE_DIV_COUNT = 6;
+
+// スナップの配置で「何 ms 先のノーツの位置か」（BPM の変化も入れて、出現の時刻から数える）
+inline int32_t falseAheadMs(const EditorFalseNote& f, const TempoMap& tm){
+    const double beats = f.aheadCount * 4.0 / std::max(1, f.aheadDiv);
+    const double b0 = tempoBeatAt(tm, static_cast<double>(f.start));
+    return static_cast<int32_t>(std::lround(tempoTimeAt(tm, b0 + beats) - f.start));
+}
+
+// =====================================================================
+//  エディタの中で、プレイと同じ「ノーツの流れ方」を計算する（false ノーツのプレビュー・配置のウィンドウ用）
+//    ・A_SPEED：その時刻の速さ（Play/updateSpeed.h と同じ。変わり始めの速さから target へイージング）
+//    ・B_SPEED：スクロール位置 S(t)（Play/BSpeedEvent.h の ScrollMap と同じ式。1.8 = 倍率 1）
+//    ・判定ラインからの高さ = (S(ノーツの時刻) − S(今)) × 今の速さ（Play/renderGame.h の computeNoteY と同じ）
+//    プレイヤーのノーツ速度の設定は入れない（ふつうの速さ 1.8 で見る）
+// =====================================================================
+struct EditorScroll{
+    static constexpr double BASE = 1.8;
+    struct ASeg{ double t0, v0, v1, dur; int easing; };
+    struct BSeg{ double t0, m0, m1, dur, s0; int easing; };
+    std::vector<ASeg> a;
+    std::vector<BSeg> b;
+
+    static double ease(int e, double u){
+        u = std::clamp(u, 0.0, 1.0);
+        if(e == 1) return u;
+        if(e == 2) return 1.0 - std::pow(1.0 - u, 3.0);
+        if(e == 3) return u * u * u;
+        return 1.0;
+    }
+    static double easeInt(int e, double u){
+        u = std::clamp(u, 0.0, 1.0);
+        if(e == 1) return u * u * 0.5;
+        if(e == 2) return u - (1.0 - std::pow(1.0 - u, 4.0)) * 0.25;
+        if(e == 3) return u * u * u * u * 0.25;
+        return u;
+    }
+    void build(const std::vector<EditorSpeedEvent>& evs){
+        a.clear(); b.clear();
+        std::vector<EditorSpeedEvent> sorted = evs;
+        std::stable_sort(sorted.begin(), sorted.end(), [](const EditorSpeedEvent& x, const EditorSpeedEvent& y){ return x.time < y.time; });
+        for(const auto& ev : sorted){
+            const double t0 = ev.time;
+            const double dur = std::max(0.0, static_cast<double>(ev.duration));
+            const int e = (dur > 0.0 && ev.easing >= 1 && ev.easing <= 3) ? ev.easing : 0;
+            if(ev.isB){
+                BSeg s{t0, multiplierAt(t0), ev.target / BASE, dur, 0.0, e};
+                s.s0 = at(t0);
+                b.push_back(s);
+            }
+            else{
+                a.push_back(ASeg{t0, speedAt(t0), ev.target, dur, e});
+            }
+        }
+    }
+    double speedAt(double t) const{
+        const ASeg* s = nullptr;
+        for(const auto& x : a){ if(x.t0 <= t) s = &x; else break; }
+        if(!s) return BASE;
+        const double dt = t - s->t0;
+        if(s->easing == 0 || dt >= s->dur) return s->v1;
+        return s->v0 + (s->v1 - s->v0) * ease(s->easing, dt / s->dur);
+    }
+    double multiplierAt(double t) const{
+        const BSeg* s = nullptr;
+        for(const auto& x : b){ if(x.t0 <= t) s = &x; else break; }
+        if(!s) return 1.0;
+        const double dt = t - s->t0;
+        if(s->easing == 0 || dt >= s->dur) return s->m1;
+        return s->m0 + (s->m1 - s->m0) * ease(s->easing, dt / s->dur);
+    }
+    double at(double t) const{
+        const BSeg* s = nullptr;
+        for(const auto& x : b){ if(x.t0 <= t) s = &x; else break; }
+        if(!s) return t;
+        const double dt = t - s->t0;
+        if(s->easing == 0) return s->s0 + s->m1 * dt;
+        if(dt <= s->dur) return s->s0 + s->m0 * dt + (s->m1 - s->m0) * s->dur * easeInt(s->easing, dt / s->dur);
+        return s->s0 + s->m0 * s->dur + (s->m1 - s->m0) * s->dur * easeInt(s->easing, 1.0) + s->m1 * (dt - s->dur);
+    }
+    // 時刻 target のノーツが、時刻 t に、判定ラインから何 px 上に見えるか
+    double heightAt(double target, double t) const{
+        return (at(target) - at(t)) * speedAt(t);
+    }
+};
+
+// ロングの形の長さ(ms)：出現の時刻から longCount × (1/longDiv) 小節（BPM の変化も入れる）
+inline int32_t falseLongMs(const EditorFalseNote& f, const TempoMap& tm){
+    const double beats = f.longCount * 4.0 / std::max(1, f.longDiv);
+    const double b0 = tempoBeatAt(tm, static_cast<double>(f.start));
+    return static_cast<int32_t>(std::lround(tempoTimeAt(tm, b0 + beats) - f.start));
+}
+
+// false ノーツの「出現した位置の高さ」（進む方向・速さで動く分は入れない）
+//   px 固定なら y、スナップなら「aheadMs 先のノーツ」が出現の瞬間にいる高さ（そのあとは変わらない）
+inline double falseBaseHeight(const EditorFalseNote& f, double /*t*/, const TempoMap& tm, const EditorScroll& sc){
+    if(f.posMode != 1) return f.y;
+    return sc.heightAt(static_cast<double>(f.start + falseAheadMs(f, tm)), static_cast<double>(f.start));
+}
+
+// ロングの形の帯の長さ(px)：出現の瞬間に、その長さのふつうのロングが画面で見える長さ（ふつうのノーツ速度のとき）
+//   ヘッドの時刻 = スナップなら aheadMs 先、px 固定なら出現の時刻
+inline double falseLongPx(const EditorFalseNote& f, const TempoMap& tm, const EditorScroll& sc){
+    const double t0 = static_cast<double>(f.start);
+    const double head = t0 + (f.posMode == 1 ? falseAheadMs(f, tm) : 0);
+    return std::max(0.0, sc.heightAt(head + falseLongMs(f, tm), t0) - sc.heightAt(head, t0));
+}
+
 struct FlashEffect{
     int lane;
     int width = 1;
@@ -76,6 +240,7 @@ struct EditorDifficulty{
     std::vector<EditorNote> notes;
     std::vector<EditorSpeedEvent> speedEvents;
     std::vector<EditorBpmEvent> bpmEvents;
+    std::vector<EditorFalseNote> falseNotes;   // false ノーツ（見た目だけ）
 
     TempoMap alignedMap;
     bool tempoAligned = false;
@@ -86,17 +251,20 @@ struct ChartMeta{
     std::string composer = "Unknown";
     double offsetMs = 0.0;
     double previewStartMs = 0.0;   // 選曲画面の試聴を始める位置（曲ファイル上の ms。JSON の "previewStart"）
+    std::vector<std::string> genres;   // ジャンル（SongGenre.h の名前。何個でも。JSON の "genres"）
 };
 
 //JSON保存・読込
 
 // 保存できたら true（画面に「保存しました／失敗しました」を出すのに使う）
-inline bool saveChart(const std::string& path, const ChartMeta& meta, const std::vector<EditorDifficulty>& difficulties){
+// 譜面ファイルに書く中身（文字）を作る。保存と「保存していない変更があるか」の比べに使う
+inline std::string buildChartText(const ChartMeta& meta, const std::vector<EditorDifficulty>& difficulties){
     json j;
     j["bgm"] = meta.bgm;
     j["composer"] = meta.composer;
     j["offset"] = meta.offsetMs;
     j["previewStart"] = meta.previewStartMs;
+    j["genres"] = normalizeSongGenres(meta.genres);   // ジャンル（一覧の順にそろえて書く）
 
     json diffArr = json::array();
     for(const auto& d : difficulties){
@@ -122,16 +290,73 @@ inline bool saveChart(const std::string& path, const ChartMeta& meta, const std:
         }
         dj["notes"] = notesArr;
 
+        // A_SpeedEvent は今まで通り "speedEvents"、B_SpeedEvent は "bSpeedEvents" に分けて書く（中身の形は同じ）
         json speedArr = json::array();
+        json bSpeedArr = json::array();
         for(const auto& s : d.speedEvents){
             json item;
             item["time"] = s.time;
             item["target"] = s.target;
             item["easing"] = s.easing;
             item["duration"] = s.duration;
-            speedArr.push_back(item);
+            (s.isB ? bSpeedArr : speedArr).push_back(item);
         }
         dj["speedEvents"] = speedArr;
+        if(!bSpeedArr.empty()) dj["bSpeedEvents"] = bSpeedArr;
+
+        // false ノーツ（見た目だけ）
+        if(!d.falseNotes.empty()){
+            json falseArr = json::array();
+            for(const auto& f : d.falseNotes){
+                json item;
+                item["start"] = f.start;
+                item["end"] = f.end;
+                item["x"] = f.x;
+                item["width"] = f.width;
+                item["y"] = f.y;
+                if(f.posMode == 1){
+                    // スナップの配置：何分の何マス先か（エディタ用）と、出現の瞬間のその高さ(px、ふつうのノーツ速度のとき。プレイ用)
+                    std::vector<TempoPoint> pts;
+                    for(const auto& b : d.bpmEvents) pts.push_back({static_cast<double>(b.time), b.bpm});
+                    const TempoMap tm = makeTempoMap(d.bpm, pts);
+                    EditorScroll sc;
+                    sc.build(d.speedEvents);
+                    item["posMode"] = 1;
+                    item["aheadDiv"] = f.aheadDiv;
+                    item["aheadCount"] = f.aheadCount;
+                    item["aheadMs"] = falseAheadMs(f, tm);
+                    item["aheadPx"] = falseBaseHeight(f, f.start, tm, sc);
+                }
+                item["dir"] = f.dirDeg;
+                item["speed"] = f.speed;
+                item["appear"] = f.appear;
+                item["appearMs"] = f.appearMs;
+                item["disappear"] = f.disappear;
+                item["disappearMs"] = f.disappearMs;
+                item["type"] = f.type;
+                item["long"] = f.isLong;
+                {
+                    std::vector<TempoPoint> pts;
+                    for(const auto& b : d.bpmEvents) pts.push_back({static_cast<double>(b.time), b.bpm});
+                    const TempoMap tm = makeTempoMap(d.bpm, pts);
+                    EditorScroll sc;
+                    sc.build(d.speedEvents);
+                    item["longDiv"] = f.longDiv;
+                    item["longCount"] = f.longCount;
+                    item["longMs"] = falseLongMs(f, tm);
+                    item["longPx"] = falseLongPx(f, tm, sc);   // プレイはこの長さ（ふつうのノーツ速度のとき）を使う
+                }
+                if(!f.changes.empty()){
+                    json ch = json::array();
+                    for(const auto& c : f.changes){
+                        ch.push_back(json{{"time", c.time}, {"type", c.type}, {"long", c.isLong}});
+                    }
+                    item["changes"] = ch;
+                }
+                falseArr.push_back(item);
+            }
+            dj["falseNotes"] = falseArr;
+        }
 
         json bpmArr = json::array();
         for(const auto& b : d.bpmEvents){
@@ -148,7 +373,11 @@ inline bool saveChart(const std::string& path, const ChartMeta& meta, const std:
     }
     j["difficulties"] = diffArr;
 
-    const std::string content = j.dump(2);
+    return j.dump(2);
+}
+
+inline bool saveChart(const std::string& path, const ChartMeta& meta, const std::vector<EditorDifficulty>& difficulties){
+    const std::string content = buildChartText(meta, difficulties);
     std::ofstream out(toUtf8Path(path));
     if(out.is_open()){
         out << content;
@@ -192,14 +421,63 @@ inline EditorDifficulty parseOneDifficulty(const json& src){
         }
     }
 
-    if(src.contains("speedEvents")){
-        for(const auto& item : src.at("speedEvents")){
+    // "speedEvents" = A_SpeedEvent、"bSpeedEvents" = B_SpeedEvent。読んだら 1 つの並びにまとめて時刻の順にする
+    for(const char* key : {"speedEvents", "bSpeedEvents"}){
+        if(!src.contains(key) || !src.at(key).is_array()) continue;
+        for(const auto& item : src.at(key)){
             EditorSpeedEvent s;
             s.time = item.value("time", 0);
             s.target = item.value("target", 1.0);
             s.easing = item.value("easing", 1);
             s.duration = item.value("duration", 500);
+            s.isB = (std::string(key) == "bSpeedEvents");
             d.speedEvents.push_back(s);
+        }
+    }
+    std::stable_sort(d.speedEvents.begin(), d.speedEvents.end(),
+                     [](const EditorSpeedEvent& a, const EditorSpeedEvent& b){ return a.time < b.time; });
+
+    // false ノーツ
+    if(src.contains("falseNotes") && src.at("falseNotes").is_array()){
+        for(const auto& it : src.at("falseNotes")){
+            EditorFalseNote f;
+            f.start       = it.value("start", 0);
+            f.end         = it.value("end", f.start + 1000);
+            f.x           = it.value("x", 0.0);
+            f.width       = std::clamp(it.value("width", 1), 1, 6);
+            f.y           = it.value("y", 400.0);
+            f.posMode     = it.value("posMode", 0);
+            f.aheadDiv    = std::max(1, it.value("aheadDiv", 16));
+            f.aheadCount  = std::max(0, it.value("aheadCount", 4));
+            f.dirDeg      = it.value("dir", 180.0);
+            f.speed       = it.value("speed", 0.0);
+            f.appear      = it.value("appear", 0);
+            f.appearMs    = it.value("appearMs", 250);
+            f.disappear   = it.value("disappear", 0);
+            f.disappearMs = it.value("disappearMs", 250);
+            f.type        = it.value("type", 0);
+            f.isLong      = it.value("long", false);
+            f.longPx      = it.value("longPx", 200.0);
+            if(it.contains("longDiv")){
+                f.longDiv   = std::max(1, it.value("longDiv", 4));
+                f.longCount = std::max(0, it.value("longCount", 1));
+            }
+            else{
+                // 前の譜面（長さを px で持っていた）：ふつうの速さ 1.8 で ms に直し、16 分のマスにする
+                const double beats = (f.longPx / 1.8) / (60000.0 / std::max(1.0, d.bpm));
+                f.longDiv = 16;
+                f.longCount = std::max(1, static_cast<int>(std::lround(beats * 4.0)));
+            }
+            if(it.contains("changes") && it.at("changes").is_array()){
+                for(const auto& c : it.at("changes")){
+                    EditorFalseLook l;
+                    l.time = c.value("time", f.start);
+                    l.type = c.value("type", 0);
+                    l.isLong = c.value("long", false);
+                    f.changes.push_back(l);
+                }
+            }
+            d.falseNotes.push_back(f);
         }
     }
 
@@ -233,6 +511,13 @@ inline bool loadChartForEdit(const std::string & path, ChartMeta& meta, std::vec
     meta.composer = j.value("composer", std::string("Unknown"));
     meta.offsetMs = j.value("offset", 0.0);
     meta.previewStartMs = j.value("previewStart", 0.0);
+    meta.genres.clear();
+    if(j.contains("genres") && j.at("genres").is_array()){
+        for(const auto& g : j.at("genres")){
+            if(g.is_string()) meta.genres.push_back(g.get<std::string>());
+        }
+    }
+    meta.genres = normalizeSongGenres(meta.genres);
 
     difficulties.clear();
     if(j.contains("difficulties") && j.at("difficulties").is_array()){
@@ -340,6 +625,11 @@ inline void applyMusicAnalysis(const MusicAnalysis& r, ChartMeta& meta, std::vec
             n.time = newStart;
         }
         for(auto& sev : d.speedEvents) sev.time = remapTime(oldMap, newMap, sev.time);
+        for(auto& f : d.falseNotes){   // false ノーツも、出現・消滅・見た目の変更の時刻を拍の位置で保つ
+            f.start = remapTime(oldMap, newMap, f.start);
+            f.end   = std::max(f.start + 1, remapTime(oldMap, newMap, f.end));
+            for(auto& c : f.changes) c.time = remapTime(oldMap, newMap, c.time);
+        }
 
         // 拍子は勝手に変えない：新しいイベントの位置を「今までのテンポ表で何拍目か」に直し、
         // そこで今まで使われていた拍子（曲頭の拍子か、それより前の一番近い BPM イベントの拍子）を入れる
@@ -853,6 +1143,530 @@ inline bool paletteButton(int index, bool selected){
     return clicked;
 }
 
+// =====================================================================
+//  イージングの選び方（カード）
+//
+//  ■ 見た目
+//    イージングの欄は、今のイージングの名前と小さなグラフが付いたボタンになる。
+//    クリックすると、その横にウィンドウが開き、イージングの種類ごとのカードが並ぶ。
+//    カードの中では、グラフの上を点が動き、その下でノーツが「そのイージングの動き方」で左から右へ進む
+//    （1.8 秒ごとにくり返す）。見て選べるので、名前を覚えていなくても違いが分かる。カードをクリックで決定。
+//
+//  ■ ウィンドウの出方（選曲画面の Cube のウィンドウ＝QuarryReveal.h と同じ流れ）
+//    ① 光の線：クリックしたイージングの欄から、ウィンドウの一番近い角へ光の線が伸びる   （EASE_BEAM_MS）
+//    ② 枠（縦）：その角から縦の辺が伸びる                                              （EASE_VERT_MS）
+//    ③ 枠（横）：横へ広がってウィンドウの大きさの枠になる。中には薄い斜線              （EASE_HORZ_MS）
+//    ④ 生成：上の端から下へ中身ができる。先頭に横の光の線、そのすぐ上はグリッチ       （EASE_BUILD_MS）
+//    エディタで何度も開くので、選曲画面より少し速くしてある
+//    ※ ImGui のポップアップを開き、背景も中身も全部、自分で ImDrawList に描く（クリックは見えないボタンで受ける）
+// =====================================================================
+inline constexpr double EASE_BEAM_MS  = 80.0;
+inline constexpr double EASE_VERT_MS  = 70.0;
+inline constexpr double EASE_HORZ_MS  = 90.0;
+inline constexpr double EASE_BUILD_MS = 220.0;
+inline constexpr double EASE_LOOP_MS  = 1800.0;   // カードの動きの 1 回の長さ（始め・終わりで少し止まる）
+inline constexpr float  EASE_CARD_W   = 176.0f;
+inline constexpr float  EASE_CARD_H   = 200.0f;
+
+struct EasingInfo{ const char* name; const char* desc; };
+inline constexpr EasingInfo EASINGS[] = {
+    {"Straight",     "一定の速さで変わる"},
+    {"easeOutCubic", "はじめ速く、だんだんゆっくり"},
+    {"easeInCubic",  "はじめゆっくり、だんだん速く"},
+};
+inline constexpr int EASING_COUNT = 3;   // イージングの番号は 1 〜 3（EASINGS[番号 − 1]）
+
+inline float easeValue(int easing, float t){
+    t = std::clamp(t, 0.0f, 1.0f);
+    if(easing == 2) return 1.0f - (1.0f - t) * (1.0f - t) * (1.0f - t);
+    if(easing == 3) return t * t * t;
+    return t;
+}
+
+inline float easeHash01(uint32_t x){
+    x ^= x >> 16; x *= 0x7feb352dU; x ^= x >> 15; x *= 0x846ca68bU; x ^= x >> 16;
+    return (x & 0xFFFFFF) / static_cast<float>(0x1000000);
+}
+
+// グラフ（p0〜p1 の四角）にイージングの曲線を描く。dotT >= 0 なら、その位置に点
+inline void drawEaseGraph(ImDrawList* dl, ImVec2 p0, ImVec2 p1, int easing, ImU32 col, float thick, float dotT = -1.0f){
+    const int N = 32;
+    ImVec2 pts[N + 1];
+    for(int i = 0; i <= N; i++){
+        const float t = static_cast<float>(i) / N;
+        pts[i] = ImVec2(p0.x + (p1.x - p0.x) * t, p1.y - (p1.y - p0.y) * easeValue(easing, t));
+    }
+    dl->AddPolyline(pts, N + 1, col, 0, thick);
+    if(dotT >= 0.0f){
+        const ImVec2 d(p0.x + (p1.x - p0.x) * dotT, p1.y - (p1.y - p0.y) * easeValue(easing, dotT));
+        dl->AddLine(ImVec2(d.x, p0.y), ImVec2(d.x, p1.y), IM_COL32(255, 255, 255, 50), 1.0f);   // 今の時間の縦線
+        dl->AddCircleFilled(d, 5.0f, IM_COL32(255, 255, 255, 255));
+        dl->AddCircle(d, 8.0f, IM_COL32(0, 200, 255, 160), 0, 2.0f);
+    }
+}
+
+// イージングの欄。押すとカードのウィンドウが開く。選び直したら true
+//   label：右に出す名前（"イージング##ctxA" のように ## 以降で区別する）
+inline bool easingPicker(const char* label, int& easing){
+    struct OpenState{ double openTime = 0.0; ImVec2 origin; };
+    static std::unordered_map<ImGuiID, OpenState> states;
+
+    bool changed = false;
+    ImGui::PushID(label);
+    const ImGuiID key = ImGui::GetID("##easepick");
+    const int cur = std::clamp(easing, 1, EASING_COUNT);
+
+    // ----- 欄（ボタン）：小さなグラフ ＋ 名前 -----
+    const float w = ImGui::CalcItemWidth();
+    const float h = ImGui::GetFrameHeight();
+    const ImVec2 b0 = ImGui::GetCursorScreenPos();
+    if(ImGui::InvisibleButton("##easefield", ImVec2(w, h))){
+        ImGui::OpenPopup("##easepick");
+        states[key].openTime = ImGui::GetTime();
+        states[key].origin = ImVec2(b0.x + w, b0.y + h * 0.5f);
+    }
+    const bool hov = ImGui::IsItemHovered();
+    {
+        ImDrawList* dl = ImGui::GetWindowDrawList();
+        const ImVec2 b1(b0.x + w, b0.y + h);
+        dl->AddRectFilled(b0, b1, hov ? IM_COL32(45, 45, 80, 255) : IM_COL32(30, 30, 50, 255), 3.0f);
+        dl->AddRect(b0, b1, hov ? COL_ACCENT : IM_COL32(110, 110, 150, 255), 3.0f, 0, 1.0f);
+        const float g = h - 8.0f;
+        drawEaseGraph(dl, ImVec2(b0.x + 6.0f, b0.y + 4.0f), ImVec2(b0.x + 6.0f + g * 1.4f, b0.y + 4.0f + g), cur, COL_ACCENT, 1.5f);
+        char buf[48];
+        std::snprintf(buf, sizeof(buf), "%s(%d)", EASINGS[cur - 1].name, cur);
+        dl->AddText(ImVec2(b0.x + 14.0f + g * 1.4f, b0.y + (h - ImGui::GetTextLineHeight()) * 0.5f), IM_COL32(230, 230, 240, 255), buf);
+    }
+    // 右の名前（## より前だけ）
+    {
+        const char* end = std::strstr(label, "##");
+        const std::string shown = end ? std::string(label, end) : std::string(label);
+        if(!shown.empty()){
+            ImGui::SameLine(0.0f, ImGui::GetStyle().ItemInnerSpacing.x);
+            ImGui::TextUnformatted(shown.c_str());
+        }
+    }
+
+    // ----- カードのウィンドウ -----
+    const ImVec2 pad(18.0f, 16.0f);
+    const float titleH = 30.0f;
+    const ImVec2 winSize(pad.x * 2.0f + EASE_CARD_W * EASING_COUNT + 12.0f * (EASING_COUNT - 1),
+                         pad.y * 2.0f + titleH + EASE_CARD_H);
+    const OpenState st = states[key];
+    {
+        // 欄の右に出す（画面からはみ出すなら左・上にずらす）
+        const ImVec2 disp = ImGui::GetIO().DisplaySize;
+        ImVec2 pos(st.origin.x + 40.0f, st.origin.y - winSize.y * 0.5f);
+        if(pos.x + winSize.x > disp.x - 8.0f) pos.x = std::max(8.0f, st.origin.x - w - 40.0f - winSize.x);
+        pos.y = std::clamp(pos.y, 8.0f, std::max(8.0f, disp.y - winSize.y - 8.0f));
+        ImGui::SetNextWindowPos(pos, ImGuiCond_Always);
+        ImGui::SetNextWindowSize(winSize, ImGuiCond_Always);
+    }
+    ImGui::PushStyleColor(ImGuiCol_PopupBg, IM_COL32(0, 0, 0, 0));   // 背景は自分で描く
+    ImGui::PushStyleColor(ImGuiCol_Border, IM_COL32(0, 0, 0, 0));
+    ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, pad);
+    if(ImGui::BeginPopup("##easepick", ImGuiWindowFlags_NoMove | ImGuiWindowFlags_NoSavedSettings | ImGuiWindowFlags_NoScrollbar)){
+        const double ms = (ImGui::GetTime() - st.openTime) * 1000.0;
+        const ImVec2 wp = ImGui::GetWindowPos();
+        const ImVec2 ws = ImGui::GetWindowSize();
+        const float L = wp.x, T = wp.y, R = wp.x + ws.x, B = wp.y + ws.y;
+
+        // ----- 中身の並び：見えないボタン（カード）を横に並べる -----
+        ImGui::Dummy(ImVec2(0.0f, titleH - ImGui::GetStyle().ItemSpacing.y));
+        ImVec2 cardPos[EASING_COUNT];
+        bool   cardHov[EASING_COUNT] = {};
+        for(int i = 0; i < EASING_COUNT; i++){
+            if(i > 0) ImGui::SameLine(0.0f, 12.0f);
+            cardPos[i] = ImGui::GetCursorScreenPos();
+            ImGui::PushID(i);
+            if(ImGui::InvisibleButton("##card", ImVec2(EASE_CARD_W, EASE_CARD_H))){
+                easing = i + 1;
+                changed = true;
+                ImGui::CloseCurrentPopup();
+            }
+            cardHov[i] = ImGui::IsItemHovered();
+            ImGui::PopID();
+        }
+
+        ImDrawList* fg = ImGui::GetForegroundDrawList();   // 光の線はウィンドウの外にも出るので、一番手前に描く
+        ImDrawList* dl = ImGui::GetWindowDrawList();
+        dl->PushClipRectFullScreen();
+
+        // 欄に一番近い角
+        const float cx = (std::fabs(st.origin.x - L) <= std::fabs(st.origin.x - R)) ? L : R;
+        const float cy = (std::fabs(st.origin.y - T) <= std::fabs(st.origin.y - B)) ? T : B;
+        const float ox = (cx == L) ? R : L;
+        const float oy = (cy == T) ? B : T;
+        const double t1 = EASE_BEAM_MS, t2 = t1 + EASE_VERT_MS, t3 = t2 + EASE_HORZ_MS, t4 = t3 + EASE_BUILD_MS;
+        auto ease3 = [](double t){ t = std::clamp(t, 0.0, 1.0); return static_cast<float>(1.0 - (1.0 - t) * (1.0 - t) * (1.0 - t)); };
+        const ImU32 lineCol = IM_COL32(200, 250, 255, 210);
+
+        // ① 光の線（伸びきったら、枠ができる間にだんだん消える）
+        if(ms < t3){
+            const float e = ease3(ms / t1);
+            const float fade = (ms < t1) ? 1.0f : static_cast<float>(1.0 - (ms - t1) / (t3 - t1));
+            const ImVec2 tip(st.origin.x + (cx - st.origin.x) * e, st.origin.y + (cy - st.origin.y) * e);
+            fg->AddLine(st.origin, tip, IM_COL32(200, 250, 255, static_cast<int>(210 * fade)), 2.0f);
+            if(ms < t1) fg->AddRectFilled(ImVec2(tip.x - 3.0f, tip.y - 3.0f), ImVec2(tip.x + 3.0f, tip.y + 3.0f), IM_COL32(255, 255, 255, 220));
+        }
+
+        // ② 縦の辺
+        if(ms >= t1 && ms < t2){
+            const float e = ease3((ms - t1) / EASE_VERT_MS);
+            dl->AddLine(ImVec2(cx, cy), ImVec2(cx, cy + (oy - cy) * e), lineCol, 2.0f);
+        }
+
+        if(ms >= t2){
+            // ③ 横に広がる今の枠
+            const float ex = (ms < t3) ? ease3((ms - t2) / EASE_HORZ_MS) : 1.0f;
+            const float curX = cx + (ox - cx) * ex;
+            const ImVec2 c0(std::min(cx, curX), T), c1(std::max(cx, curX), B);
+            // ④ 生成の線（上 → 下）
+            const float bp = (ms < t3) ? 0.0f : static_cast<float>(std::clamp((ms - t3) / EASE_BUILD_MS, 0.0, 1.0));
+            const float scanY = T + (B - T) * bp;
+
+            // まだできていない所：薄い斜線
+            if(c1.x - c0.x > 1.0f && scanY < B){
+                dl->PushClipRect(ImVec2(c0.x, std::max(c0.y, scanY)), c1, true);
+                const float hh = c1.y - c0.y;
+                for(float k = 0.0f; k <= (c1.x - c0.x) + hh; k += 16.0f){
+                    dl->AddLine(ImVec2(c0.x + k, c0.y), ImVec2(c0.x + k - hh, c0.y + hh), IM_COL32(200, 250, 255, 40), 1.0f);
+                }
+                dl->PopClipRect();
+            }
+
+            // できた所：背景・タイトル・カード（scanY より上だけ見せる）
+            if(bp > 0.0f){
+                dl->PushClipRect(ImVec2(L, T), ImVec2(R, scanY), true);
+                dl->AddRectFilled(ImVec2(L, T), ImVec2(R, B), IM_COL32(14, 14, 26, 245));
+                dl->AddRect(ImVec2(L + 1.5f, T + 1.5f), ImVec2(R - 1.5f, B - 1.5f), COL_ACCENT, 0.0f, 0, 3.0f);
+                dl->AddText(ImVec2(L + pad.x, T + pad.y - 2.0f), IM_COL32(0, 220, 255, 255), "EASING");
+                dl->AddText(ImVec2(L + pad.x + 80.0f, T + pad.y - 2.0f), IM_COL32(160, 160, 190, 255), "クリックで選ぶ");
+
+                // カードの動き：始めに少し止まり、動いて、終わりで少し止まる
+                const double loop = std::fmod(ImGui::GetTime() * 1000.0, EASE_LOOP_MS);
+                const float t = static_cast<float>(std::clamp((loop - 200.0) / (EASE_LOOP_MS - 600.0), 0.0, 1.0));
+                for(int i = 0; i < EASING_COUNT; i++){
+                    const int ez = i + 1;
+                    const bool sel = (ez == cur);
+                    const ImVec2 q0 = cardPos[i], q1(q0.x + EASE_CARD_W, q0.y + EASE_CARD_H);
+                    dl->AddRectFilled(q0, q1, cardHov[i] ? IM_COL32(40, 40, 72, 255) : IM_COL32(24, 24, 40, 255), 4.0f);
+                    dl->AddRect(q0, q1, sel ? COL_ACCENT : (cardHov[i] ? IM_COL32(150, 200, 255, 255) : IM_COL32(80, 80, 110, 255)),
+                                4.0f, 0, sel ? 3.0f : 1.5f);
+                    // 名前と説明
+                    char nm[40];
+                    std::snprintf(nm, sizeof(nm), "%s (%d)", EASINGS[i].name, ez);
+                    dl->AddText(ImVec2(q0.x + 10.0f, q0.y + 8.0f), sel ? IM_COL32(0, 230, 255, 255) : IM_COL32(235, 235, 245, 255), nm);
+                    dl->AddText(ImGui::GetFont(), ImGui::GetFontSize() * 0.8f, ImVec2(q0.x + 10.0f, q0.y + 30.0f),
+                                IM_COL32(160, 160, 190, 255), EASINGS[i].desc);
+                    // グラフ（横 = 時間、縦 = 変化の進み具合）
+                    const ImVec2 g0(q0.x + 16.0f, q0.y + 54.0f), g1(q1.x - 16.0f, q0.y + 140.0f);
+                    dl->AddRectFilled(g0, g1, IM_COL32(10, 10, 20, 255));
+                    dl->AddLine(ImVec2(g0.x, g1.y), ImVec2(g1.x, g1.y), IM_COL32(90, 90, 120, 255), 1.0f);
+                    dl->AddLine(ImVec2(g0.x, g0.y), ImVec2(g0.x, g1.y), IM_COL32(90, 90, 120, 255), 1.0f);
+                    drawEaseGraph(dl, g0, g1, ez, sel ? COL_ACCENT : IM_COL32(150, 200, 255, 255), 2.5f, t);
+                    // 動き：ノーツがそのイージングで左から右へ進む（通った跡が薄く残る）
+                    const float trackY = q0.y + 168.0f;
+                    const float tx0 = q0.x + 16.0f, tx1 = q1.x - 16.0f - 34.0f;
+                    dl->AddLine(ImVec2(tx0, trackY), ImVec2(tx1 + 34.0f, trackY), IM_COL32(70, 70, 100, 255), 2.0f);
+                    for(int k = 1; k <= 5; k++){
+                        const float tt = std::max(0.0f, t - k * 0.035f);
+                        const float gx = tx0 + (tx1 - tx0) * easeValue(ez, tt);
+                        dl->AddRectFilled(ImVec2(gx, trackY - 7.0f), ImVec2(gx + 34.0f, trackY + 7.0f),
+                                          IM_COL32(255, 255, 255, 50 - k * 8), 3.0f);
+                    }
+                    const float nx = tx0 + (tx1 - tx0) * easeValue(ez, t);
+                    dl->AddRectFilled(ImVec2(nx, trackY - 7.0f), ImVec2(nx + 34.0f, trackY + 7.0f), IM_COL32(255, 255, 255, 255), 3.0f);
+                }
+                dl->PopClipRect();
+
+                // 生成の先頭：横の光の線と、そのすぐ上のグリッチ（ずれた色の帯）
+                if(bp < 1.0f){
+                    const uint32_t seed = static_cast<uint32_t>(ImGui::GetTime() * 1000.0 / 30.0);
+                    for(int b = 0; b < 8; b++){
+                        const uint32_t k = seed * 977u + static_cast<uint32_t>(b) * 131u;
+                        const float y0 = scanY - 4.0f - easeHash01(k) * 46.0f;
+                        if(y0 < T) continue;
+                        const float hb = 2.0f + easeHash01(k * 3u) * 6.0f;
+                        const float x0 = L + easeHash01(k * 5u) * (R - L) * 0.6f;
+                        const float x1 = std::min(R, x0 + 40.0f + easeHash01(k * 7u) * (R - L) * 0.5f);
+                        const float sh = (easeHash01(k * 11u) * 2.0f - 1.0f) * 14.0f;
+                        dl->AddRectFilled(ImVec2(x0 + sh - 4.0f, y0), ImVec2(x1 + sh - 4.0f, y0 + hb), IM_COL32(255, 40, 60, 110));
+                        dl->AddRectFilled(ImVec2(x0 + sh + 4.0f, y0), ImVec2(x1 + sh + 4.0f, y0 + hb), IM_COL32(40, 200, 255, 110));
+                        dl->AddRectFilled(ImVec2(x0 + sh, y0), ImVec2(x1 + sh, y0 + hb), IM_COL32(200, 230, 255, 90));
+                    }
+                    dl->AddRectFilled(ImVec2(c0.x, scanY - 5.0f), ImVec2(c1.x, scanY + 5.0f), IM_COL32(200, 250, 255, 70));
+                    dl->AddRectFilled(ImVec2(c0.x, scanY - 1.0f), ImVec2(c1.x, scanY + 1.0f), IM_COL32(255, 255, 255, 230));
+                }
+            }
+            // 生成が終わるまでは、枠を光の線で描く
+            if(ms < t4){
+                dl->AddRect(c0, c1, lineCol, 0.0f, 0, 2.0f);
+            }
+        }
+        dl->PopClipRect();
+        ImGui::EndPopup();
+    }
+    ImGui::PopStyleVar();
+    ImGui::PopStyleColor(2);
+    ImGui::PopID();
+    return changed;
+}
+
+// =====================================================================
+//  false ノーツのプレビュー（ヘッドをクリック／NOTE の「プレビュー」で開くウィンドウの中身）
+//    プレイ画面（1920 × 1080）のレーンの部分を、そのまま縮めた絵にする（size は 16:9）。
+//    レーンの傾け方は、プレイの LaneTilt.h・TiltProjection.h とまったく同じ式・同じ数（視点の距離 1400、
+//    傾けるほど全体を大きくする zoom、ノーツの太さを保つ thicknessScale、手前で止める dMin）を使うので、
+//    同じ傾きなら、ノーツの画面の上の y（と x・大きさ）はプレイと一致する（縮めた倍率 k を掛けただけ）
+//    ・時刻 t に見えている false ノーツを、プレイと同じ式（Play/FalseNotes.h）の位置・見た目・出方で描く
+//      highlight[i] が 1 のもの（範囲選択したもの・クリックしたもの）は濃く、それ以外は showAll のときだけ薄く
+//    ・レーンの傾き tiltDeg（プレイと同じ式）：判定ラインからの高さ d、真ん中からの横のずれ dx の点は
+//          s = C ÷ (C + d·sinθ)、zoom = 1 + 405·sinθ ÷ C
+//          画面の x = 960 + dx·s·zoom、画面の y = 810 − d·cosθ·s·zoom
+//          （d は手前で −0.7·C ÷ sinθ より小さくしない）
+//      ノーツの太さは 30px × thicknessScale（傾けても幅との割合を変えない）。判定枠も同じ
+//    ・レーンは奥（地平線まで）と手前（プレビューの下の端の外まで）の延長線上まで描く
+// =====================================================================
+//    ・baseH(f, t)：その false ノーツの、時刻 t の「出現した位置の高さ」（px 固定なら y、スナップなら流れていく高さ）
+inline void drawFalsePreview(ImDrawList* dl, ImVec2 p0, ImVec2 size, const std::vector<EditorFalseNote>& fns,
+                             const std::vector<char>& highlight, bool showAll, double t, float tiltDeg,
+                             const std::function<double(const EditorFalseNote&, double)>& baseH){
+    constexpr float PLAY_JUDGE_Y = 810.0f, PLAY_CENTER_X = 960.0f, PLAY_LANE_W = 120.0f, PLAY_HEAD_H = 30.0f;
+    constexpr float CAM = 1400.0f;
+    const float k  = size.x / 1920.0f;                       // プレイの 1px → プレビューの何 px か（size は 16:9）
+    const float cx = p0.x + PLAY_CENTER_X * k;
+    const float jy = p0.y + PLAY_JUDGE_Y * k;
+    const float th = tiltDeg * 3.14159265f / 180.0f;
+    const float sn = std::sin(th), cs = std::cos(th);
+    const bool  tilted = tiltDeg >= 0.05f;                                   // LaneTilt::active と同じ
+    const float zoom = tilted ? 1.0f + 405.0f * sn / CAM : 1.0f;             // LaneTilt::zoomFor と同じ
+    const float dMin = tilted ? -0.7f * CAM / std::max(sn, 1e-6f) : -1e9f;  // TiltProjection の dMin と同じ
+    // プレイの座標 (x, y) → プレビューの画面の位置（TiltProjection::map と同じ式 × k）
+    auto proj = [&](float px, float py) -> ImVec2{
+        if(!tilted) return ImVec2(cx + (px - PLAY_CENTER_X) * k, jy - (PLAY_JUDGE_Y - py) * k);
+        const float d = std::max(PLAY_JUDGE_Y - py, dMin);
+        const float s = CAM / (CAM + d * sn);
+        return ImVec2(cx + (px - PLAY_CENTER_X) * s * zoom * k, jy - d * cs * s * zoom * k);
+    };
+    // ノーツ・判定枠の太さ（LaneTilt::thicknessScale と同じ）：判定ラインからの高さ d の所
+    auto headHAt = [&](float d) -> float{
+        if(!tilted) return PLAY_HEAD_H;
+        const float s = CAM / (CAM + d * sn);
+        return PLAY_HEAD_H / std::max(cs * s, 0.01f);
+    };
+    auto quad = [&](float x0, float y0, float x1, float y1, ImU32 c){   // プレイの座標の四角を描く
+        dl->AddQuadFilled(proj(x0, y0), proj(x1, y0), proj(x1, y1), proj(x0, y1), c);
+    };
+
+    dl->PushClipRect(p0, ImVec2(p0.x + size.x, p0.y + size.y), true);
+    dl->AddRectFilled(p0, ImVec2(p0.x + size.x, p0.y + size.y), IM_COL32(58, 58, 82, 255));
+
+    // レーンの奥と手前の端（プレイの y）
+    //   奥：とても遠く（傾けると地平線の近くまで、傾けないとプレビューの上の外まで）
+    //   手前：プレビューの下の端より外。傾けたときは視点の手前で止める（それより手前は視点の後ろになる）
+    const float farY  = PLAY_JUDGE_Y - 200000.0f;   // 判定ラインから 200000px 奥
+    const float nearY = PLAY_JUDGE_Y + 20000.0f;   // 手前（傾けたときは dMin で止まる）
+    const float laneLeft = PLAY_CENTER_X - PLAY_LANE_W * 3.0f;
+    quad(laneLeft, farY, laneLeft + PLAY_LANE_W * 6.0f, nearY, IM_COL32(4, 4, 10, 255));
+    for(int i = 0; i <= 6; i++){
+        const float x = laneLeft + PLAY_LANE_W * i;
+        dl->AddLine(proj(x, farY), proj(x, nearY), IM_COL32(140, 200, 230, 120), 1.0f);
+    }
+    dl->AddLine(proj(laneLeft, PLAY_JUDGE_Y), proj(laneLeft + PLAY_LANE_W * 6.0f, PLAY_JUDGE_Y), IM_COL32(150, 220, 255, 230), 2.0f);
+
+    // 判定枠（レーンごとの枠。太さはプレイと同じく判定ラインの所の thicknessScale）
+    {
+        const float jh = headHAt(0.0f);
+        for(int i = 0; i < 6; i++){
+            const float bx0 = laneLeft + PLAY_LANE_W * i + 2.0f, bx1 = bx0 + PLAY_LANE_W - 4.0f;
+            const float by0 = PLAY_JUDGE_Y - jh * 0.5f, by1 = PLAY_JUDGE_Y + jh * 0.5f;
+            dl->AddQuad(proj(bx0, by0), proj(bx1, by0), proj(bx1, by1), proj(bx0, by1), IM_COL32(150, 220, 255, 200), 1.2f);
+        }
+    }
+
+    // false ノーツ
+    const uint32_t slot = static_cast<uint32_t>(ImGui::GetTime() * 1000.0 / 70.0);   // プレイと同じく 70ms ごとに形が変わる
+    for(size_t ni = 0; ni < fns.size(); ni++){
+        const bool isSel = ni < highlight.size() && highlight[ni];
+        if(!showAll && !isSel) continue;
+        const EditorFalseNote& f = fns[ni];
+        if(t < f.start || t >= f.end) continue;
+        const double e = t - f.start;
+        int type = f.type;
+        bool isLong = f.isLong;
+        for(const auto& l : f.changes){
+            if(l.time > t) break;
+            type = l.type;
+            isLong = l.isLong;
+        }
+        SDL_Color c = noteColor(type);
+        const int baseA = isSel ? 255 : 110;   // 選んでいないものは薄く
+        const double a = f.dirDeg * 3.14159265358979 / 180.0;
+        const float ncx = laneLeft + static_cast<float>(f.x) * PLAY_LANE_W + static_cast<float>(std::sin(a) * f.speed * e);
+        const float ncy = PLAY_JUDGE_Y - static_cast<float>(baseH(f, t)) - static_cast<float>(std::cos(a) * f.speed * e);
+        const float x0 = ncx + 8.0f, x1 = ncx + f.width * PLAY_LANE_W - 8.0f;
+        const float noteH = headHAt(PLAY_JUDGE_Y - ncy);   // プレイと同じ太さ
+        const float headTop = ncy - noteH * 0.5f, headBot = ncy + noteH * 0.5f;
+        const float top = (isLong && f.longPx > 0.0) ? headTop - static_cast<float>(f.longPx) : headTop;
+
+        double vis = 1.0;
+        if(f.appear == 1 && f.appearMs > 0 && e < f.appearMs) vis = e / f.appearMs;
+        const double left = f.end - t;
+        if(f.disappear == 1 && f.disappearMs > 0 && left < f.disappearMs) vis = std::min(vis, left / f.disappearMs);
+
+        if(vis >= 1.0){
+            // ブラウン管を通したような見た目（Play/FalseNotes.h と同じ）：赤・青のにじみ → 少し薄い本体 → 走査線
+            const int ca = baseA * 82 / 100;
+            quad(x0 - 2.0f, top, x1 - 2.0f, headBot, IM_COL32(255, 60, 90, baseA * 22 / 100));
+            quad(x0 + 2.0f, top, x1 + 2.0f, headBot, IM_COL32(60, 200, 255, baseA * 22 / 100));
+            if(top < headTop){
+                quad(x0, top, x1, ncy, IM_COL32(c.r, c.g, c.b, ca));
+                const float iw = (x1 - x0) * 0.3f, ix = x0 + (x1 - x0 - iw) * 0.5f;
+                quad(ix, top + 8.0f, ix + iw, headTop - 8.0f, IM_COL32(c.r * 6 / 10, c.g * 6 / 10, c.b * 6 / 10, ca));
+            }
+            quad(x0, headTop, x1, headBot, IM_COL32(c.r, c.g, c.b, ca));
+            const float off = static_cast<float>(std::fmod(ImGui::GetTime() * 6.0, 3.0));
+            for(float ly = top + off; ly < headBot; ly += 3.0f) quad(x0, ly, x1, ly + 1.0f, IM_COL32(0, 0, 0, baseA * 30 / 100));
+            continue;
+        }
+        // グリッチ：横の太い帯に切って、ばらばらに出す・大きくずらす・赤と青に分ける（プレイと同じ）
+        const float strength = static_cast<float>(1.0 - vis);
+        const int bands = std::max(3, static_cast<int>((headBot - top) / (noteH / 3.0f)));
+        const float bh = (headBot - top) / bands;
+        for(int b = 0; b < bands; b++){
+            const uint32_t kk = slot * 977u + static_cast<uint32_t>(ni) * 7919u + static_cast<uint32_t>(b) * 131u;
+            if(easeHash01(kk) >= vis) continue;
+            const float y0 = top + bh * b;
+            const float sh = (easeHash01(kk * 3u + 1u) < 0.7f) ? (easeHash01(kk * 7u + 5u) * 2.0f - 1.0f) * 46.0f * strength : 0.0f;
+            const float d = 14.0f * strength;
+            const int ra = static_cast<int>(170 * strength * baseA / 255);
+            quad(x0 + sh - d, y0, x1 + sh - d, y0 + bh + 0.5f, IM_COL32(255, 40, 60, ra));
+            quad(x0 + sh + d, y0, x1 + sh + d, y0 + bh + 0.5f, IM_COL32(40, 200, 255, ra));
+            quad(x0 + sh, y0, x1 + sh, y0 + bh + 0.5f, IM_COL32(c.r, c.g, c.b, static_cast<int>(baseA * (0.6f + 0.4f * easeHash01(kk * 13u + 3u)))));
+        }
+    }
+    dl->PopClipRect();
+}
+
+// =====================================================================
+//  高さ(px) の欄
+//    欄（今の値のボタン）をクリックすると、横にウィンドウが開く。中身は
+//    ・レーンの小さな図：判定ラインと、その高さの所にノーツ（幅・横の位置もそのノーツのもの）と目盛り。
+//      図の上をクリック・ドラッグしても高さが変わる
+//    ・バー（0 〜 FALSE_HEIGHT_MAX）、−・＋ ボタン（10px ずつ。Shift を押しながらは 1px ずつ）
+//    ・px の数の欄：クリックするとキーボードで打てる
+//    変えた値はすぐノーツに入る（ウィンドウを閉じる必要はない）
+// =====================================================================
+inline constexpr double FALSE_HEIGHT_MAX = 1500.0;
+
+inline bool heightPicker(const char* label, EditorFalseNote& f){
+    bool changed = false;
+    ImGui::PushID(label);
+    const float w = ImGui::CalcItemWidth();
+    const float h = ImGui::GetFrameHeight();
+    const ImVec2 b0 = ImGui::GetCursorScreenPos();
+    if(ImGui::InvisibleButton("##hfield", ImVec2(w, h))){
+        ImGui::OpenPopup("##hpick");
+        ImGui::SetNextWindowPos(ImVec2(b0.x + w + 30.0f, std::max(8.0f, b0.y - 200.0f)), ImGuiCond_Always);
+    }
+    {
+        const bool hov = ImGui::IsItemHovered();
+        ImDrawList* dl = ImGui::GetWindowDrawList();
+        const ImVec2 b1(b0.x + w, b0.y + h);
+        dl->AddRectFilled(b0, b1, hov ? IM_COL32(45, 45, 80, 255) : IM_COL32(30, 30, 50, 255), 3.0f);
+        dl->AddRect(b0, b1, hov ? COL_ACCENT : IM_COL32(110, 110, 150, 255), 3.0f, 0, 1.0f);
+        char buf[32];
+        std::snprintf(buf, sizeof(buf), "%.0f px", f.y);
+        dl->AddText(ImVec2(b0.x + 8.0f, b0.y + (h - ImGui::GetTextLineHeight()) * 0.5f), IM_COL32(230, 230, 240, 255), buf);
+        // 右の小さな印：レーンの中の高さの位置
+        const float mx0 = b1.x - 22.0f, mx1 = b1.x - 6.0f;
+        dl->AddRectFilled(ImVec2(mx0, b0.y + 3.0f), ImVec2(mx1, b1.y - 3.0f), IM_COL32(10, 10, 20, 255));
+        const float r = static_cast<float>(std::clamp(f.y / FALSE_HEIGHT_MAX, 0.0, 1.0));
+        const float my = (b1.y - 4.0f) - (h - 8.0f) * r;
+        dl->AddLine(ImVec2(mx0, my), ImVec2(mx1, my), IM_COL32(255, 120, 200, 255), 2.0f);
+    }
+    {
+        const char* end = std::strstr(label, "##");
+        const std::string shown = end ? std::string(label, end) : std::string(label);
+        if(!shown.empty()){
+            ImGui::SameLine(0.0f, ImGui::GetStyle().ItemInnerSpacing.x);
+            ImGui::TextUnformatted(shown.c_str());
+        }
+    }
+
+    ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, ImVec2(14.0f, 12.0f));
+    if(ImGui::BeginPopup("##hpick", ImGuiWindowFlags_AlwaysAutoResize)){
+        {
+            ImDrawList* dl = ImGui::GetWindowDrawList();
+            const ImVec2 wp = ImGui::GetWindowPos(), ws = ImGui::GetWindowSize();
+            dl->PushClipRectFullScreen();
+            dl->AddRect(ImVec2(wp.x + 1.5f, wp.y + 1.5f), ImVec2(wp.x + ws.x - 1.5f, wp.y + ws.y - 1.5f), IM_COL32(255, 120, 200, 255), 0.0f, 0, 3.0f);
+            dl->PopClipRect();
+        }
+        ImGui::TextColored(ImVec4(1.0f, 0.47f, 0.78f, 1.0f), "出現する高さ");
+        ImGui::Separator();
+
+        // レーンの小さな図（プレイの y = 810 − 高さ の所。上の端 = 判定ラインから FALSE_HEIGHT_MAX）
+        const ImVec2 cs(260.0f, 300.0f);
+        const ImVec2 c0 = ImGui::GetCursorScreenPos();
+        ImGui::InvisibleButton("##hcanvas", cs);
+        const float topPad = 10.0f, botPad = 40.0f;
+        const float judgeYc = c0.y + cs.y - botPad;
+        const float perPx = (cs.y - topPad - botPad) / static_cast<float>(FALSE_HEIGHT_MAX);
+        if(ImGui::IsItemActive()){   // 図の上をクリック・ドラッグ：その高さにする（10px ごとに丸める）
+            const float my = ImGui::GetIO().MousePos.y;
+            f.y = std::clamp(std::round((judgeYc - my) / perPx / 10.0f) * 10.0, 0.0, FALSE_HEIGHT_MAX);
+            changed = true;
+        }
+        {
+            ImDrawList* dl = ImGui::GetWindowDrawList();
+            const ImVec2 c1(c0.x + cs.x, c0.y + cs.y);
+            dl->AddRectFilled(c0, c1, IM_COL32(55, 55, 70, 255));
+            const float laneW = (cs.x - 60.0f) / 6.0f, lx = c0.x + 30.0f;
+            dl->AddRectFilled(ImVec2(lx, c0.y), ImVec2(lx + laneW * 6.0f, c1.y), IM_COL32(4, 4, 10, 255));
+            for(int i = 0; i <= 6; i++) dl->AddLine(ImVec2(lx + laneW * i, c0.y), ImVec2(lx + laneW * i, c1.y), IM_COL32(140, 200, 230, 110));
+            // 目盛り（250px ごと）
+            for(int v = 0; v <= static_cast<int>(FALSE_HEIGHT_MAX); v += 250){
+                const float y = judgeYc - v * perPx;
+                dl->AddLine(ImVec2(lx - 6.0f, y), ImVec2(lx, y), IM_COL32(160, 160, 190, 255));
+                char t[16];
+                std::snprintf(t, sizeof(t), "%d", v);
+                dl->AddText(ImGui::GetFont(), ImGui::GetFontSize() * 0.75f, ImVec2(c0.x + 2.0f, y - 7.0f), IM_COL32(160, 160, 190, 255), t);
+            }
+            dl->AddLine(ImVec2(lx, judgeYc), ImVec2(lx + laneW * 6.0f, judgeYc), IM_COL32(150, 220, 255, 230), 2.0f);
+            // ノーツ（高さの所）と、そこへの横線
+            const float ny = judgeYc - static_cast<float>(f.y) * perPx;
+            dl->AddLine(ImVec2(c0.x, ny), ImVec2(c1.x, ny), IM_COL32(255, 120, 200, 160), 1.0f);
+            const float nx0 = lx + static_cast<float>(f.x) * laneW + 2.0f, nx1 = nx0 + laneW * f.width - 4.0f;
+            const SDL_Color nc = noteColor(f.type);
+            dl->PushClipRect(c0, c1, true);
+            dl->AddRectFilled(ImVec2(nx0, ny - 4.0f), ImVec2(nx1, ny + 4.0f), IM_COL32(nc.r, nc.g, nc.b, 255), 2.0f);
+            dl->PopClipRect();
+            char t[24];
+            std::snprintf(t, sizeof(t), "%.0f px", f.y);
+            dl->AddText(ImVec2(c1.x - 64.0f, std::clamp(ny - 20.0f, c0.y + 2.0f, c1.y - 20.0f)), IM_COL32(255, 200, 235, 255), t);
+        }
+
+        // バー・−／＋・数の欄
+        const float step = ImGui::GetIO().KeyShift ? 1.0f : 10.0f;
+        float yv = static_cast<float>(f.y);
+        ImGui::SetNextItemWidth(cs.x);
+        if(ImGui::SliderFloat("##hbar", &yv, 0.0f, static_cast<float>(FALSE_HEIGHT_MAX), "%.0f px")){ f.y = std::round(yv); changed = true; }
+        if(ImGui::Button("-##hm", ImVec2(40.0f, 0.0f))){ f.y = std::max(0.0, f.y - step); changed = true; }
+        ImGui::SameLine();
+        ImGui::SetNextItemWidth(cs.x - 40.0f * 2.0f - ImGui::GetStyle().ItemSpacing.x * 2.0f);
+        if(ImGui::InputDouble("##hnum", &f.y, 0.0, 0.0, "%.0f")){ changed = true; }   // クリックするとキーボードで打てる
+        ImGui::SameLine();
+        if(ImGui::Button("+##hp", ImVec2(40.0f, 0.0f))){ f.y += step; changed = true; }
+        ImGui::TextDisabled("- / + は 10px（Shift で 1px）、数の欄は打って変えられる");
+        ImGui::EndPopup();
+    }
+    ImGui::PopStyleVar();
+    ImGui::PopID();
+    return changed;
+}
+
 } // namespace editorui
 
 //譜面エディター
@@ -1073,6 +1887,9 @@ GameScene chartCreateScene(SDL_Window* window, SDL_Renderer* renderer, std::stri
     double  eventMenuSpeed = 1.0;           // SPEED の目標値
     int     eventMenuSpeedEasing = 1;       // SPEED のイージング
     int     eventMenuSpeedDuration = 500;   // SPEED の変化にかける時間
+    double  eventMenuBSpeed = 0.0;          // B_SPEED の目標の速度（A と同じ単位。0 = 止める）
+    int     eventMenuBSpeedEasing = 1;      // B_SPEED のイージング
+    int     eventMenuBSpeedDuration = 500;  // B_SPEED の変化にかける時間
     double  eventMenuBpm = 120.0;           // BPM の値
     int     eventMenuSigNum = 4;            // 拍子の分子
     int     eventMenuSigDen = 4;            // 拍子の分母
@@ -1094,6 +1911,15 @@ GameScene chartCreateScene(SDL_Window* window, SDL_Renderer* renderer, std::stri
 
     // 保存したときの通知（画面上部に少しの間「保存しました」を出す）
     uint32_t saveToastTicks = 0;          // 保存した時刻（0 = まだ保存していない）
+
+    // 保存していない変更の確認
+    //   最後に読んだ・保存したときの譜面の中身（文字）を覚えておき、エディタを離れるときに今の中身と比べる。
+    //   違えば「保存しますか」のウィンドウを出す（保存して離れる／保存しないで離れる／やめる）
+    std::string savedChartText;           // 最後に読んだ・保存したときの中身
+    bool    savedChartPending = true;     // 次のフレームの終わりで savedChartText を取り直す（読み込んだ直後など）
+    bool    unsavedAskRequest = false;    // 次の ImGui のフレームで確認のウィンドウを開く
+    GameScene unsavedAskNext = GameScene::Select;   // 離れた後に行く画面
+    bool    closePopupsRequest = false;   // Esc：開いているポップアップ（プレビューなど）を閉じる
     bool saveToastOk = false;             // 保存できたか
     constexpr uint32_t SAVE_TOAST_MS = 1500;
     int toolNotetype = 0;
@@ -1106,10 +1932,62 @@ GameScene chartCreateScene(SDL_Window* window, SDL_Renderer* renderer, std::stri
     int selectedNoteIndex = -1;
     bool moveNotesOnBpmChange = true;
 
-    enum class DragMode{ None, MoveNote, ResizeTail, MoveSpeedEvent, MoveBpmEvent, ResizeSpeedDuration, MoveSelection };
+    enum class DragMode{ None, MoveNote, ResizeTail, MoveSpeedEvent, MoveBpmEvent, ResizeSpeedDuration, MoveSelection,
+                         CreateFalse, MoveFalse, ResizeFalseEnd, ResizeFalseLong, ResizeWidth };
     DragMode dragMode = DragMode::None;
     int dragNoteIndex = -1;
     int dragEventIndex = -1;
+
+    // =================================================================
+    //  false ノーツ編集（Ctrl+N で ON/OFF）
+    //    ・ふつうのノーツを薄く（FALSE_MODE_NOTE_ALPHA）して、false ノーツだけを置く・選ぶ・動かす・消す
+    //    ・左クリック：何もない所 → 置く（そのまま上へドラッグで消滅の時刻を決める＝ロングと同じ置き方）
+    //                  false ノーツの上 → 選ぶ（ドラッグで時刻・位置ごと動かす）、上の端（消滅）→ ドラッグで長さを変える
+    //    ・右クリック：false ノーツの上 → 消す、何もない所 → イベントのメニュー
+    //    ・Delete：選んでいる false ノーツを消す
+    //    ・Ctrl を押しながら時刻の線をダブルクリック：その時刻に出る false ノーツの配置のウィンドウ
+    //      （縦の位置を「px 固定」か「何分の何マス先のノーツと同じ位置（スナップ）」で決める）
+    //    ・TOOL の欄が false ノーツの設定に変わり、DIFFICULTY の欄は隠れる。パレット（ノーツの種類）はそのまま使う
+    // =================================================================
+    bool falseMode = false;
+    int  selectedFalseIndex = -1;             // 選んでいる false ノーツ（currentDiff().falseNotes の番号）
+    EditorFalseNote falseTool;                // 次に置く false ノーツの設定
+    int32_t falseToolLengthMs = 1000;         // 次に置く false ノーツの長さ（クリックしただけのとき）
+    EditorFalseNote falseDragOrigin;          // 動かし始めたときの false ノーツ（ずれ量を足して毎回計算し直す）
+    int32_t falseDragAnchorTime = 0;          // 動かし始めたときのマウスの時刻
+    int     falseDragAnchorLane = 0;          // 動かし始めたときのマウスのレーン（今は使わない：左右には動かさない）
+    int     falseDragAnchorY = 0;             // ドラッグを始めたときのマウスの y（ロングの長さを変えるとき用）
+    bool    falsePreviewPending = false;      // 出現の位置（ヘッド）を押した：動かさずに離したらプレビューを開く
+    bool    falseDragMoved = false;           // 押してから実際に動かしたか
+    // false ノーツのプレビューのウィンドウ（ヘッドをクリックで開く）
+    bool    falsePreviewRequest = false;
+    int     falsePreviewIndex = -1;
+    ImVec2  falsePreviewPos(0.0f, 0.0f);
+    double  falsePreviewOpenTime = 0.0;
+    float   falsePreviewTiltDeg = 0.0f;       // プレビューのレーンの傾き（バーで変える）
+    bool    falsePreviewShowAll = true;       // 同じ時刻に見えているほかの false ノーツも出す（お絵描きの確認用）
+    std::vector<char> falsePreviewSet;        // プレビューで濃く描く false ノーツ（番号ごとに 1/0。範囲選択したもの全部など）
+    // 範囲選択した false ノーツをまとめて動かすときの、掴んだ瞬間の値
+    struct FalseOrigin{ size_t index; int32_t start, end; std::vector<int32_t> changeTimes; };
+    std::vector<FalseOrigin> falseGroupOrigins;
+    int     falseMultiLenMs = 1000;         // 範囲選択した false ノーツの長さを、まとめてそろえるときの値
+    int     falseMultiLongDiv = 4;          // 範囲選択した false ロングの長さを、まとめてそろえるときの何分・何マス
+    int     falseMultiLongCount = 1;
+
+    // false ノーツの配置のウィンドウ（Ctrl を押しながら時刻の線をダブルクリックで開く）
+    //   その時刻に出現する false ノーツを、小さなレーンの図の上で置く・動かす・消す
+    bool    falsePlaceRequest = false;      // 次の ImGui のフレームで開く
+    bool    falsePlaceOpen = false;         // 開いているか
+    int32_t falsePlaceTime = 0;             // 出現の時刻（ダブルクリックした所に一番近いグリッドの線）
+    ImVec2  falsePlacePos(0.0f, 0.0f);      // ウィンドウを出す位置
+    int     falsePlaceMode = 1;             // 置くときの縦の決め方（0 = px 固定、1 = スナップ）
+    int     falsePlaceDiv = 16;             // スナップの何分
+    float   falsePlaceRangePx = 1200.0f;    // px 固定の図：見える高さ(px)。Ctrl + ホイールで変える
+    float   falsePlaceBasePx = 0.0f;        // px 固定の図：下の端の高さ(px)。ホイールで動かす
+    float   falsePlaceRangeBeats = 4.0f;    // スナップの図：見える長さ（拍）。Ctrl + ホイールで変える
+    float   falsePlaceBaseBeat = 0.0f;      // スナップの図：下の端が何拍先か。ホイールで 1 マスずつ動かす
+    int     falsePlaceDrag = -1;            // 図の上でドラッグしている false ノーツの番号
+    constexpr float FALSE_MODE_NOTE_ALPHA = 0.2f;   // false ノーツ編集中の、ふつうのノーツの濃さ（透明度 8 割）
 
     // =================================================================
     //  範囲選択（Shift + ドラッグ）
@@ -1172,6 +2050,154 @@ GameScene chartCreateScene(SDL_Window* window, SDL_Renderer* renderer, std::stri
         return std::clamp(l, 0, 5);
     };
 
+    // ----- false ノーツの、エディタの画面での形（描くのと、クリックの当たりで同じものを使う） -----
+    //   ・ヘッド：出現の時刻の所。見た目はプレイと同じノーツの形
+    //   ・ロングの形なら、ヘッドから上へ「出現 ＋ ロングの長さ（何分の何マス）」の時刻までの帯（終端のつまみをドラッグで長さを変える。グリッドに吸着）
+    //   ・小さな帯：ノーツの左の外に、出現〜消滅の時刻の細い帯（上の端のつまみをドラッグで消滅の時刻を変える）
+    struct FalseGeom{ float fx, fw, headY, endY, tailY, stripX; };
+    constexpr float FALSE_STRIP_W   = 6.0f;    // 小さな帯の太さ
+    constexpr float FALSE_STRIP_GAP = 5.0f;    // ノーツの左の端から、帯までのすき間
+    constexpr float FALSE_GRAB_PX   = 8.0f;    // つまみを掴める上下の幅
+    auto falseGeom = [&](const EditorFalseNote& f, double pxPerMs) -> FalseGeom{
+        FalseGeom g;
+        g.fx = static_cast<float>(laneX[0]) + static_cast<float>(f.x) * laneWidth + NOTE_SIDE_MARGIN;
+        g.fw = static_cast<float>(f.width * laneWidth) - NOTE_SIDE_MARGIN * 2.0f;
+        g.headY = static_cast<float>(judgeY - (f.start - scrollTimeMs) * pxPerMs);
+        g.endY  = static_cast<float>(judgeY - (f.end   - scrollTimeMs) * pxPerMs);
+        g.tailY = f.isLong ? static_cast<float>(judgeY - (f.start + falseLongMs(f, currentTempoMap()) - scrollTimeMs) * pxPerMs) : g.headY;   // ロングの終端：出現 ＋ ロングの長さ の時刻
+        g.stripX = g.fx - FALSE_STRIP_GAP - FALSE_STRIP_W;
+        return g;
+    };
+
+    // false ノーツの範囲選択
+    auto clearFalseSelection = [&](){
+        for(auto& d : difficulties) for(auto& f : d.falseNotes) f.selected = false;
+    };
+    auto falseSelectedCount = [&]() -> int{
+        int c = 0;
+        for(const auto& f : currentDiff().falseNotes) if(f.selected) c++;
+        return c;
+    };
+
+    // =================================================================
+    //  ノーツの幅を矢印で変える（ふつうのノーツ・false ノーツ共通）
+    //    ・選んでいるノーツ（クリックで 1 個／範囲選択で何個も）のヘッドのまわりに、一回り大きな枠と、
+    //      左右に矢印（◀ ▶）を出す。矢印をドラッグすると、そちら側の端がレーン 1 本ずつ動いて幅が変わる
+    //    ・何個も選んでいるときは、全部の幅が同じだけ変わる。
+    //      1 個でもレーンからはみ出しそうなら、その向きにはそれ以上広げない。
+    //      1 個でも幅が 1（一番小さい）になったら、その向きにはそれ以上狭めない
+    //    ・幅の単位はレーン（ふつうのノーツは lane / width、false ノーツは x / width）
+    // =================================================================
+    constexpr float WIDTH_FRAME_PAD = 6.0f;    // 枠をヘッドよりどれだけ大きくするか
+    constexpr float WIDTH_ARROW_W   = 14.0f;   // 矢印の横の大きさ
+    constexpr float WIDTH_ARROW_H   = 18.0f;   // 矢印の縦の大きさ
+    constexpr float WIDTH_ARROW_GAP = 3.0f;    // 枠から矢印までのすき間
+    struct WidthTarget{ size_t index; float x0, x1, yc; };   // ヘッドの左右の端と、縦の真ん中（画面の座標）
+    struct WidthOrigin{ size_t index; double x; int width; };
+    std::vector<WidthOrigin> widthOrigins;     // ドラッグを始めたときの位置と幅
+    int  widthAnchorX = 0;                     // ドラッグを始めたときのマウスの x
+    bool widthLeftSide = false;                // 左の矢印を掴んだか
+    bool widthOfFalse = false;                 // false ノーツの幅を変えているか
+
+    // 今、幅の矢印を出すノーツ（範囲選択したもの。なければクリックで選んだ 1 個）
+    auto widthTargets = [&](double ppm) -> std::vector<WidthTarget>{
+        std::vector<WidthTarget> out;
+        if(falseMode){
+            const auto& fns = currentDiff().falseNotes;
+            bool any = false;
+            for(const auto& f : fns) any = any || f.selected;
+            for(size_t i = 0; i < fns.size(); i++){
+                if(any ? !fns[i].selected : static_cast<int>(i) != selectedFalseIndex) continue;
+                const auto& f = fns[i];
+                const float x0 = static_cast<float>(laneX[0]) + static_cast<float>(f.x) * laneWidth + NOTE_SIDE_MARGIN;
+                out.push_back({i, x0, x0 + f.width * laneWidth - NOTE_SIDE_MARGIN * 2.0f,
+                               static_cast<float>(judgeY - (f.start - scrollTimeMs) * ppm)});
+            }
+        }
+        else{
+            const auto& ns = currentDiff().notes;
+            bool any = false;
+            for(const auto& n : ns) any = any || n.selected;
+            for(size_t i = 0; i < ns.size(); i++){
+                if(any ? !ns[i].selected : static_cast<int>(i) != selectedNoteIndex) continue;
+                const auto& n = ns[i];
+                const float x0 = static_cast<float>(laneX[n.lane]) + NOTE_SIDE_MARGIN;
+                out.push_back({i, x0, x0 + n.width * laneWidth - NOTE_SIDE_MARGIN * 2.0f,
+                               static_cast<float>(judgeY - (n.time - scrollTimeMs) * ppm)});
+            }
+        }
+        return out;
+    };
+    // 矢印の当たり：-1 = なし、0 = 左、1 = 右
+    auto widthArrowHit = [&](const WidthTarget& t, int mx, int my) -> int{
+        if(std::fabs(my - t.yc) > WIDTH_ARROW_H * 0.5f + 3.0f) return -1;
+        const float l1 = t.x0 - WIDTH_FRAME_PAD - WIDTH_ARROW_GAP, l0 = l1 - WIDTH_ARROW_W;
+        const float r0 = t.x1 + WIDTH_FRAME_PAD + WIDTH_ARROW_GAP, r1 = r0 + WIDTH_ARROW_W;
+        if(mx >= l0 - 3.0f && mx <= l1 + 2.0f) return 0;
+        if(mx >= r0 - 2.0f && mx <= r1 + 3.0f) return 1;
+        return -1;
+    };
+    // 矢印を押したか調べて、押していたら幅のドラッグを始める
+    auto tryStartWidthDrag = [&](int mx, int my, double ppm) -> bool{
+        const auto targets = widthTargets(ppm);
+        for(const auto& t : targets){
+            const int side = widthArrowHit(t, mx, my);
+            if(side < 0) continue;
+            widthOrigins.clear();
+            for(const auto& u : targets){
+                if(falseMode){
+                    const auto& f = currentDiff().falseNotes[u.index];
+                    widthOrigins.push_back({u.index, f.x, f.width});
+                }
+                else{
+                    const auto& n = currentDiff().notes[u.index];
+                    widthOrigins.push_back({u.index, static_cast<double>(n.lane), n.width});
+                }
+            }
+            widthAnchorX = mx;
+            widthLeftSide = (side == 0);
+            widthOfFalse = falseMode;
+            dragMode = DragMode::ResizeWidth;
+            return true;
+        }
+        return false;
+    };
+    // 幅のドラッグ中：マウスが動いたレーンの数だけ、全部の幅を同じだけ変える（はみ出し・幅 1 で止める）
+    auto applyWidthDrag = [&](int mx){
+        int d = static_cast<int>(std::lround(static_cast<double>(mx - widthAnchorX) / laneWidth));
+        // 動かせる範囲を、選んだ全部で一番きついものに合わせる
+        int dMin = -1000, dMax = 1000;
+        for(const auto& o : widthOrigins){
+            const double leftRoom  = std::max(0.0, o.x);                        // 左の端（レーン 0）までの余り
+            const double rightRoom = std::max(0.0, 6.0 - (o.x + o.width));     // 右の端（レーン 6）までの余り
+            if(widthLeftSide){
+                dMin = std::max(dMin, -static_cast<int>(std::floor(leftRoom + 1e-6)));   // 左へ広げる：はみ出さない
+                dMax = std::min(dMax, o.width - 1);                                       // 右へ狭める：幅 1 まで
+            }
+            else{
+                dMin = std::max(dMin, -(o.width - 1));                                    // 左へ狭める：幅 1 まで
+                dMax = std::min(dMax, static_cast<int>(std::floor(rightRoom + 1e-6)));    // 右へ広げる：はみ出さない
+            }
+        }
+        d = std::clamp(d, dMin, dMax);
+        for(const auto& o : widthOrigins){
+            const double nx = widthLeftSide ? o.x + d : o.x;
+            const int nw = widthLeftSide ? o.width - d : o.width + d;
+            if(widthOfFalse){
+                if(o.index >= currentDiff().falseNotes.size()) continue;
+                auto& f = currentDiff().falseNotes[o.index];
+                f.x = nx;
+                f.width = nw;
+            }
+            else{
+                if(o.index >= currentDiff().notes.size()) continue;
+                auto& n = currentDiff().notes[o.index];
+                n.lane = static_cast<int>(std::lround(nx));
+                n.width = nw;
+            }
+        }
+    };
+
     auto clearSelection = [&](){
         for(auto& d : difficulties){
             for(auto& n : d.notes){
@@ -1217,6 +2243,16 @@ GameScene chartCreateScene(SDL_Window* window, SDL_Renderer* renderer, std::stri
         const int l1 = laneAtX(boxNowX);
         const int lMin = std::min(l0, l1);
         const int lMax = std::max(l0, l1);
+
+        // false ノーツ編集中：false ノーツを選ぶ（出現の時刻が四角に入っていて、横が一部でも重なるもの）
+        if(falseMode){
+            for(auto& f : currentDiff().falseNotes){
+                const bool laneHit = (f.x < lMax + 1) && (f.x + f.width > lMin);
+                const bool timeHit = (f.start >= tMin) && (f.start <= tMax);
+                f.selected = laneHit && timeHit;
+            }
+            return;
+        }
 
         for(auto& n : currentDiff().notes){
             const bool laneHit = (n.lane <= lMax) && (n.lane + n.width - 1 >= lMin);   // 幅のあるノーツは一部でも重なればOK
@@ -1592,12 +2628,23 @@ GameScene chartCreateScene(SDL_Window* window, SDL_Renderer* renderer, std::stri
         while(SDL_PollEvent(&e) != 0){
             ImGui_ImplSDL2_ProcessEvent(&e);
 
+            // エディタを離れる：保存していない変更があれば、先に確認のウィンドウを出す
+            auto requestLeave = [&](GameScene next){
+                if(!savedChartPending && buildChartText(meta, difficulties) != savedChartText){
+                    unsavedAskRequest = true;
+                    unsavedAskNext = next;
+                }
+                else{
+                    running = false;
+                    nextScene = next;
+                }
+            };
+
             if(e.type == SDL_QUIT){
-                running = false;
-                nextScene = GameScene::Shutdown;
+                requestLeave(GameScene::Shutdown);
             }
 
-            if(e.type == SDL_KEYDOWN && e.key.keysym.sym == SDLK_ESCAPE){
+            if(e.type == SDL_KEYDOWN && e.key.keysym.sym == SDLK_ESCAPE && e.key.repeat == 0){
                 if(eventMenuOpen){
                     eventMenuCloseRequest = true;   // メニューが開いているときは、メニューを閉じるだけ
                 }
@@ -1607,6 +2654,13 @@ GameScene chartCreateScene(SDL_Window* window, SDL_Renderer* renderer, std::stri
                 else if(speedEditOpen){
                     speedEditCloseRequest = true;   // SPEED の編集ウィンドウも閉じるだけ
                 }
+                else if(ImGui::IsPopupOpen("", ImGuiPopupFlags_AnyPopupId)){
+                    closePopupsRequest = true;      // プレビュー・高さ・イージング・保存の確認などのポップアップを閉じるだけ
+                }
+                else if(falsePlaceOpen){
+                    falsePlaceOpen = false;         // false ノーツの配置のウィンドウも閉じるだけ
+                    falsePlaceDrag = -1;
+                }
                 else if(propsOpen){
                     propsOpen = false;              // 譜面のプロパティを閉じる
                 }
@@ -1614,8 +2668,7 @@ GameScene chartCreateScene(SDL_Window* window, SDL_Renderer* renderer, std::stri
                     blueprintOpen = false;          // ブループリントの一覧をしまう
                 }
                 else{
-                    running = false;
-                    nextScene = GameScene::Select;
+                    requestLeave(GameScene::Select);
                 }
             }
 
@@ -1628,6 +2681,18 @@ GameScene chartCreateScene(SDL_Window* window, SDL_Renderer* renderer, std::stri
                 const bool ctrlNow = (SDL_GetModState() & KMOD_CTRL) != 0;
                 if(ctrlNow && e.key.repeat == 0 && e.key.keysym.sym == SDLK_k){
                     setKeyboardMode(!keyboardMode);
+                    continue;
+                }
+                // Ctrl+N：false ノーツ編集の ON/OFF
+                if(ctrlNow && e.key.repeat == 0 && e.key.keysym.sym == SDLK_n){
+                    falseMode = !falseMode;
+                    selectedFalseIndex = -1;
+                    clearFalseSelection();
+                    selectedNoteIndex = -1;
+                    clearSelection();
+                    dragMode = DragMode::None;
+                    dragNoteIndex = -1;
+                    boxSelecting = false;
                     continue;
                 }
                 if(keyboardMode && !ctrlNow && !io.WantTextInput &&
@@ -1663,6 +2728,7 @@ GameScene chartCreateScene(SDL_Window* window, SDL_Renderer* renderer, std::stri
             const bool ctrlDown = (SDL_GetModState() & KMOD_CTRL) != 0;
             if(e.type == SDL_KEYDOWN && e.key.repeat == 0 && ctrlDown && e.key.keysym.sym == SDLK_s){
                 saveToastOk = saveChart(savePathBuf, meta, difficulties);
+                if(saveToastOk) savedChartText = buildChartText(meta, difficulties);
                 saveToastTicks = SDL_GetTicks();
                 continue;   // 下の「S = 1マス戻る」には流さない
             }
@@ -1673,6 +2739,18 @@ GameScene chartCreateScene(SDL_Window* window, SDL_Renderer* renderer, std::stri
             if(!imguiWantsKeyBoard && e.type == SDL_KEYDOWN && e.key.repeat == 0 &&
                dragMode == DragMode::None && !boxSelecting){
                 const SDL_Keycode key = e.key.keysym.sym;
+                if(falseMode){
+                    // false ノーツ編集中：Delete で選んでいる false ノーツを消す（ふつうのノーツのコピー等は使わない）
+                    if(key == SDLK_DELETE){
+                        // 範囲選択したもの全部と、クリックで選んだものを消す
+                        auto& fns = currentDiff().falseNotes;
+                        if(selectedFalseIndex >= 0 && selectedFalseIndex < static_cast<int>(fns.size())) fns[selectedFalseIndex].selected = true;
+                        std::erase_if(fns, [](const EditorFalseNote& f){ return f.selected; });
+                        selectedFalseIndex = -1;
+                        continue;
+                    }
+                    if(key == SDLK_DELETE || (ctrlDown && (key == SDLK_c || key == SDLK_v || key == SDLK_r))) continue;
+                }
                 if(ctrlDown && key == SDLK_c){ copySelection();   continue; }
                 if(ctrlDown && key == SDLK_v){ pasteClipboard();  continue; }
                 if(ctrlDown && key == SDLK_r){ mirrorSelection(); continue; }
@@ -1746,6 +2824,139 @@ GameScene chartCreateScene(SDL_Window* window, SDL_Renderer* renderer, std::stri
                         speedEditPos = ImVec2(static_cast<float>(mx + 12), static_cast<float>(my));
                         continue;
                     }
+                }
+
+                // ----- false ノーツ編集中：レーンの上のクリックは、全部 false ノーツの操作にする -----
+                //   当たりは画面の上の形（falseGeom）で調べる。優先する順：
+                //     ① 小さな帯の上の端のつまみ → 消滅の時刻を変える（帯にさわったときだけ。ロングの終端と重なっても帯が優先）
+                //     ② ロングの終端のつまみ     → ロングの長さを変える
+                //     ③ ヘッド（出現の位置）     → 選んで、上下に動かす。動かさずに離したらプレビューを開く
+                //     ④ 小さな帯・ロングの帯     → 選んで、上下に動かす
+                //     どれでもない               → 新しく置く（そのまま上へドラッグで消滅の時刻）
+                // 幅の矢印（選んでいるノーツのヘッドの左右）を押した → 幅のドラッグ（ほかの操作より先に調べる）
+                if(e.button.button == SDL_BUTTON_LEFT && !(SDL_GetModState() & KMOD_SHIFT) &&
+                   tryStartWidthDrag(mx, my, effectivePixelsPerMs)){
+                    continue;
+                }
+
+                if(falseMode && mx >= laneX[0] - 20 && mx < laneX[0] + laneWidth * 6 &&
+                   (e.button.button == SDL_BUTTON_LEFT || e.button.button == SDL_BUTTON_RIGHT)){
+                    auto& fns = currentDiff().falseNotes;
+                    // Ctrl + 左ダブルクリック：その時刻（一番近いグリッドの線）の配置のウィンドウを開く
+                    //   Ctrl を押しながらの左クリックでは、ノーツを置かない（1 回目のクリックで置かれないように）
+                    if(e.button.button == SDL_BUTTON_LEFT && (SDL_GetModState() & KMOD_CTRL)){
+                        if(e.button.clicks >= 2){
+                            const double rawT = scrollTimeMs + (judgeY - my) / effectivePixelsPerMs;
+                            falsePlaceTime = std::max<int32_t>(0, snapToGrid(rawT));
+                            for(int k = 0; k < FALSE_PLACE_DIV_COUNT; k++) if(FALSE_PLACE_DIVS[k] == gridDivisor) falsePlaceDiv = gridDivisor;
+                            falsePlaceRequest = true;
+                            falsePlacePos = ImVec2(static_cast<float>(mx) + 30.0f, static_cast<float>(my) - 300.0f);
+                        }
+                        continue;
+                    }
+                    // Shift + 左ドラッグ：false ノーツの範囲選択（四角の描き方はふつうのノーツと同じ）
+                    if(e.button.button == SDL_BUTTON_LEFT && (SDL_GetModState() & KMOD_SHIFT)){
+                        boxSelecting = true;
+                        boxStartTime = scrollTimeMs + (judgeY - my) / effectivePixelsPerMs;
+                        boxStartX = mx;
+                        boxNowX = mx;
+                        boxNowY = my;
+                        selectedFalseIndex = -1;
+                        continue;
+                    }
+                    const double rawTime = scrollTimeMs + (judgeY - my) / effectivePixelsPerMs;
+                    const double gridMs = localGridMs(rawTime);
+                    int32_t snappedTime = snapToGrid(rawTime);
+                    if(snappedTime < 0) snappedTime = 0;
+                    const float fmx = static_cast<float>(mx), fmy = static_cast<float>(my);
+
+                    enum class FHit{ None, StripEnd, LongTail, Head, Body };
+                    int hit = -1;
+                    FHit kind = FHit::None;
+                    for(int pass = 0; pass < 4 && hit < 0; pass++){
+                        for(int i = static_cast<int>(fns.size()) - 1; i >= 0; i--){   // 後から置いた（手前に描く）ものから
+                            const FalseGeom g = falseGeom(fns[i], effectivePixelsPerMs);
+                            const bool inNoteX  = fmx >= g.fx && fmx <= g.fx + g.fw;
+                            const bool inStripX = fmx >= g.stripX - 4.0f && fmx <= g.stripX + FALSE_STRIP_W + 4.0f;
+                            bool ok = false;
+                            if(pass == 0) ok = inStripX && std::fabs(fmy - g.endY) <= FALSE_GRAB_PX;
+                            if(pass == 1) ok = fns[i].isLong && inNoteX && std::fabs(fmy - g.tailY) <= FALSE_GRAB_PX;
+                            if(pass == 2) ok = inNoteX && std::fabs(fmy - g.headY) <= NOTE_HEAD_H * 0.5f + 4.0f;
+                            if(pass == 3) ok = (inStripX && fmy >= g.endY && fmy <= g.headY) ||
+                                               (fns[i].isLong && inNoteX && fmy >= g.tailY && fmy <= g.headY);
+                            if(ok){
+                                hit = i;
+                                kind = (pass == 0) ? FHit::StripEnd : (pass == 1) ? FHit::LongTail : (pass == 2) ? FHit::Head : FHit::Body;
+                                break;
+                            }
+                        }
+                    }
+
+                    if(e.button.button == SDL_BUTTON_LEFT){
+                        falseDragMoved = false;
+                        falsePreviewPending = false;
+                        if(hit >= 0){
+                            // 範囲選択に入っていないものを押した → 範囲選択は外して、それだけを選ぶ
+                            //   範囲選択に入っているものを押した → 選んだもの全部を一緒に動かす
+                            if(!fns[hit].selected) clearFalseSelection();
+                            falseGroupOrigins.clear();
+                            if(fns[hit].selected){
+                                for(size_t i = 0; i < fns.size(); i++){
+                                    if(!fns[i].selected || static_cast<int>(i) == hit) continue;
+                                    FalseOrigin o{i, fns[i].start, fns[i].end, {}};
+                                    for(const auto& c : fns[i].changes) o.changeTimes.push_back(c.time);
+                                    falseGroupOrigins.push_back(o);
+                                }
+                            }
+                            selectedFalseIndex = hit;
+                            falseDragOrigin = fns[hit];
+                            falseDragAnchorTime = snappedTime;
+                            falseDragAnchorY = my;
+                            if(kind == FHit::StripEnd)      dragMode = DragMode::ResizeFalseEnd;
+                            else if(kind == FHit::LongTail) dragMode = DragMode::ResizeFalseLong;
+                            else                            dragMode = DragMode::MoveFalse;
+                            if(kind == FHit::Head){
+                                falsePreviewPending = true;
+                                falsePreviewPos = ImVec2(fmx + 16.0f, fmy - 200.0f);
+                            }
+                        }
+                        else if(mx >= laneX[0]){
+                            // 何もない所：置く（見た目はパレットで選んでいるマス、ほかは TOOL の設定）
+                            clearFalseSelection();
+                            EditorFalseNote f = falseTool;
+                            f.selected = false;
+                            f.changes.clear();
+                            f.type   = editorui::PALETTE[paletteIndex].type;
+                            f.isLong = editorui::PALETTE[paletteIndex].isLong;
+                            f.width  = std::clamp(f.width, 1, 6);
+                            f.x      = std::clamp(static_cast<double>(laneAtX(mx)), 0.0, 6.0 - f.width);
+                            f.start  = snappedTime;
+                            f.end    = snappedTime + std::max<int32_t>(falseToolLengthMs, static_cast<int32_t>(std::max(1.0, gridMs)));
+                            fns.push_back(f);
+                            selectedFalseIndex = static_cast<int>(fns.size()) - 1;
+                            falseDragOrigin = f;
+                            falseDragAnchorTime = snappedTime;
+                            falseDragAnchorY = my;
+                            dragMode = DragMode::CreateFalse;   // そのまま上へドラッグ → 消滅の時刻
+                        }
+                    }
+                    else{
+                        if(hit >= 0){
+                            falseGroupOrigins.clear();
+                            fns.erase(fns.begin() + hit);
+                            if(selectedFalseIndex == hit) selectedFalseIndex = -1;
+                            else if(selectedFalseIndex > hit) selectedFalseIndex--;
+                        }
+                        else{
+                            // 何もない所の右クリック：ふつうの編集と同じイベントのメニュー
+                            eventMenuRequest = true;
+                            eventMenuTime = snappedTime;
+                            eventMenuPos = ImVec2(fmx, fmy);
+                            eventMenuBpm = getCurrentBpm(snappedTime);
+                            timeSigAt(currentDiff(), snappedTime, eventMenuSigNum, eventMenuSigDen);
+                        }
+                    }
+                    continue;   // ふつうのノーツ・イベント線の操作には流さない
                 }
 
                 // Shift + 左ドラッグ：範囲選択を始める（イベント線を掴む・ノーツを置くより優先）
@@ -1976,6 +3187,67 @@ GameScene chartCreateScene(SDL_Window* window, SDL_Renderer* renderer, std::stri
                         }
                     }
                 }
+                else if(dragMode == DragMode::ResizeWidth){
+                    applyWidthDrag(e.motion.x);
+                }
+                else if(dragMode == DragMode::CreateFalse || dragMode == DragMode::ResizeFalseEnd ||
+                        dragMode == DragMode::MoveFalse || dragMode == DragMode::ResizeFalseLong){
+                    auto& fns = currentDiff().falseNotes;
+                    if(selectedFalseIndex >= 0 && selectedFalseIndex < static_cast<int>(fns.size())){
+                        EditorFalseNote& f = fns[selectedFalseIndex];
+                        const int32_t minLen = static_cast<int32_t>(std::max(1.0, gridMs));
+                        if(std::abs(e.motion.y - falseDragAnchorY) >= 3) falseDragMoved = true;   // 少しでも動かした → プレビューは開かない
+                        if(dragMode == DragMode::MoveFalse){
+                            // 時刻だけ動かす（左右には動かさない。横の位置は TOOL の「横」で決める）
+                            //   掴んだときの値 ＋ ずれ量で毎回計算し直す。長さ・見た目の変更の時刻も一緒に動く
+                            int32_t dt = falseDragMoved ? snappedTime - falseDragAnchorTime : 0;
+                            if(falseDragOrigin.start + dt < 0) dt = -falseDragOrigin.start;
+                            for(const auto& o : falseGroupOrigins){   // 範囲選択したほかのものも、0ms より前に出ないように
+                                if(o.start + dt < 0) dt = -o.start;
+                            }
+                            f.start = falseDragOrigin.start + dt;
+                            f.end   = falseDragOrigin.end + dt;
+                            for(size_t c = 0; c < f.changes.size() && c < falseDragOrigin.changes.size(); c++){
+                                f.changes[c].time = falseDragOrigin.changes[c].time + dt;
+                            }
+                            for(const auto& o : falseGroupOrigins){
+                                if(o.index >= fns.size()) continue;
+                                EditorFalseNote& g = fns[o.index];
+                                g.start = o.start + dt;
+                                g.end   = o.end + dt;
+                                for(size_t c = 0; c < g.changes.size() && c < o.changeTimes.size(); c++) g.changes[c].time = o.changeTimes[c] + dt;
+                            }
+                        }
+                        else if(dragMode == DragMode::ResizeFalseLong){
+                            // ロングの長さ：出現の時刻から、マウスの所に一番近いグリッドの線まで（今のグリッドの何マスか）
+                            const TempoMap tm = currentTempoMap();
+                            const double beats = tempoBeatAt(tm, static_cast<double>(snappedTime)) - tempoBeatAt(tm, static_cast<double>(f.start));
+                            f.longDiv = gridDivisor;
+                            f.longCount = std::max(1, static_cast<int>(std::lround(beats * gridDivisor / 4.0)));
+                            for(const auto& o : falseGroupOrigins){   // 範囲選択したほかのロングも、同じ長さにする
+                                if(o.index >= fns.size() || !fns[o.index].isLong) continue;
+                                fns[o.index].longDiv = f.longDiv;
+                                fns[o.index].longCount = f.longCount;
+                            }
+                        }
+                        else if(dragMode == DragMode::CreateFalse){
+                            // 置いた直後のドラッグ：出現より上へ動かしたときだけ、消滅の時刻をマウスの位置にする
+                            //   （前は少し動かしただけで消滅が「出現 ＋ 1 マス」に縮んでいた。
+                            //     出現より下・同じ所にいる間は、TOOL の「長さ」のままにする）
+                            f.end = (snappedTime > f.start) ? std::max(f.start + minLen, snappedTime) : falseDragOrigin.end;
+                        }
+                        else{
+                            // 小さな帯の上の端（消滅の時刻）を動かす：出現より最低 1 マス後
+                            f.end = std::max(f.start + minLen, snappedTime);
+                            // 範囲選択したほかのものも、同じだけ長く・短くする（それぞれ出現より最低 1 マス後）
+                            const int32_t dEnd = f.end - falseDragOrigin.end;
+                            for(const auto& o : falseGroupOrigins){
+                                if(o.index >= fns.size()) continue;
+                                fns[o.index].end = std::max(o.start + minLen, o.end + dEnd);
+                            }
+                        }
+                    }
+                }
                 else if(dragMode == DragMode::MoveSpeedEvent){
                     auto& speedEvents = currentDiff().speedEvents;
                     if(dragEventIndex >= 0 && dragEventIndex < static_cast<int>(speedEvents.size())){
@@ -2032,8 +3304,20 @@ GameScene chartCreateScene(SDL_Window* window, SDL_Renderer* renderer, std::stri
             }
 
             if(e.type == SDL_MOUSEBUTTONUP && e.button.button == SDL_BUTTON_LEFT){
+                // false ノーツのヘッドを押して、動かさずに離した → プレビューのウィンドウを開く
+                if(falseMode && falsePreviewPending && !falseDragMoved && selectedFalseIndex >= 0){
+                    // 範囲選択したものを押したときは、選んだもの全部をプレビューに描く
+                    const auto& fns = currentDiff().falseNotes;
+                    falsePreviewSet.assign(fns.size(), 0);
+                    for(size_t i = 0; i < fns.size(); i++) if(fns[i].selected) falsePreviewSet[i] = 1;
+                    if(selectedFalseIndex < static_cast<int>(fns.size())) falsePreviewSet[selectedFalseIndex] = 1;
+                    falsePreviewRequest = true;
+                    falsePreviewIndex = selectedFalseIndex;
+                }
+                falseGroupOrigins.clear();
+                falsePreviewPending = false;
                 if(dragMode == DragMode::MoveSpeedEvent){
-                    std::sort(currentDiff().speedEvents.begin(), currentDiff().speedEvents.end(),
+                    std::stable_sort(currentDiff().speedEvents.begin(), currentDiff().speedEvents.end(),
                         [](const EditorSpeedEvent& a, const EditorSpeedEvent& b){ return a.time < b.time; });
                 }
                 else if(dragMode == DragMode::MoveBpmEvent){
@@ -2077,7 +3361,8 @@ GameScene chartCreateScene(SDL_Window* window, SDL_Renderer* renderer, std::stri
             InputDevices::get().refresh();   // コントローラーの抜き差しに合わせる（プレイ画面と同じ）
             const Uint8* ks = SDL_GetKeyboardState(nullptr);
             const bool modBlocked = (SDL_GetModState() & (KMOD_CTRL | KMOD_ALT)) != 0;
-            const bool canPlace = !io.WantTextInput && !modBlocked && !eventMenuOpen && !selectMenuOpen && !speedEditOpen && !propsOpen;
+            const bool canPlace = !io.WantTextInput && !modBlocked && !eventMenuOpen && !selectMenuOpen && !speedEditOpen && !propsOpen
+                                  && !falseMode;   // false ノーツ編集中は、キーでふつうのノーツを置かない
 
             for(int i = 0; i < 6; i++){
                 const bool pressed = !io.WantTextInput && isBindingPressed(editorSettings.laneBindings[i], ks);
@@ -2150,6 +3435,64 @@ GameScene chartCreateScene(SDL_Window* window, SDL_Renderer* renderer, std::stri
         ImGui_ImplSDL2_NewFrame();
         ImGui::NewFrame();
 
+        // Esc：開いているポップアップを全部閉じる（イベントの処理は ImGui のフレームの外なので、ここで閉じる）
+        if(closePopupsRequest){
+            ImGui::ClosePopupToLevel(0, true);
+            closePopupsRequest = false;
+        }
+
+        // =================================================================
+        //  保存していない変更の確認（エディタを離れようとしたとき）
+        // =================================================================
+        if(unsavedAskRequest){
+            ImGui::OpenPopup("##unsaved");
+            unsavedAskRequest = false;
+        }
+        {
+            const ImVec2 disp = ImGui::GetIO().DisplaySize;
+            ImGui::SetNextWindowPos(ImVec2(disp.x * 0.5f, disp.y * 0.45f), ImGuiCond_Always, ImVec2(0.5f, 0.5f));
+            ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, ImVec2(24.0f, 20.0f));
+            const bool askOpen = ImGui::BeginPopupModal("##unsaved", nullptr,
+                                                        ImGuiWindowFlags_NoTitleBar | ImGuiWindowFlags_AlwaysAutoResize | ImGuiWindowFlags_NoSavedSettings);
+            ImGui::PopStyleVar();
+            if(askOpen){
+                {
+                    ImDrawList* dl = ImGui::GetWindowDrawList();
+                    const ImVec2 wp = ImGui::GetWindowPos(), ws = ImGui::GetWindowSize();
+                    dl->PushClipRectFullScreen();
+                    dl->AddRect(ImVec2(wp.x + 1.5f, wp.y + 1.5f), ImVec2(wp.x + ws.x - 1.5f, wp.y + ws.y - 1.5f), IM_COL32(255, 170, 60, 255), 0.0f, 0, 3.0f);
+                    dl->PopClipRect();
+                }
+                ImGui::TextColored(ImVec4(1.0f, 0.67f, 0.24f, 1.0f), "保存していない変更があります");
+                ImGui::Separator();
+                ImGui::Text("エディタを離れる前に保存しますか？");
+                ImGui::TextDisabled("保存先：%s", savePathBuf);
+                ImGui::Spacing();
+                if(ImGui::Button("保存して離れる##us", ImVec2(180.0f, 0.0f))){
+                    saveToastOk = saveChart(savePathBuf, meta, difficulties);
+                    saveToastTicks = SDL_GetTicks();
+                    if(saveToastOk){
+                        savedChartText = buildChartText(meta, difficulties);
+                        running = false;
+                        nextScene = unsavedAskNext;
+                    }
+                    ImGui::CloseCurrentPopup();   // 保存に失敗したら、エディタに残る（失敗の通知が出る）
+                }
+                ImGui::SameLine();
+                if(ImGui::Button("保存しないで離れる##us", ImVec2(180.0f, 0.0f))){
+                    running = false;
+                    nextScene = unsavedAskNext;
+                    ImGui::CloseCurrentPopup();
+                }
+                ImGui::SameLine();
+                if(ImGui::Button("やめる##us", ImVec2(120.0f, 0.0f))){
+                    ImGui::CloseCurrentPopup();
+                }
+                ImGui::TextDisabled("Esc：やめる");
+                ImGui::EndPopup();
+            }
+        }
+
         // =================================================================
         //  右クリックメニュー：SPEED / BPM イベントを追加する
         // =================================================================
@@ -2181,29 +3524,35 @@ GameScene chartCreateScene(SDL_Window* window, SDL_Renderer* renderer, std::stri
             ImGui::Separator();
             ImGui::PushItemWidth(200.0f);
 
-            // ----- SPEED -----
-            ImGui::TextColored(ImVec4(1.0f, 0.86f, 0.31f, 1.0f), "SPEED");
-            ImGui::InputDouble("目標の速度##ctx", &eventMenuSpeed, 0.1, 1.0, "%.2f");
-            const char* easeNames[] = {"Straight(1)", "easeOutCubic(2)", "easeInCubic(3)"};
-            int easeIdx = std::clamp(eventMenuSpeedEasing - 1, 0, 2);
-            if(ImGui::Combo("イージング##ctx", &easeIdx, easeNames, 3)) eventMenuSpeedEasing = easeIdx + 1;
-            ImGui::InputInt("変化にかける時間(ms)##ctx", &eventMenuSpeedDuration, 10, 100);
-            if(eventMenuSpeedDuration < 0) eventMenuSpeedDuration = 0;
-
-            if(ImGui::Button("SPEED を追加", ImVec2(200.0f, 0.0f))){
-                auto& evs = currentDiff().speedEvents;
-                // 同じ時刻にもうあれば、新しく作らずに上書きする（重なって見えなくなるのを防ぐ）
-                auto it = std::find_if(evs.begin(), evs.end(), [&](const EditorSpeedEvent& s){ return s.time == eventMenuTime; });
-                EditorSpeedEvent ev;
-                ev.time = eventMenuTime;
-                ev.target = eventMenuSpeed;
-                ev.easing = eventMenuSpeedEasing;
-                ev.duration = eventMenuSpeedDuration;
-                if(it != evs.end()) *it = ev;
-                else evs.push_back(ev);
-                std::sort(evs.begin(), evs.end(), [](const EditorSpeedEvent& a, const EditorSpeedEvent& b){ return a.time < b.time; });
-                ImGui::CloseCurrentPopup();
-            }
+            // ----- A_SPEED / B_SPEED（同じ形の入力。追加するときに A か B かを付ける） -----
+            //   同じ時刻・同じ種類のイベントがもうあれば、新しく作らずに上書きする（重なって見えなくなるのを防ぐ）
+            auto speedInputs = [&](bool isB, double& target, int& easing, int& duration){
+                const char* sfx = isB ? "##ctxB" : "##ctxA";
+                const SDL_Color c = speedEventColor(isB);
+                ImGui::TextColored(ImVec4(c.r / 255.0f, c.g / 255.0f, c.b / 255.0f, 1.0f), "%s", speedEventName(isB));
+                if(isB) ImGui::TextDisabled("ノーツが動く速さ（A_SPEED と同じ値の感覚。1.8 = ふつう、0 = 止まる）");
+                ImGui::InputDouble((std::string("目標の速度") + sfx).c_str(), &target, 0.1, 1.0, "%.2f");
+                editorui::easingPicker((std::string("イージング") + sfx).c_str(), easing);   // クリックでカードのウィンドウ
+                ImGui::InputInt((std::string("変化にかける時間(ms)") + sfx).c_str(), &duration, 10, 100);
+                if(duration < 0) duration = 0;
+                if(ImGui::Button((std::string(speedEventName(isB)) + " を追加" + sfx).c_str(), ImVec2(200.0f, 0.0f))){
+                    auto& evs = currentDiff().speedEvents;
+                    auto it = std::find_if(evs.begin(), evs.end(), [&](const EditorSpeedEvent& s){ return s.time == eventMenuTime && s.isB == isB; });
+                    EditorSpeedEvent ev;
+                    ev.time = eventMenuTime;
+                    ev.target = target;
+                    ev.easing = easing;
+                    ev.duration = duration;
+                    ev.isB = isB;
+                    if(it != evs.end()) *it = ev;
+                    else evs.push_back(ev);
+                    std::stable_sort(evs.begin(), evs.end(), [](const EditorSpeedEvent& a, const EditorSpeedEvent& b){ return a.time < b.time; });
+                    ImGui::CloseCurrentPopup();
+                }
+            };
+            speedInputs(false, eventMenuSpeed, eventMenuSpeedEasing, eventMenuSpeedDuration);
+            ImGui::Separator();
+            speedInputs(true, eventMenuBSpeed, eventMenuBSpeedEasing, eventMenuBSpeedDuration);   // SPEED の下に B_SPEED
 
             ImGui::Separator();
 
@@ -2416,7 +3765,9 @@ GameScene chartCreateScene(SDL_Window* window, SDL_Renderer* renderer, std::stri
                 const ImVec2 ws = ImGui::GetWindowSize();
                 dl->PushClipRectFullScreen();
                 dl->AddRect(ImVec2(wp.x + 1.5f, wp.y + 1.5f), ImVec2(wp.x + ws.x - 1.5f, wp.y + ws.y - 1.5f),
-                            IM_COL32(255, 220, 80, 255), 0.0f, 0, 3.0f);
+                            (speedEditIndex >= 0 && speedEditIndex < static_cast<int>(currentDiff().speedEvents.size())
+                             && currentDiff().speedEvents[speedEditIndex].isB) ? IM_COL32(255, 80, 80, 255) : IM_COL32(255, 220, 80, 255),
+                            0.0f, 0, 3.0f);
                 dl->PopClipRect();
             }
             auto& evs = currentDiff().speedEvents;
@@ -2425,14 +3776,15 @@ GameScene chartCreateScene(SDL_Window* window, SDL_Renderer* renderer, std::stri
             }
             else{
                 EditorSpeedEvent& ev = evs[speedEditIndex];
-                ImGui::TextColored(ImVec4(1.0f, 0.86f, 0.31f, 1.0f), "SPEED EVENT #%d", speedEditIndex);
+                {
+                    const SDL_Color c = speedEventColor(ev.isB);
+                    ImGui::TextColored(ImVec4(c.r / 255.0f, c.g / 255.0f, c.b / 255.0f, 1.0f), "%s EVENT #%d", speedEventName(ev.isB), speedEditIndex);
+                }
                 ImGui::Separator();
                 ImGui::PushItemWidth(200.0f);
                 ImGui::InputInt("時刻(ms)##spedit", &ev.time, 1, 10);
                 ImGui::InputDouble("目標の速度##spedit", &ev.target, 0.1, 1.0, "%.2f");
-                const char* easeNames[] = {"Straight(1)", "easeOutCubic(2)", "easeInCubic(3)"};
-                int easeIdx = std::clamp(ev.easing - 1, 0, 2);
-                if(ImGui::Combo("イージング##spedit", &easeIdx, easeNames, 3)) ev.easing = easeIdx + 1;
+                editorui::easingPicker("イージング##spedit", ev.easing);   // クリックでカードのウィンドウ
                 ImGui::InputInt("変化にかける時間(ms)##spedit", &ev.duration, 10, 100);
                 if(ev.duration < 0) ev.duration = 0;
                 ImGui::PopItemWidth();
@@ -2456,6 +3808,399 @@ GameScene chartCreateScene(SDL_Window* window, SDL_Renderer* renderer, std::stri
             speedEditIndex = -1;
         }
         speedEditCloseRequest = false;
+
+        // =================================================================
+        //  false ノーツのプレビュー（ヘッドを動かさずにクリックすると開く）
+        //    そのノーツの出現〜消滅を、プレイ画面と同じ動き・出方でくり返し見せる。
+        //    レーンの傾きはバーで変えられる（プレビューの中だけ。設定は変えない）
+        // =================================================================
+        if(falsePreviewRequest){
+            ImGui::OpenPopup("##falsepreview");
+            const ImVec2 disp = ImGui::GetIO().DisplaySize;
+            ImVec2 pos = falsePreviewPos;
+            pos.x = std::clamp(pos.x, 8.0f, std::max(8.0f, disp.x - 690.0f));
+            pos.y = std::clamp(pos.y, 8.0f, std::max(8.0f, disp.y - 560.0f));
+            ImGui::SetNextWindowPos(pos, ImGuiCond_Always);
+            falsePreviewOpenTime = ImGui::GetTime();
+            falsePreviewRequest = false;
+        }
+        ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, ImVec2(16.0f, 14.0f));
+        const bool falsePreviewOpen = ImGui::BeginPopup("##falsepreview", ImGuiWindowFlags_AlwaysAutoResize);
+        ImGui::PopStyleVar();
+        if(falsePreviewOpen){
+            {
+                ImDrawList* dl = ImGui::GetWindowDrawList();
+                const ImVec2 wp = ImGui::GetWindowPos();
+                const ImVec2 ws = ImGui::GetWindowSize();
+                dl->PushClipRectFullScreen();
+                dl->AddRect(ImVec2(wp.x + 1.5f, wp.y + 1.5f), ImVec2(wp.x + ws.x - 1.5f, wp.y + ws.y - 1.5f),
+                            IM_COL32(255, 120, 200, 255), 0.0f, 0, 3.0f);
+                dl->PopClipRect();
+            }
+            auto& fns = currentDiff().falseNotes;
+            // 描くもの：falsePreviewSet の 1 のもの（範囲選択したもの全部、またはクリックしたもの）
+            if(falsePreviewSet.size() != fns.size()) falsePreviewSet.resize(fns.size(), 0);
+            int32_t pStart = std::numeric_limits<int32_t>::max(), pEnd = std::numeric_limits<int32_t>::min();
+            int pCount = 0;
+            for(size_t i = 0; i < fns.size(); i++){
+                if(!falsePreviewSet[i]) continue;
+                pStart = std::min(pStart, fns[i].start);
+                pEnd = std::max(pEnd, fns[i].end);
+                pCount++;
+            }
+            if(!falseMode || pCount == 0){
+                ImGui::CloseCurrentPopup();
+            }
+            else{
+                if(pCount == 1) ImGui::TextColored(ImVec4(1.0f, 0.47f, 0.78f, 1.0f), "FALSE ノーツ #%d のプレビュー", falsePreviewIndex);
+                else            ImGui::TextColored(ImVec4(1.0f, 0.47f, 0.78f, 1.0f), "FALSE ノーツ %d 個のプレビュー", pCount);
+                ImGui::Separator();
+
+                // 一番早い出現 〜 一番遅い消滅 をくり返す（終わりで少し止まる）
+                const double life = std::max(1, pEnd - pStart);
+                const double loopMs = life + 500.0;
+                const double el = std::fmod((ImGui::GetTime() - falsePreviewOpenTime) * 1000.0, loopMs);
+                const double t = pStart + std::min(el, life - 1.0);
+
+                const ImVec2 canvas(640.0f, 360.0f);   // プレイ画面（16:9）を縮めた大きさ
+                const ImVec2 c0 = ImGui::GetCursorScreenPos();
+                ImGui::InvisibleButton("##fpcanvas", canvas);
+                {
+                    const TempoMap tm = currentTempoMap();
+                    EditorScroll sc;
+                    sc.build(currentDiff().speedEvents);
+                    std::vector<EditorFalseNote> pv = fns;   // ロングの帯の長さを、今の BPM・スピードで計算して入れたもの
+                    for(auto& f : pv) f.longPx = falseLongPx(f, tm, sc);
+                    editorui::drawFalsePreview(ImGui::GetWindowDrawList(), c0, canvas, pv, falsePreviewSet,
+                                               falsePreviewShowAll, t, falsePreviewTiltDeg,
+                                               [&](const EditorFalseNote& f, double tt){ return falseBaseHeight(f, tt, tm, sc); });
+                }
+
+                // 進み具合のバー
+                {
+                    ImDrawList* dl = ImGui::GetWindowDrawList();
+                    const ImVec2 b0 = ImGui::GetCursorScreenPos();
+                    const float bw = canvas.x;
+                    dl->AddRectFilled(b0, ImVec2(b0.x + bw, b0.y + 4.0f), IM_COL32(60, 60, 80, 255));
+                    dl->AddRectFilled(b0, ImVec2(b0.x + bw * static_cast<float>((t - pStart) / life), b0.y + 4.0f), IM_COL32(255, 120, 200, 255));
+                    ImGui::Dummy(ImVec2(bw, 8.0f));
+                }
+                ImGui::Text("%d ms（%d 〜 %d）", static_cast<int>(t), pStart, pEnd);
+
+                ImGui::PushItemWidth(260.0f);
+                ImGui::SliderFloat("レーンの傾き##fp", &falsePreviewTiltDeg, 0.0f, 60.0f, "%.0f 度");
+                ImGui::PopItemWidth();
+                ImGui::Checkbox("同じ時刻のほかの false ノーツも出す##fp", &falsePreviewShowAll);
+                if(ImGui::Button("閉じる##fp", ImVec2(120.0f, 0.0f))) ImGui::CloseCurrentPopup();
+            }
+            ImGui::EndPopup();
+        }
+
+        // =================================================================
+        //  false ノーツの配置のウィンドウ（Ctrl + 時刻の線をダブルクリック／NOTE の「配置のウィンドウを開く」）
+        //    ・図の下の端の太い線が判定ライン（＝出現の時刻）。上へ行くほど先
+        //    ・スナップ：譜面エディタと同じく、時間（拍）を縦にとった図。4 分の線（太い）の間を、選んだ分（8・16 分など）で区切った線を引く
+        //      線の上にだけ置ける（クリックした所に一番近い線）。線 = 「出現の時刻から n マス先のノーツ」と同じ位置に出る
+        //      （プレイの画面の上の高さは、BPM・A_SPEED・B_SPEED を入れて計算する。下に px で出す）
+        //    ・px 固定：高さ(px)を縦にとった図。10px ごとに置く（線は 50px ごと、太い線は 250px ごと）
+        //    ・左クリック：何もない所 → 置く（見た目はパレット、ほかは TOOL の設定）／ノーツの上 → 選んで、ドラッグで動かす
+        //    ・右クリック：ノーツの上 → 消す
+        //    ・ホイール：図を上下に動かす（スナップは 1 マスずつ、px 固定は 50px ずつ）
+        //    ・Ctrl + ホイール：拡大・縮小
+        // =================================================================
+        if(falsePlaceRequest){
+            const ImVec2 disp = ImGui::GetIO().DisplaySize;
+            ImVec2 pos = falsePlacePos;
+            pos.x = std::clamp(pos.x, 8.0f, std::max(8.0f, disp.x - 460.0f));
+            pos.y = std::clamp(pos.y, 8.0f, std::max(8.0f, disp.y - 760.0f));
+            ImGui::SetNextWindowPos(pos, ImGuiCond_Always);
+            ImGui::SetNextWindowFocus();   // ほかのパネルより手前に出す
+            falsePlaceOpen = true;
+            falsePlaceRequest = false;
+            falsePlaceDrag = -1;
+        }
+        if(falsePlaceOpen && !falseMode) falsePlaceOpen = false;
+        if(falsePlaceOpen){
+            ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, ImVec2(16.0f, 14.0f));
+            ImGui::Begin("##falseplace", nullptr,
+                         ImGuiWindowFlags_NoTitleBar | ImGuiWindowFlags_AlwaysAutoResize | ImGuiWindowFlags_NoSavedSettings |
+                         ImGuiWindowFlags_NoCollapse | ImGuiWindowFlags_NoScrollWithMouse);
+            ImGui::PopStyleVar();
+            // パネル（TOOL・NOTE など）を押しても、その奥に隠れないように（ポップアップが開いている間は、ポップアップを手前のままにする）
+            if(!ImGui::IsPopupOpen("", ImGuiPopupFlags_AnyPopupId)) ImGui::BringWindowToDisplayFront(ImGui::GetCurrentWindow());
+            {
+                ImDrawList* dl = ImGui::GetWindowDrawList();
+                const ImVec2 wp = ImGui::GetWindowPos(), ws = ImGui::GetWindowSize();
+                dl->PushClipRectFullScreen();
+                dl->AddRect(ImVec2(wp.x + 1.5f, wp.y + 1.5f), ImVec2(wp.x + ws.x - 1.5f, wp.y + ws.y - 1.5f), IM_COL32(255, 120, 200, 255), 0.0f, 0, 3.0f);
+                dl->PopClipRect();
+            }
+            auto& fns = currentDiff().falseNotes;
+            const TempoMap tm = currentTempoMap();
+            EditorScroll sc;
+            sc.build(currentDiff().speedEvents);
+            const double T = static_cast<double>(falsePlaceTime);
+
+            ImGui::TextColored(ImVec4(1.0f, 0.47f, 0.78f, 1.0f), "FALSE ノーツの配置   出現 %d ms", static_cast<int>(falsePlaceTime));
+            ImGui::Separator();
+            ImGui::RadioButton("スナップ##fpl", &falsePlaceMode, 1);
+            ImGui::SameLine();
+            ImGui::RadioButton("px 固定##fpl", &falsePlaceMode, 0);
+            if(falsePlaceMode == 1){
+                ImGui::SameLine(0.0f, 20.0f);
+                int di = 0;
+                for(int k = 0; k < FALSE_PLACE_DIV_COUNT; k++) if(FALSE_PLACE_DIVS[k] == falsePlaceDiv) di = k;
+                ImGui::SetNextItemWidth(110.0f);
+                if(ImGui::Combo("##fpldiv", &di, FALSE_PLACE_DIV_NAMES, FALSE_PLACE_DIV_COUNT)) falsePlaceDiv = FALSE_PLACE_DIVS[di];
+            }
+
+            // ----- 図 -----
+            const ImVec2 cs(400.0f, 600.0f);
+            const float padL = 64.0f, padR = 16.0f, padT = 12.0f, padB = 34.0f;
+            const ImVec2 c0 = ImGui::GetCursorScreenPos();
+            ImGui::InvisibleButton("##fplcanvas", cs, ImGuiButtonFlags_MouseButtonLeft | ImGuiButtonFlags_MouseButtonRight);
+            const bool hovered = ImGui::IsItemHovered();
+            const float laneL = c0.x + padL, laneR = c0.x + cs.x - padR;
+            const float laneW = (laneR - laneL) / 6.0f;
+            const float bottomY = c0.y + cs.y - padB;       // 図の下の端（スクロールしていなければ判定ライン）
+            const float topY = c0.y + padT;
+            const bool snapView = (falsePlaceMode == 1);
+            const double stepBeats = 4.0 / falsePlaceDiv;    // 1 マスの拍数
+
+            // ホイール：上下に動かす / Ctrl + ホイール：拡大・縮小
+            if(hovered && ImGui::GetIO().MouseWheel != 0.0f){
+                const float w = ImGui::GetIO().MouseWheel;
+                if(ImGui::GetIO().KeyCtrl){
+                    const float z = (w > 0.0f) ? (1.0f / 1.2f) : 1.2f;
+                    if(snapView) falsePlaceRangeBeats = std::clamp(falsePlaceRangeBeats * z, 0.5f, 64.0f);
+                    else         falsePlaceRangePx    = std::clamp(falsePlaceRangePx * z, 100.0f, 10000.0f);
+                }
+                else{
+                    const float notches = (w > 0.0f) ? 1.0f : -1.0f;
+                    if(snapView) falsePlaceBaseBeat = std::max(0.0f, falsePlaceBaseBeat + notches * static_cast<float>(stepBeats));
+                    else         falsePlaceBasePx   = std::max(0.0f, falsePlaceBasePx + notches * 50.0f);
+                }
+            }
+            if(snapView) falsePlaceBaseBeat = static_cast<float>(std::round(falsePlaceBaseBeat / stepBeats) * stepBeats);   // 分を変えても線の上にそろえる
+
+            // 縦の位置 ⇔ 図の y
+            //   スナップ：何拍先か（beats）を縦にとる / px 固定：高さ(px)を縦にとる
+            const float perUnit = (bottomY - topY) / (snapView ? falsePlaceRangeBeats : falsePlaceRangePx);
+            const double base = snapView ? falsePlaceBaseBeat : falsePlaceBasePx;
+            auto yOfUnit = [&](double v){ return bottomY - static_cast<float>(v - base) * perUnit; };
+            auto unitOfY = [&](float y){ return base + (bottomY - y) / perUnit; };
+
+            const double b0 = tempoBeatAt(tm, T);
+            auto timeOfBeats = [&](double beats){ return tempoTimeAt(tm, b0 + beats); };
+            // 何拍先のノーツが、出現の瞬間に見える高さ(px)
+            auto heightOfBeats = [&](double beats){ return sc.heightAt(timeOfBeats(beats), T); };
+            // 高さ(px) → 何拍先か（スナップの図に px 固定のノーツを描くため。1/64 拍ずつ探す）
+            auto beatsOfHeight = [&](double h) -> double{
+                double prev = 0.0;
+                for(double bb = 0.0; bb <= 256.0; bb += 1.0 / 64.0){
+                    const double hh = heightOfBeats(bb);
+                    if(hh >= h) return (bb > 0.0 && hh > prev) ? bb - (hh - h) / (hh - prev) / 64.0 : bb;
+                    prev = hh;
+                }
+                return 256.0;
+            };
+            // ノーツの縦の位置（今の図の単位）
+            auto noteUnit = [&](const EditorFalseNote& f) -> double{
+                if(snapView){
+                    if(f.posMode == 1) return f.aheadCount * 4.0 / std::max(1, f.aheadDiv);
+                    return beatsOfHeight(f.y);
+                }
+                return falseBaseHeight(f, T, tm, sc);
+            };
+            // マウスの y → 置く値（スナップ：一番近い線のマス、px 固定：10px ごと）
+            auto snapCountOfY = [&](float y){ return std::max(0, static_cast<int>(std::lround(unitOfY(y) / stepBeats))); };
+            auto pxOfY = [&](float y){ return std::clamp(std::round(unitOfY(y) / 10.0) * 10.0, 0.0, 20000.0); };
+
+            auto laneOfMouse = [&](float mxp, int width){
+                const int lane = static_cast<int>(std::floor((mxp - laneL) / laneW));
+                return std::clamp(lane - (width - 1) / 2, 0, 6 - width);
+            };
+            auto hitNote = [&](ImVec2 m) -> int{
+                for(int i = static_cast<int>(fns.size()) - 1; i >= 0; i--){
+                    const EditorFalseNote& f = fns[i];
+                    if(f.start != falsePlaceTime) continue;
+                    const float y = yOfUnit(noteUnit(f));
+                    const float x0 = laneL + static_cast<float>(f.x) * laneW, x1 = x0 + laneW * f.width;
+                    if(m.x >= x0 && m.x <= x1 && std::fabs(m.y - y) <= 9.0f) return i;
+                }
+                return -1;
+            };
+            auto applyVertical = [&](EditorFalseNote& f, float my){
+                f.posMode = falsePlaceMode;
+                if(snapView){
+                    f.aheadDiv = falsePlaceDiv;
+                    f.aheadCount = snapCountOfY(my);
+                }
+                else{
+                    f.y = pxOfY(my);
+                }
+            };
+
+            const ImVec2 mouse = ImGui::GetIO().MousePos;
+            if(ImGui::IsItemClicked(ImGuiMouseButton_Left)){
+                const int h = hitNote(mouse);
+                clearFalseSelection();
+                if(h >= 0){
+                    selectedFalseIndex = h;
+                    falsePlaceDrag = h;
+                }
+                else{
+                    EditorFalseNote f = falseTool;
+                    f.selected = false;
+                    f.changes.clear();
+                    f.type   = editorui::PALETTE[paletteIndex].type;
+                    f.isLong = editorui::PALETTE[paletteIndex].isLong;
+                    f.width  = std::clamp(f.width, 1, 6);
+                    f.x      = laneOfMouse(mouse.x, f.width);
+                    f.start  = falsePlaceTime;
+                    f.end    = falsePlaceTime + std::max<int32_t>(1, falseToolLengthMs);
+                    applyVertical(f, mouse.y);
+                    fns.push_back(f);
+                    selectedFalseIndex = static_cast<int>(fns.size()) - 1;
+                    falsePlaceDrag = selectedFalseIndex;
+                }
+            }
+            if(ImGui::IsItemClicked(ImGuiMouseButton_Right)){
+                const int h = hitNote(mouse);
+                if(h >= 0){
+                    fns.erase(fns.begin() + h);
+                    if(selectedFalseIndex == h) selectedFalseIndex = -1;
+                    else if(selectedFalseIndex > h) selectedFalseIndex--;
+                    falsePlaceDrag = -1;
+                }
+            }
+            if(falsePlaceDrag >= 0 && falsePlaceDrag < static_cast<int>(fns.size()) && ImGui::IsMouseDown(ImGuiMouseButton_Left)){
+                EditorFalseNote& f = fns[falsePlaceDrag];
+                f.x = laneOfMouse(mouse.x, f.width);
+                applyVertical(f, std::clamp(mouse.y, topY, bottomY));
+            }
+            else{
+                falsePlaceDrag = -1;
+            }
+
+            // ----- 図を描く（譜面エディタのレーンと同じ色） -----
+            {
+                ImDrawList* dl = ImGui::GetWindowDrawList();
+                const ImVec2 c1(c0.x + cs.x, c0.y + cs.y);
+                dl->PushClipRect(c0, c1, true);
+                dl->AddRectFilled(c0, c1, IM_COL32(58, 58, 82, 255));
+                dl->AddRectFilled(ImVec2(laneL, c0.y), ImVec2(laneR, c1.y), IM_COL32(4, 4, 10, 255));
+                for(int i = 0; i <= 6; i++){
+                    dl->AddLine(ImVec2(laneL + laneW * i, c0.y), ImVec2(laneL + laneW * i, c1.y), IM_COL32(140, 200, 230, 110));
+                }
+                const float fsz = ImGui::GetFontSize() * 0.8f;
+                if(snapView){
+                    // 線：1 マスごと。4 分（拍の頭）の線は太く明るく、文字は「n 拍」、間の線は「+k/分」
+                    const int kFirst = std::max(0, static_cast<int>(std::floor(falsePlaceBaseBeat / stepBeats)));
+                    const int kLast  = static_cast<int>(std::ceil((falsePlaceBaseBeat + falsePlaceRangeBeats) / stepBeats)) + 1;
+                    const float stepPx = static_cast<float>(stepBeats) * perUnit;
+                    const int perBeat = std::max(1, falsePlaceDiv / 4);
+                    for(int k = kFirst; k <= kLast; k++){
+                        const float y = yOfUnit(k * stepBeats);
+                        const bool onBeat = (k * 4) % falsePlaceDiv == 0;
+                        if(!onBeat && stepPx < 3.0f) continue;   // 縮めすぎて線が詰まるときは、拍の線だけ
+                        if(k == 0) continue;
+                        dl->AddLine(ImVec2(laneL, y), ImVec2(laneR, y),
+                                    onBeat ? IM_COL32(210, 210, 240, 220) : IM_COL32(110, 110, 150, 150), onBeat ? 2.0f : 1.0f);
+                        char t[32];
+                        if(onBeat){
+                            std::snprintf(t, sizeof(t), "%d 拍", k * 4 / falsePlaceDiv);
+                            dl->AddText(ImGui::GetFont(), fsz, ImVec2(c0.x + 4.0f, y - fsz * 0.5f), IM_COL32(230, 230, 250, 255), t);
+                        }
+                        else if(stepPx >= fsz + 2.0f){
+                            std::snprintf(t, sizeof(t), "+%d/%d", k % perBeat, falsePlaceDiv);
+                            dl->AddText(ImGui::GetFont(), fsz, ImVec2(c0.x + 10.0f, y - fsz * 0.5f), IM_COL32(150, 150, 180, 255), t);
+                        }
+                    }
+                }
+                else{
+                    const int v0 = static_cast<int>(std::ceil(falsePlaceBasePx / 50.0f)) * 50;
+                    for(int v = std::max(50, v0); v <= static_cast<int>(falsePlaceBasePx + falsePlaceRangePx) + 50; v += 50){
+                        const float y = yOfUnit(v);
+                        const bool big = v % 250 == 0;
+                        if(!big && 50.0f * perUnit < 4.0f) continue;
+                        dl->AddLine(ImVec2(laneL, y), ImVec2(laneR, y), big ? IM_COL32(210, 210, 240, 200) : IM_COL32(110, 110, 150, 120), big ? 2.0f : 1.0f);
+                        if(big || 50.0f * perUnit >= fsz + 2.0f){
+                            char t[24];
+                            std::snprintf(t, sizeof(t), "%d px", v);
+                            dl->AddText(ImGui::GetFont(), fsz, ImVec2(c0.x + 4.0f, y - fsz * 0.5f), big ? IM_COL32(230, 230, 250, 255) : IM_COL32(150, 150, 180, 255), t);
+                        }
+                    }
+                }
+                // 判定ライン（出現の瞬間）。スクロールして見えないときは、下の端に「↓ 判定ライン」
+                const float jy = yOfUnit(0.0);
+                if(jy <= bottomY + 1.0f){
+                    dl->AddLine(ImVec2(laneL, jy), ImVec2(laneR, jy), IM_COL32(150, 220, 255, 255), 3.0f);
+                    dl->AddText(ImGui::GetFont(), fsz, ImVec2(laneL, jy + 6.0f), IM_COL32(150, 220, 255, 255), "判定ライン（出現の瞬間）");
+                }
+                else{
+                    dl->AddText(ImGui::GetFont(), fsz, ImVec2(laneL, bottomY + 8.0f), IM_COL32(150, 220, 255, 255), "↓ 判定ライン（ホイールで戻る）");
+                }
+
+                // ノーツ（この時刻に出るもの）
+                const float headH = 10.0f;
+                for(size_t i = 0; i < fns.size(); i++){
+                    const EditorFalseNote& f = fns[i];
+                    if(f.start != falsePlaceTime) continue;
+                    const float y = yOfUnit(noteUnit(f));
+                    const float x0 = laneL + static_cast<float>(f.x) * laneW + 3.0f, x1 = x0 + laneW * f.width - 6.0f;
+                    const SDL_Color c = editorui::noteColor(f.type);
+                    const bool otherMode = (f.posMode != falsePlaceMode);   // 今の図と違う決め方のノーツは薄く
+                    const int al = otherMode ? 110 : 255;
+                    if(f.isLong && f.longCount > 0){   // ロングの形の帯（スナップの図は拍、px 固定の図は px で）
+                        const double top = snapView ? noteUnit(f) + f.longCount * 4.0 / std::max(1, f.longDiv)
+                                                    : noteUnit(f) + falseLongPx(f, tm, sc);
+                        dl->AddRectFilled(ImVec2(x0, yOfUnit(top)), ImVec2(x1, y), IM_COL32(c.r, c.g, c.b, al * 35 / 100), 3.0f);
+                    }
+                    dl->AddRectFilled(ImVec2(x0, y - headH * 0.5f), ImVec2(x1, y + headH * 0.5f), IM_COL32(c.r, c.g, c.b, al), 3.0f);
+                    const bool sel = static_cast<int>(i) == selectedFalseIndex || f.selected;
+                    if(sel) dl->AddRect(ImVec2(x0 - 3.0f, y - headH * 0.5f - 3.0f), ImVec2(x1 + 3.0f, y + headH * 0.5f + 3.0f), IM_COL32(255, 120, 200, 255), 3.0f, 0, 2.0f);
+                    if(f.speed > 0.0){   // 進む方向の短い線
+                        const double a = f.dirDeg * 3.14159265358979 / 180.0;
+                        const float len = static_cast<float>(std::min(40.0, 12.0 + f.speed * 10.0));
+                        const ImVec2 pc((x0 + x1) * 0.5f, y);
+                        dl->AddLine(pc, ImVec2(pc.x + static_cast<float>(std::sin(a)) * len, pc.y - static_cast<float>(std::cos(a)) * len), IM_COL32(255, 200, 235, 220), 2.0f);
+                    }
+                }
+
+                // マウスの所に、置く位置の目安（スナップは一番近い線の上）
+                if(hovered && falsePlaceDrag < 0 && hitNote(mouse) < 0){
+                    const int w = std::clamp(falseTool.width, 1, 6);
+                    const float x0 = laneL + laneOfMouse(mouse.x, w) * laneW + 3.0f, x1 = x0 + laneW * w - 6.0f;
+                    const float gy = snapView ? yOfUnit(snapCountOfY(mouse.y) * stepBeats) : yOfUnit(pxOfY(mouse.y));
+                    dl->AddRect(ImVec2(x0, gy - 5.0f), ImVec2(x1, gy + 5.0f), IM_COL32(255, 120, 200, 220), 3.0f, 0, 1.5f);
+                }
+                dl->PopClipRect();
+            }
+
+            // ----- 選んでいるノーツの説明 -----
+            if(selectedFalseIndex >= 0 && selectedFalseIndex < static_cast<int>(fns.size()) && fns[selectedFalseIndex].start == falsePlaceTime){
+                const EditorFalseNote& f = fns[selectedFalseIndex];
+                if(f.posMode == 1){
+                    const int32_t ams = falseAheadMs(f, tm);
+                    ImGui::Text("#%d：%d 分の %d マス先（%d ms 先・出現の瞬間の高さ %.0f px）", selectedFalseIndex, f.aheadDiv, f.aheadCount,
+                                static_cast<int>(ams), sc.heightAt(T + ams, T));
+                }
+                else{
+                    ImGui::Text("#%d：高さ %.0f px（固定）", selectedFalseIndex, f.y);
+                }
+            }
+            else{
+                ImGui::TextDisabled("クリックで置く（見た目はパレット、ほかは TOOL）");
+            }
+            ImGui::TextDisabled("ドラッグで動かす / 右クリックで消す");
+            ImGui::TextDisabled("ホイールで上下に動かす / Ctrl + ホイールで拡大・縮小");
+            if(ImGui::Button("閉じる##fpl", ImVec2(120.0f, 0.0f))){
+                falsePlaceOpen = false;
+                falsePlaceDrag = -1;
+            }
+            ImGui::End();
+        }
 
         toolNotetype = editorui::PALETTE[paletteIndex].type;
         toolIsLong = editorui::PALETTE[paletteIndex].isLong;
@@ -2538,7 +4283,127 @@ GameScene chartCreateScene(SDL_Window* window, SDL_Renderer* renderer, std::stri
         // =================================================================
         //  左上：TOOL（新しく置くノーツの設定）
         // =================================================================
-        editorui::beginPanel("##tool", "TOOL", editorui::TOOL_RECT);
+        //   false ノーツ編集中は、TOOL を DIFFICULTY の所まで伸ばして、false ノーツの設定を出す（DIFFICULTY は隠す）
+        const SDL_Rect falseToolRect = {editorui::TOOL_RECT.x, editorui::TOOL_RECT.y, editorui::TOOL_RECT.w,
+                                        editorui::DIFF_RECT.y + editorui::DIFF_RECT.h - editorui::TOOL_RECT.y};
+        editorui::beginPanel("##tool", falseMode ? "TOOL : FALSE NOTE" : "TOOL", falseMode ? falseToolRect : editorui::TOOL_RECT);
+        // ----- false ノーツの欄（TOOL と NOTE で同じものを使う） -----
+        //   欄の区切りの見出し（古い ImGui でも使えるよう、SeparatorText の代わりに自前で）
+        auto falseSection = [](const char* title){
+            ImGui::Spacing();
+            ImGui::TextColored(ImVec4(1.0f, 0.70f, 0.88f, 1.0f), "%s", title);
+            ImGui::Separator();
+        };
+        //   パレットのマス（見た目）の名前と、番号 ⇔ 見た目
+        const char* lookNames[editorui::PALETTE_COUNT];
+        std::string lookNameStore[editorui::PALETTE_COUNT];
+        for(int li = 0; li < editorui::PALETTE_COUNT; li++){
+            lookNameStore[li] = std::string(editorui::PALETTE[li].name) + (editorui::PALETTE[li].isLong ? " ロング" : "");
+            lookNames[li] = lookNameStore[li].c_str();
+        }
+        auto lookIndexOf = [&](int type, bool isLong){
+            for(int li = 0; li < editorui::PALETTE_COUNT; li++){
+                if(editorui::PALETTE[li].type == type && editorui::PALETTE[li].isLong == isLong) return li;
+            }
+            return 0;
+        };
+        //   出現する位置・進む方向・出現と消滅・ロングの長さ（sfx は欄の名前の区別：TOOL と NOTE で別にする）
+        auto falseCommonFields = [&](EditorFalseNote& f, const std::string& sfx){
+            falseSection("出現する位置");
+            ImGui::InputDouble(("横（レーン）##" + sfx).c_str(), &f.x, 0.25, 1.0, "%.2f");
+            ImGui::SliderInt(("幅（レーン数）##" + sfx).c_str(), &f.width, 1, 6);
+            f.x = std::clamp(f.x, -6.0, 12.0);   // 画面の外から入ってくる演出もできるよう、少しはみ出せる
+            {
+                const char* posNames[] = {"px 固定", "スナップ（何分先）"};
+                ImGui::Combo(("縦の決め方##" + sfx).c_str(), &f.posMode, posNames, 2);
+            }
+            if(f.posMode == 1){
+                int di = 0;
+                for(int k = 0; k < FALSE_PLACE_DIV_COUNT; k++) if(FALSE_PLACE_DIVS[k] == f.aheadDiv) di = k;
+                if(ImGui::Combo(("何分##" + sfx).c_str(), &di, FALSE_PLACE_DIV_NAMES, FALSE_PLACE_DIV_COUNT)){
+                    // 分を変えても、なるべく同じ長さ（拍）のままにする
+                    const double beats = f.aheadCount * 4.0 / std::max(1, f.aheadDiv);
+                    f.aheadDiv = FALSE_PLACE_DIVS[di];
+                    f.aheadCount = static_cast<int>(std::lround(beats * f.aheadDiv / 4.0));
+                }
+                ImGui::InputInt(("何マス先##" + sfx).c_str(), &f.aheadCount, 1, 4);
+                f.aheadCount = std::clamp(f.aheadCount, 0, 1024);
+                if(sfx == "fn"){
+                    const int32_t ms = falseAheadMs(f, currentTempoMap());
+                    ImGui::TextDisabled("= %d ms 先のノーツの位置（出現の瞬間）に出る", static_cast<int>(ms));
+                }
+                else{
+                    ImGui::TextDisabled("出現の瞬間の、その先のノーツの位置に出る");
+                }
+            }
+            else{
+                editorui::heightPicker(("高さ (px)##" + sfx).c_str(), f);   // クリックで高さのウィンドウ
+                ImGui::TextDisabled("高さ = 判定ラインから上へ（0 = 判定ライン）");
+            }
+            if(sfx == "fn" && ImGui::Button(("配置のウィンドウを開く##" + sfx).c_str())){
+                falsePlaceTime = f.start;
+                falsePlaceMode = f.posMode;
+                if(f.posMode == 1) falsePlaceDiv = f.aheadDiv;
+                falsePlaceRequest = true;
+                falsePlacePos = ImVec2(static_cast<float>(editorui::NOTE_RECT.x) - 460.0f, static_cast<float>(editorui::NOTE_RECT.y));
+            }
+
+            falseSection("進む方向・速さ");
+            float dir = static_cast<float>(f.dirDeg);
+            if(ImGui::SliderFloat(("方向 (度)##" + sfx).c_str(), &dir, 0.0f, 360.0f, "%.0f")) f.dirDeg = dir;
+            if(ImGui::SmallButton(("上##d" + sfx).c_str())) f.dirDeg = 0.0;
+            ImGui::SameLine();
+            if(ImGui::SmallButton(("右##d" + sfx).c_str())) f.dirDeg = 90.0;
+            ImGui::SameLine();
+            if(ImGui::SmallButton(("下##d" + sfx).c_str())) f.dirDeg = 180.0;
+            ImGui::SameLine();
+            if(ImGui::SmallButton(("左##d" + sfx).c_str())) f.dirDeg = 270.0;
+            ImGui::InputDouble(("速さ##" + sfx).c_str(), &f.speed, 0.1, 1.0, "%.2f");
+            ImGui::TextDisabled("A_SPEED と同じ単位（1.8 = ふつう、0 = 止まる）");
+
+            falseSection("出現・消滅");
+            const char* modeNames[] = {"すぐ", "グリッチ"};
+            ImGui::Combo(("出現の方法##" + sfx).c_str(), &f.appear, modeNames, 2);
+            if(f.appear == 1){ ImGui::InputInt(("出現のグリッチ (ms)##" + sfx).c_str(), &f.appearMs, 10, 100); f.appearMs = std::max(0, f.appearMs); }
+            ImGui::Combo(("消滅の方法##" + sfx).c_str(), &f.disappear, modeNames, 2);
+            if(f.disappear == 1){ ImGui::InputInt(("消滅のグリッチ (ms)##" + sfx).c_str(), &f.disappearMs, 10, 100); f.disappearMs = std::max(0, f.disappearMs); }
+
+            falseSection("ロングの形");
+            {
+                int di = 0;
+                for(int k = 0; k < FALSE_PLACE_DIV_COUNT; k++) if(FALSE_PLACE_DIVS[k] == f.longDiv) di = k;
+                if(ImGui::Combo(("ロングの何分##" + sfx).c_str(), &di, FALSE_PLACE_DIV_NAMES, FALSE_PLACE_DIV_COUNT)){
+                    const double beats = f.longCount * 4.0 / std::max(1, f.longDiv);   // 分を変えても長さ（拍）はなるべく同じ
+                    f.longDiv = FALSE_PLACE_DIVS[di];
+                    f.longCount = std::max(1, static_cast<int>(std::lround(beats * f.longDiv / 4.0)));
+                }
+                ImGui::InputInt(("ロングの何マス##" + sfx).c_str(), &f.longCount, 1, 4);
+                f.longCount = std::clamp(f.longCount, 1, 1024);
+                ImGui::TextDisabled("ふつうのロングと同じ長さ（4 分 × 1 = 4 分のロング）");
+                ImGui::TextDisabled("譜面の上で終端をドラッグしても変えられる");
+            }
+        };
+
+        //   TOOL：今から置く false ノーツの設定だけ（置いたノーツの中身は NOTE で直す）
+        if(falseMode){
+            ImGui::TextColored(ImVec4(1.0f, 0.47f, 0.78f, 1.0f), "今から置く false ノーツ");
+            ImGui::PushItemWidth(170.0f);
+            falseSection("長さ");
+            ImGui::InputInt("長さ (ms)##ft", &falseToolLengthMs, 10, 100);
+            falseToolLengthMs = std::max(1, falseToolLengthMs);
+            ImGui::TextDisabled("クリックで置き、上へドラッグで消滅の時刻");
+            ImGui::TextDisabled("見た目はパレットで選んでいるマス");
+            falseCommonFields(falseTool, "ft");
+            ImGui::PopItemWidth();
+
+            ImGui::Separator();
+            ImGui::TextDisabled("左:置く/選ぶ/上下に動かす 右:消す");
+            ImGui::TextDisabled("Shift+ドラッグ:範囲選択 Delete:消す");
+            ImGui::TextDisabled("左の細い帯の上の端:消滅の時刻");
+            ImGui::TextDisabled("ロングの終端:長さ ヘッドをクリック:プレビュー");
+            ImGui::TextDisabled("Ctrl+N：ふつうの編集に戻る");
+        }
+        else
         {
             ImGui::SliderInt("幅（レーン数）##tool", &toolWidth, 1, 6);
 
@@ -2576,6 +4441,8 @@ GameScene chartCreateScene(SDL_Window* window, SDL_Renderer* renderer, std::stri
         // =================================================================
         //  左中：DIFFICULTY（難易度の切替と情報）
         // =================================================================
+        //   false ノーツ編集中は出さない（TOOL がこの場所まで伸びている）
+        if(!falseMode){
         editorui::beginPanel("##diff", "DIFFICULTY", editorui::DIFF_RECT);
         {
             if(ImGui::Button("追加##diff")){
@@ -2642,6 +4509,7 @@ GameScene chartCreateScene(SDL_Window* window, SDL_Renderer* renderer, std::stri
             timeSigInput("sig##diff", currentDiff().sigNum, currentDiff().sigDen);
         }
         ImGui::End();
+        }   // if(!falseMode)
 
         // =================================================================
         //  左下：PLAYBACK（再生・位置・拡大率）
@@ -2694,8 +4562,139 @@ GameScene chartCreateScene(SDL_Window* window, SDL_Renderer* renderer, std::stri
         // =================================================================
         //  右上：NOTE（選択中のノーツ）
         // =================================================================
-        editorui::beginPanel("##note", "NOTE", editorui::NOTE_RECT);
-        if(selectedNoteIndex >= 0){
+        editorui::beginPanel("##note", falseMode ? "NOTE : FALSE NOTE" : "NOTE", editorui::NOTE_RECT);
+        if(falseMode){
+            // ===== false ノーツ編集中：選んでいる false ノーツの中身 =====
+            auto& fns = currentDiff().falseNotes;
+            if(selectedFalseIndex >= static_cast<int>(fns.size())) selectedFalseIndex = -1;
+            const int multi = falseSelectedCount();
+            if(selectedFalseIndex < 0 && multi == 1){   // 範囲選択で 1 個だけ選んだ → それを直せるようにする
+                for(size_t i = 0; i < fns.size(); i++) if(fns[i].selected) selectedFalseIndex = static_cast<int>(i);
+            }
+            auto openPreview = [&](){
+                falsePreviewSet.assign(fns.size(), 0);
+                for(size_t i = 0; i < fns.size(); i++) if(fns[i].selected) falsePreviewSet[i] = 1;
+                if(selectedFalseIndex >= 0) falsePreviewSet[selectedFalseIndex] = 1;
+                falsePreviewIndex = selectedFalseIndex;
+                falsePreviewRequest = true;
+                falsePreviewPos = ImVec2(static_cast<float>(editorui::NOTE_RECT.x) - 690.0f, static_cast<float>(editorui::NOTE_RECT.y));
+            };
+
+            if(multi >= 2){
+                // 範囲選択で何個も選んでいる
+                ImGui::TextColored(ImVec4(1.0f, 0.47f, 0.78f, 1.0f), "false ノーツを %d 個選んでいます", multi);
+                ImGui::Separator();
+                if(ImGui::Button("選んだものをプレビュー##fn", ImVec2(260.0f, 0.0f))) openPreview();
+                if(ImGui::Button("選んだものを消す (Delete)##fn", ImVec2(260.0f, 0.0f))){
+                    std::erase_if(fns, [](const EditorFalseNote& f){ return f.selected; });
+                    selectedFalseIndex = -1;
+                }
+                if(ImGui::Button("選択を外す##fn", ImVec2(260.0f, 0.0f))){ clearFalseSelection(); selectedFalseIndex = -1; }
+
+                // 長さをまとめて変える
+                falseSection("長さをまとめて変える");
+                ImGui::PushItemWidth(150.0f);
+                ImGui::InputInt("出現〜消滅 (ms)##fmlen", &falseMultiLenMs, 10, 100);
+                falseMultiLenMs = std::max(1, falseMultiLenMs);
+                ImGui::PopItemWidth();
+                ImGui::SameLine();
+                if(ImGui::Button("そろえる##fmlen")){
+                    for(auto& f : fns) if(f.selected) f.end = f.start + falseMultiLenMs;
+                }
+                if(ImGui::Button("1 マス長く##fmlen")){   // 今のグリッドの 1 マスずつ（それぞれの消滅の時刻から）
+                    for(auto& f : fns) if(f.selected) f.end = stepGrid(f.end, +1);
+                }
+                ImGui::SameLine();
+                if(ImGui::Button("1 マス短く##fmlen")){
+                    for(auto& f : fns) if(f.selected) f.end = std::max(f.start + 1, stepGrid(f.end, -1));
+                }
+                {
+                    int di = 0;
+                    for(int k = 0; k < FALSE_PLACE_DIV_COUNT; k++) if(FALSE_PLACE_DIVS[k] == falseMultiLongDiv) di = k;
+                    ImGui::SetNextItemWidth(100.0f);
+                    if(ImGui::Combo("##fmldiv", &di, FALSE_PLACE_DIV_NAMES, FALSE_PLACE_DIV_COUNT)) falseMultiLongDiv = FALSE_PLACE_DIVS[di];
+                    ImGui::SameLine();
+                    ImGui::SetNextItemWidth(100.0f);
+                    ImGui::InputInt("マス##fmlcnt", &falseMultiLongCount, 1, 4);
+                    falseMultiLongCount = std::clamp(falseMultiLongCount, 1, 1024);
+                    ImGui::SameLine();
+                    if(ImGui::Button("ロングの長さをそろえる##fml")){
+                        for(auto& f : fns) if(f.selected && f.isLong){ f.longDiv = falseMultiLongDiv; f.longCount = falseMultiLongCount; }
+                    }
+                }
+                ImGui::TextDisabled("譜面の上で、選んだものの消滅のつまみ・ロングの終端をドラッグしても、まとめて変わる");
+                ImGui::Spacing();
+                ImGui::TextDisabled("選んだものをドラッグでまとめて上下に動かす");
+                ImGui::TextDisabled("1 個だけクリックすると、その中身をここで直せる");
+            }
+            else if(selectedFalseIndex >= 0){
+                EditorFalseNote& f = fns[selectedFalseIndex];
+                ImGui::TextColored(ImVec4(1.0f, 0.47f, 0.78f, 1.0f), "false ノーツ #%d", selectedFalseIndex);
+                ImGui::SameLine();
+                if(ImGui::SmallButton("プレビュー##fn")) openPreview();
+                ImGui::SameLine();
+                if(ImGui::SmallButton("選択を外す##fn")){ selectedFalseIndex = -1; clearFalseSelection(); }
+                if(selectedFalseIndex >= 0){
+                    ImGui::PushItemWidth(200.0f);
+
+                    falseSection("見た目");
+                    ImGui::Text("最初の見た目：%s", lookNames[lookIndexOf(f.type, f.isLong)]);
+                    if(ImGui::Button("パレットの見た目にする##fn")){
+                        f.type = editorui::PALETTE[paletteIndex].type;
+                        f.isLong = editorui::PALETTE[paletteIndex].isLong;
+                    }
+
+                    falseSection("時刻");
+                    int st = f.start, en = f.end, len = f.end - f.start;
+                    if(ImGui::InputInt("出現 (ms)##fn", &st, 10, 100)){ const int32_t l = f.end - f.start; f.start = std::max(0, st); f.end = f.start + l; }
+                    if(ImGui::InputInt("消滅 (ms)##fn", &en, 10, 100)) f.end = std::max(f.start + 1, en);
+                    if(ImGui::InputInt("長さ (ms)##fn", &len, 10, 100)) f.end = f.start + std::max(1, len);
+
+                    falseCommonFields(f, "fn");
+
+                    falseSection("途中で見た目を変える");
+                    if(ImGui::Button("今の位置に追加（パレットの見た目）##fn")){
+                        EditorFalseLook l;
+                        l.time = std::clamp(scrollTimeMs, f.start, f.end - 1);
+                        l.type = editorui::PALETTE[paletteIndex].type;
+                        l.isLong = editorui::PALETTE[paletteIndex].isLong;
+                        f.changes.push_back(l);
+                    }
+                    int removeAt = -1;
+                    for(size_t c = 0; c < f.changes.size(); c++){
+                        ImGui::PushID(static_cast<int>(c) + 9000);
+                        ImGui::SetNextItemWidth(100.0f);
+                        ImGui::InputInt("##fct", &f.changes[c].time, 0, 0);
+                        ImGui::SameLine();
+                        int li = lookIndexOf(f.changes[c].type, f.changes[c].isLong);
+                        ImGui::SetNextItemWidth(150.0f);
+                        if(ImGui::Combo("##fcl", &li, lookNames, editorui::PALETTE_COUNT)){
+                            f.changes[c].type = editorui::PALETTE[li].type;
+                            f.changes[c].isLong = editorui::PALETTE[li].isLong;
+                        }
+                        ImGui::SameLine();
+                        if(ImGui::SmallButton("削除")) removeAt = static_cast<int>(c);
+                        ImGui::PopID();
+                    }
+                    if(removeAt >= 0) f.changes.erase(f.changes.begin() + removeAt);
+                    std::stable_sort(f.changes.begin(), f.changes.end(),
+                                     [](const EditorFalseLook& a, const EditorFalseLook& b){ return a.time < b.time; });
+                    ImGui::TextDisabled("時刻(ms) から、その見た目になる");
+                    ImGui::PopItemWidth();
+
+                    ImGui::Separator();
+                    if(ImGui::Button("この false ノーツを消す (Delete)##fn")){
+                        fns.erase(fns.begin() + selectedFalseIndex);
+                        selectedFalseIndex = -1;
+                    }
+                }
+            }
+            else{
+                ImGui::TextDisabled("false ノーツをクリックすると、ここで中身を直せます");
+                ImGui::TextDisabled("Shift+ドラッグで何個も選べます");
+            }
+        }
+        else if(selectedNoteIndex >= 0){
             EditorNote& n = currentDiff().notes[selectedNoteIndex];
 
             // 種類：ノーツの絵のボタンを4つ横に並べ、押したものに変える
@@ -2843,10 +4842,18 @@ GameScene chartCreateScene(SDL_Window* window, SDL_Renderer* renderer, std::stri
                 // ----- 中身（下に「閉じる」の分だけ空けて、はみ出したらスクロール） -----
                 ImGui::BeginChild("##propsbody", ImVec2(0.0f, -46.0f), false);
                 if(propsCategory == 0){
-                    // ===== SPEED：速度イベント =====
-                    if(ImGui::Button("追加##speed")){
+                    // ===== SPEED：速度イベント（A_SPEED・B_SPEED） =====
+                    if(ImGui::Button("A_SPEED を追加##speed")){
                         EditorSpeedEvent ev;
                         ev.time = scrollTimeMs;
+                        currentDiff().speedEvents.push_back(ev);
+                    }
+                    ImGui::SameLine();
+                    if(ImGui::Button("B_SPEED を追加##speed")){
+                        EditorSpeedEvent ev;
+                        ev.time = scrollTimeMs;
+                        ev.target = 0.0;   // B は「止める」を最初の値に
+                        ev.isB = true;
                         currentDiff().speedEvents.push_back(ev);
                     }
 
@@ -2855,16 +4862,14 @@ GameScene chartCreateScene(SDL_Window* window, SDL_Renderer* renderer, std::stri
                         ImGui::PushID(static_cast<int>(idx));
                         auto& ev = currentDiff().speedEvents[idx];
 
-                        ImGui::Text("#%zu", idx);
+                        {
+                            const SDL_Color c = speedEventColor(ev.isB);
+                            ImGui::TextColored(ImVec4(c.r / 255.0f, c.g / 255.0f, c.b / 255.0f, 1.0f), "#%zu  %s", idx, speedEventName(ev.isB));
+                        }
                         ImGui::InputInt("時刻(ms)##speed", &ev.time);
                         ImGui::InputDouble("目標の速度##speed", &ev.target, 0.1, 1.0, "%.2f");
 
-                        const char* easeNames[] = {"Straight(1)", "easeOutCubic(2)", "easeInCubic(3)"};
-                        int easeIndex = ev.easing - 1;
-                        if(easeIndex < 0 || easeIndex > 2) easeIndex = 0;
-                        if(ImGui::Combo("イージング##speed", &easeIndex, easeNames, 3)){
-                            ev.easing = easeIndex + 1;
-                        }
+                        editorui::easingPicker("イージング##speed", ev.easing);   // クリックでカードのウィンドウ
 
                         ImGui::InputInt("変化にかける時間(ms)##speed", &ev.duration);
 
@@ -2937,6 +4942,62 @@ GameScene chartCreateScene(SDL_Window* window, SDL_Renderer* renderer, std::stri
                     ImGui::TextDisabled("保存すると譜面ファイルに書き込まれ、選曲画面の試聴に使われます");
                 }
                 else if(propsCategory == 3){
+                    // ===== 情報：ジャンル（曲ごと。何個でも選べる） =====
+                    //   SongGenre.h の一覧を箱にして横に並べる。押すたびに付ける／外すが切り替わる（何個でも）
+                    //   付いている箱は、そのジャンルの色で塗って ✓ を付ける。保存すると譜面の "genres" に入る
+                    {
+                        ImGui::TextColored(ImVec4(0.0f, 0.86f, 1.0f, 1.0f), "ジャンル");
+                        ImGui::SameLine();
+                        ImGui::TextDisabled("（曲ごと・何個でも選べる。押すたびに付ける／外す）");
+                        ImDrawList* gdl = ImGui::GetWindowDrawList();
+                        const ImVec2 boxSize(150.0f, 46.0f);
+                        for(int gi = 0; gi < SONG_GENRE_COUNT; gi++){
+                            const SongGenreInfo& gInfo = SONG_GENRES[gi];
+                            auto it = std::find(meta.genres.begin(), meta.genres.end(), gInfo.name);
+                            const bool on = (it != meta.genres.end());
+                            ImGui::PushID(gi + 700000);
+                            if(gi > 0) ImGui::SameLine(0.0f, 10.0f);
+                            if(ImGui::InvisibleButton("##genre", boxSize)){
+                                if(on) meta.genres.erase(it);
+                                else   meta.genres.push_back(gInfo.name);
+                                meta.genres = normalizeSongGenres(meta.genres);
+                            }
+                            const bool hov = ImGui::IsItemHovered();
+                            const ImVec2 b0 = ImGui::GetItemRectMin(), b1 = ImGui::GetItemRectMax();
+                            const SDL_Color c = gInfo.color;
+                            if(on)       gdl->AddRectFilled(b0, b1, IM_COL32(c.r, c.g, c.b, 70), 4.0f);
+                            else if(hov) gdl->AddRectFilled(b0, b1, IM_COL32(45, 45, 80, 200), 4.0f);
+                            gdl->AddRect(b0, b1, on ? IM_COL32(c.r, c.g, c.b, 255) : IM_COL32(110, 110, 150, 255), 4.0f, 0, on ? 3.0f : 1.0f);
+                            // チェックの小さな箱（左）と名前
+                            const ImVec2 k0(b0.x + 10.0f, (b0.y + b1.y) * 0.5f - 9.0f), k1(k0.x + 18.0f, k0.y + 18.0f);
+                            gdl->AddRect(k0, k1, on ? IM_COL32(c.r, c.g, c.b, 255) : IM_COL32(150, 150, 180, 255), 3.0f, 0, 2.0f);
+                            if(on){
+                                gdl->AddLine(ImVec2(k0.x + 4.0f, k0.y + 9.0f), ImVec2(k0.x + 8.0f, k0.y + 13.0f), IM_COL32(255, 255, 255, 255), 2.5f);
+                                gdl->AddLine(ImVec2(k0.x + 8.0f, k0.y + 13.0f), ImVec2(k0.x + 14.0f, k0.y + 5.0f), IM_COL32(255, 255, 255, 255), 2.5f);
+                            }
+                            const ImVec2 ts = ImGui::CalcTextSize(gInfo.name);
+                            gdl->AddText(ImVec2(k1.x + 10.0f, (b0.y + b1.y) * 0.5f - ts.y * 0.5f),
+                                         on ? IM_COL32(255, 255, 255, 255) : IM_COL32(190, 190, 210, 255), gInfo.name);
+                            ImGui::PopID();
+                        }
+                        // 一覧にない名前（手で書いたものなど）が付いていれば、消さずに出しておく
+                        for(const auto& g : meta.genres){
+                            if(songGenreIndex(g) >= 0) continue;
+                            ImGui::TextDisabled("一覧にないジャンル：%s", g.c_str());
+                            ImGui::SameLine();
+                            ImGui::PushID(g.c_str());
+                            if(ImGui::SmallButton("外す")){
+                                meta.genres.erase(std::find(meta.genres.begin(), meta.genres.end(), g));
+                                ImGui::PopID();
+                                break;
+                            }
+                            ImGui::PopID();
+                        }
+                        ImGui::Spacing();
+                        ImGui::Separator();
+                        ImGui::Spacing();
+                    }
+
                     // ===== 情報：コンボ数・ノーツの数（編集中の難易度） =====
                     //   コンボ数はプレイ画面と同じ数え方：
                     //     ・単発（通常・ドラッグ・レーン）：1
@@ -3038,8 +5099,12 @@ GameScene chartCreateScene(SDL_Window* window, SDL_Renderer* renderer, std::stri
                     }
 
                     ImGui::Spacing();
-                    ImGui::TextDisabled("SPEED イベント %zu 個 ／ BPM イベント %zu 個",
-                                        currentDiff().speedEvents.size(), currentDiff().bpmEvents.size());
+                    {
+                        const auto& sev = currentDiff().speedEvents;
+                        const size_t bCount = static_cast<size_t>(std::count_if(sev.begin(), sev.end(), [](const EditorSpeedEvent& s){ return s.isB; }));
+                        ImGui::TextDisabled("A_SPEED %zu 個 ／ B_SPEED %zu 個 ／ BPM イベント %zu 個",
+                                            sev.size() - bCount, bCount, currentDiff().bpmEvents.size());
+                    }
                 }
                 else{
                     // ===== FILE：曲・作曲者・オフセット・保存／読込・BPM 解析 =====
@@ -3057,11 +5122,13 @@ GameScene chartCreateScene(SDL_Window* window, SDL_Renderer* renderer, std::stri
 
                     if(ImGui::Button("保存##file")){
                         saveToastOk = saveChart(savePathBuf, meta, difficulties);
+                        if(saveToastOk) savedChartText = buildChartText(meta, difficulties);
                         saveToastTicks = SDL_GetTicks();
                     }
                     ImGui::SameLine();
                     if(ImGui::Button("読込##file")){
                         loadChartForEdit(savePathBuf, meta, difficulties);
+                        savedChartPending = true;   // 読み直した中身を「保存してある状態」にする
                         if(difficulties.empty()) difficulties.push_back(EditorDifficulty{});
                         currentDiffIndex = 0;
                         syncMetaBuffers();
@@ -3253,6 +5320,12 @@ GameScene chartCreateScene(SDL_Window* window, SDL_Renderer* renderer, std::stri
                         // 3. SPEED イベントも同じように拍の位置を保って動かす
                         for(auto& sev : d.speedEvents){
                             sev.time = remapTime(d.alignedMap, newMap, sev.time);
+                        }
+                        // 4. false ノーツも同じように（出現・消滅・見た目の変更の時刻）
+                        for(auto& f : d.falseNotes){
+                            f.start = remapTime(d.alignedMap, newMap, f.start);
+                            f.end   = std::max(f.start + 1, remapTime(d.alignedMap, newMap, f.end));
+                            for(auto& c : f.changes) c.time = remapTime(d.alignedMap, newMap, c.time);
                         }
                     }
 
@@ -3459,43 +5532,60 @@ GameScene chartCreateScene(SDL_Window* window, SDL_Renderer* renderer, std::stri
         //   SPEED の文字には枠を付け、クリックするとその SPEED イベントの編集ウィンドウが開く
         speedLabelHits.clear();
         const float labelRight = static_cast<float>(startX) - 10.0f;
+        //   A_SPEED は黄色、B_SPEED は赤（形は同じ）。同じ時刻に A と B があるときは、B の枠を A の枠の左に並べる
         for(size_t si = 0; si < currentDiff().speedEvents.size(); si++){
             const auto& s = currentDiff().speedEvents[si];
+            const SDL_Color c = speedEventColor(s.isB);
             int ly = judgeY - static_cast<int>((s.time - scrollTimeMs) * effectivePixelsPerMs);
             int ey = judgeY - static_cast<int>((s.time + s.duration - scrollTimeMs) * effectivePixelsPerMs);
 
-            // 適用時間を薄い黄色の帯で表現する(画面内に一部でも重なっていれば描画)
+            // 適用時間を薄い色の帯で表現する(画面内に一部でも重なっていれば描画)
             if(!(ly < -20 && ey < -20) && !(ly > SCREEN_H + 20 && ey > SCREEN_H + 20)){
                 int yTop = std::min(ly, ey);
                 int yBottom = std::max(ly, ey);
-                SDL_SetRenderDrawColor(renderer, 255, 240, 150, 40);
+                if(s.isB) SDL_SetRenderDrawColor(renderer, 255, 130, 130, 40);
+                else      SDL_SetRenderDrawColor(renderer, 255, 240, 150, 40);
                 SDL_Rect bandRect = {startX, yTop, lanesRight - startX, yBottom - yTop};
                 SDL_RenderFillRect(renderer, &bandRect);
 
                 // 終端にも薄い線を引き、Ctrl+ドラッグで掴める位置を視覚的に示す
-                SDL_SetRenderDrawColor(renderer, 255, 220, 80, 100);
+                SDL_SetRenderDrawColor(renderer, c.r, c.g, c.b, 100);
                 SDL_RenderDrawLine(renderer, startX, ey, lanesRight, ey);
             }
 
             if(ly < -20 || ly > SCREEN_H + 20) continue;
 
-            SDL_SetRenderDrawColor(renderer, 255, 220, 80, 200);
+            SDL_SetRenderDrawColor(renderer, c.r, c.g, c.b, 200);
             SDL_Rect thick = {startX, ly - 1, lanesRight - startX, 3};
             SDL_RenderFillRect(renderer, &thick);
 
             char buf[64];
-            snprintf(buf, sizeof(buf), "SPD %.2fx", s.target);
+            snprintf(buf, sizeof(buf), "%s %.2fx", s.isB ? "B_SPD" : "A_SPD", s.target);
             const ImVec2 ts = ImGui::CalcTextSize(buf);
             const float padX = 8.0f, padY = 3.0f;
-            const ImVec2 b0(labelRight - ts.x - padX * 2.0f, static_cast<float>(ly) - ts.y - padY * 2.0f - 2.0f);
-            const ImVec2 b1(labelRight, static_cast<float>(ly) - 2.0f);
+            // B の枠：同じ時刻に A があれば、A の枠の左に並べる
+            float right = labelRight;
+            if(s.isB){
+                for(const auto& o : currentDiff().speedEvents){
+                    if(o.isB || o.time != s.time) continue;
+                    char ob[64];
+                    snprintf(ob, sizeof(ob), "A_SPD %.2fx", o.target);
+                    right -= ImGui::CalcTextSize(ob).x + padX * 2.0f + 6.0f;
+                    break;
+                }
+            }
+            const ImVec2 b0(right - ts.x - padX * 2.0f, static_cast<float>(ly) - ts.y - padY * 2.0f - 2.0f);
+            const ImVec2 b1(right, static_cast<float>(ly) - 2.0f);
             const bool editing = speedEditOpen && speedEditIndex == static_cast<int>(si);
-            bgDraw->AddRectFilled(b0, b1, editing ? IM_COL32(90, 70, 20, 230) : IM_COL32(30, 26, 10, 220));
-            bgDraw->AddRect(b0, b1, IM_COL32(255, 220, 80, 255), 0.0f, 0, editing ? 2.5f : 1.5f);
-            bgDraw->AddText(ImVec2(b0.x + padX, b0.y + padY), IM_COL32(255, 220, 80, 255), buf);
+            const ImU32 col  = IM_COL32(c.r, c.g, c.b, 255);
+            const ImU32 fill = s.isB ? (editing ? IM_COL32(90, 25, 25, 230) : IM_COL32(32, 10, 10, 220))
+                                     : (editing ? IM_COL32(90, 70, 20, 230) : IM_COL32(30, 26, 10, 220));
+            bgDraw->AddRectFilled(b0, b1, fill);
+            bgDraw->AddRect(b0, b1, col, 0.0f, 0, editing ? 2.5f : 1.5f);
+            bgDraw->AddText(ImVec2(b0.x + padX, b0.y + padY), col, buf);
             // 枠から線までを短くつなぐ（どの線の数字か分かるように）
-            bgDraw->AddLine(ImVec2(labelRight, static_cast<float>(ly)), ImVec2(static_cast<float>(startX), static_cast<float>(ly)),
-                            IM_COL32(255, 220, 80, 200), 2.0f);
+            bgDraw->AddLine(ImVec2(right, static_cast<float>(ly)), ImVec2(static_cast<float>(startX), static_cast<float>(ly)),
+                            IM_COL32(c.r, c.g, c.b, 200), 2.0f);
             speedLabelHits.push_back({SDL_Rect{static_cast<int>(b0.x), static_cast<int>(b0.y),
                                                static_cast<int>(b1.x - b0.x), static_cast<int>(b1.y - b0.y)},
                                       static_cast<int>(si)});
@@ -3582,6 +5672,24 @@ GameScene chartCreateScene(SDL_Window* window, SDL_Renderer* renderer, std::stri
             boxBatch.flush(renderer);
         }
 
+        // ----- ふつうの編集中の false ノーツ：薄く（透明度 8 割）、ふつうのノーツより奥に見せるだけ（さわれない） -----
+        //   false ノーツの編集中（Ctrl+N）は、下の「false ノーツ」の所で、つまみ付きの濃い見た目で描く
+        if(!falseMode && !currentDiff().falseNotes.empty()){
+            RoundedRectBatch fGhost;
+            const float ga = FALSE_MODE_NOTE_ALPHA;   // false ノーツ編集中のふつうのノーツと同じ薄さ
+            auto fade = [&](SDL_Color c, int a){ c.a = static_cast<Uint8>(a * ga); return c; };
+            for(const auto& f : currentDiff().falseNotes){
+                const FalseGeom g = falseGeom(f, effectivePixelsPerMs);
+                if(g.headY < -60.0f && g.endY < -60.0f) continue;
+                if(g.endY > SCREEN_H + 60.0f && g.tailY > SCREEN_H + 60.0f) continue;
+                const SDL_Color col = editorui::noteColor(f.type);
+                fGhost.add(g.stripX, g.endY, FALSE_STRIP_W, g.headY - g.endY, 2.0f, fade(SDL_Color{255, 120, 200, 255}, 150));
+                if(f.isLong && f.longCount > 0) fGhost.add(g.fx, g.tailY, g.fw, g.headY - g.tailY, NOTE_RADIUS, fade(col, 170));
+                fGhost.add(g.fx, g.headY - NOTE_HEAD_H * 0.5f, g.fw, NOTE_HEAD_H, NOTE_RADIUS, fade(col, 255));
+            }
+            fGhost.flush(renderer);
+        }
+
         // ----- ノーツ（プレイ画面と同じ見た目） -----
         {
             RoundedRectBatch bodyBatch;     // ロングの帯
@@ -3591,6 +5699,10 @@ GameScene chartCreateScene(SDL_Window* window, SDL_Renderer* renderer, std::stri
             RoundedRectBatch selectBatch;   // 選択中の縁取り
 
             const auto& notes = currentDiff().notes;
+
+            // false ノーツ編集中は、ふつうのノーツを薄くする（透明度 8 割）
+            const float noteAlphaMul = falseMode ? FALSE_MODE_NOTE_ALPHA : 1.0f;
+            auto dim = [&](SDL_Color c){ c.a = static_cast<Uint8>(c.a * noteAlphaMul); return c; };
 
             // ノーツのヘッドの y
             auto headYOf = [&](const EditorNote& n) -> int {
@@ -3606,7 +5718,7 @@ GameScene chartCreateScene(SDL_Window* window, SDL_Renderer* renderer, std::stri
                 }
                 std::sort(order.begin(), order.end());
 
-                SDL_SetRenderDrawColor(renderer, 255, 255, 255, 140);
+                SDL_SetRenderDrawColor(renderer, 255, 255, 255, static_cast<Uint8>(140 * noteAlphaMul));
                 for(size_t a = 0; a < order.size();){
                     size_t b = a;
                     int minCx = 1 << 30, maxCx = -(1 << 30);
@@ -3632,7 +5744,7 @@ GameScene chartCreateScene(SDL_Window* window, SDL_Renderer* renderer, std::stri
                 const auto& n = notes[idx];
                 const int noteY = headYOf(n);
 
-                const SDL_Color col = editorui::noteColor(n.noteTypeInt);
+                const SDL_Color col = dim(editorui::noteColor(n.noteTypeInt));
                 const float noteX = static_cast<float>(laneX[n.lane]) + NOTE_SIDE_MARGIN;
                 const float noteW = static_cast<float>(laneWidth * n.width) - NOTE_SIDE_MARGIN * 2.0f;
                 const float noteH = NOTE_HEAD_H;
@@ -3657,20 +5769,20 @@ GameScene chartCreateScene(SDL_Window* window, SDL_Renderer* renderer, std::stri
 
                     if(bottom > -50.0f && top < SCREEN_H + 50.0f){
                         SDL_Color bodyCol = col;
-                        bodyCol.a = 170;
+                        bodyCol.a = static_cast<Uint8>(170 * noteAlphaMul);
                         bodyBatch.add(noteX, top, noteW, bottom - top, NOTE_RADIUS, bodyCol);
 
                         // 芯：帯の横幅の30%、ノーツ色を暗くした色（プレイ画面の「叩く前」と同じ）
                         const float innerW = noteW * 0.3f;
                         const float innerX = noteX + (noteW - innerW) * 0.5f;
                         SDL_Color innerCol = {static_cast<Uint8>(col.r * 0.6), static_cast<Uint8>(col.g * 0.6),
-                                              static_cast<Uint8>(col.b * 0.6), 200};
+                                              static_cast<Uint8>(col.b * 0.6), static_cast<Uint8>(200 * noteAlphaMul)};
                         innerBatch.add(innerX, top + 6.0f, innerW, bottom - (top + 6.0f),
                                        std::min(NOTE_RADIUS, innerW * 0.5f), innerCol);
 
                         // 終点のつまみ：ここをドラッグすると長さを変えられる
                         handleBatch.add(noteX + noteW * 0.25f, static_cast<float>(tailY) - 4.0f, noteW * 0.5f, 8.0f,
-                                        4.0f, SDL_Color{255, 255, 255, 220});
+                                        4.0f, dim(SDL_Color{255, 255, 255, 220}));
                     }
                 }
 
@@ -3691,7 +5803,8 @@ GameScene chartCreateScene(SDL_Window* window, SDL_Renderer* renderer, std::stri
                     const float fontSize = 15.0f;
                     ImFont* f = ImGui::GetFont();
                     ImVec2 ts = f->CalcTextSizeA(fontSize, FLT_MAX, 0.0f, marker.c_str());
-                    ImU32 textCol = (n.noteTypeInt == 4) ? IM_COL32(255, 255, 255, 255) : IM_COL32(20, 20, 30, 255);
+                    const int ta = static_cast<int>(255 * noteAlphaMul);
+                    ImU32 textCol = (n.noteTypeInt == 4) ? IM_COL32(255, 255, 255, ta) : IM_COL32(20, 20, 30, ta);
                     bgDraw->AddText(f, fontSize,
                                     ImVec2(noteX + noteW * 0.5f - ts.x * 0.5f, static_cast<float>(noteY) - ts.y * 0.5f),
                                     textCol, marker.c_str());
@@ -3703,6 +5816,95 @@ GameScene chartCreateScene(SDL_Window* window, SDL_Renderer* renderer, std::stri
             handleBatch.flush(renderer);
             noteBatch.flush(renderer);
             selectBatch.flush(renderer);
+        }
+
+        // ----- false ノーツ（false ノーツ編集中だけ見せる） -----
+        //   ・ヘッド：出現の時刻の所に、出現したときの見た目のノーツ（クリックでプレビュー）
+        //   ・ロングの形：ヘッドから上へ、ロングの長さ（何分の何マス）の時刻までの帯と芯、終端に白いつまみ（ドラッグでロングの長さ）
+        //   ・小さな帯：ノーツの左の外に、出現〜消滅の時刻（PREVIEW の帯のような細い帯）。
+        //     上の端の白いつまみをドラッグで消滅の時刻。見た目を途中で変える所に、その色の小さな印
+        //   ・ヘッドから、進む方向へ短い線（長さは速さに合わせる）
+        if(falseMode){
+            RoundedRectBatch fBand, fHead, fSel;
+            const auto& fns = currentDiff().falseNotes;
+            for(size_t i = 0; i < fns.size(); i++){
+                const EditorFalseNote& f = fns[i];
+                const FalseGeom g = falseGeom(f, effectivePixelsPerMs);
+                if(g.headY < -60.0f && g.endY < -60.0f) continue;
+                if(g.endY > SCREEN_H + 60.0f && g.tailY > SCREEN_H + 60.0f) continue;
+                const SDL_Color col = editorui::noteColor(f.type);
+                const bool sel = static_cast<int>(i) == selectedFalseIndex || f.selected;
+
+                // 小さな帯（出現〜消滅）
+                SDL_Color strip = {255, 120, 200, static_cast<Uint8>(sel ? 230 : 150)};
+                fBand.add(g.stripX, g.endY, FALSE_STRIP_W, g.headY - g.endY, 2.0f, strip);
+                fHead.add(g.stripX - 3.0f, g.endY - 3.0f, FALSE_STRIP_W + 6.0f, 6.0f, 3.0f, SDL_Color{255, 255, 255, 230});   // 消滅のつまみ
+                for(const auto& c : f.changes){
+                    const float cy = static_cast<float>(judgeY - (c.time - scrollTimeMs) * effectivePixelsPerMs);
+                    if(cy < g.endY || cy > g.headY) continue;
+                    fHead.add(g.stripX - 2.0f, cy - 2.0f, FALSE_STRIP_W + 4.0f, 4.0f, 2.0f, editorui::noteColor(c.type));
+                }
+
+                // ロングの形の帯・芯・終端のつまみ
+                if(f.isLong && f.longCount > 0){
+                    SDL_Color bc = col;
+                    bc.a = 170;
+                    fBand.add(g.fx, g.tailY, g.fw, g.headY - g.tailY, NOTE_RADIUS, bc);
+                    const float iw = g.fw * 0.3f;
+                    if(g.headY - g.tailY > 14.0f){
+                        fBand.add(g.fx + (g.fw - iw) * 0.5f, g.tailY + 6.0f, iw, g.headY - g.tailY - 12.0f, 2.0f,
+                                  SDL_Color{static_cast<Uint8>(col.r * 0.6), static_cast<Uint8>(col.g * 0.6), static_cast<Uint8>(col.b * 0.6), 200});
+                    }
+                    fHead.add(g.fx + g.fw * 0.25f, g.tailY - 4.0f, g.fw * 0.5f, 8.0f, 4.0f, SDL_Color{255, 255, 255, 220});
+                }
+
+                // ヘッド
+                fHead.add(g.fx, g.headY - NOTE_HEAD_H * 0.5f, g.fw, NOTE_HEAD_H, NOTE_RADIUS, col);
+                fHead.addOutline(g.fx, g.headY - NOTE_HEAD_H * 0.5f, g.fw, NOTE_HEAD_H, NOTE_RADIUS, 2.0f, SDL_Color{255, 120, 200, 255});
+
+                if(sel){
+                    const float pad = 4.0f;
+                    const float top = std::min(g.tailY, g.headY) - NOTE_HEAD_H * 0.5f;
+                    fSel.addOutline(g.fx - pad, top - pad, g.fw + pad * 2.0f, (g.headY + NOTE_HEAD_H * 0.5f) - top + pad * 2.0f,
+                                    NOTE_RADIUS + pad, 3.0f, SDL_Color{0, 255, 255, 255});
+                }
+
+                // 進む方向の線（速さ 0 なら出さない）
+                if(f.speed > 0.0){
+                    const double a = f.dirDeg * 3.14159265358979 / 180.0;
+                    const float len = static_cast<float>(16.0 + std::min(60.0, f.speed * 20.0));
+                    const ImVec2 c0(g.fx + g.fw * 0.5f, g.headY);
+                    const ImVec2 c1(c0.x + static_cast<float>(std::sin(a)) * len, c0.y - static_cast<float>(std::cos(a)) * len);
+                    bgDraw->AddLine(c0, c1, IM_COL32(0, 255, 255, 230), 2.5f);
+                    bgDraw->AddCircleFilled(c1, 3.5f, IM_COL32(0, 255, 255, 230));
+                }
+                // 「FALSE」の文字（ヘッドの中）
+                bgDraw->AddText(ImGui::GetFont(), 13.0f, ImVec2(g.fx + 4.0f, g.headY - 8.0f),
+                                (f.type == 4) ? IM_COL32(255, 255, 255, 255) : IM_COL32(120, 20, 80, 255), "FALSE");
+            }
+            fBand.flush(renderer);
+            fHead.flush(renderer);
+            fSel.flush(renderer);
+        }
+
+        // ----- 幅の矢印：選んでいるノーツのヘッドのまわりに一回り大きな枠と、左右の矢印 -----
+        //   （ImGui の背景に描く＝ノーツより手前、パネルより奥）。掴んでいる間は矢印をシアンで塗る
+        {
+            const auto targets = widthTargets(effectivePixelsPerMs);
+            const bool dragging = dragMode == DragMode::ResizeWidth;
+            for(const auto& t : targets){
+                if(t.yc < -40.0f || t.yc > SCREEN_H + 40.0f) continue;
+                const float hh = NOTE_HEAD_H * 0.5f + WIDTH_FRAME_PAD;
+                const ImVec2 f0(t.x0 - WIDTH_FRAME_PAD, t.yc - hh), f1(t.x1 + WIDTH_FRAME_PAD, t.yc + hh);
+                bgDraw->AddRect(f0, f1, IM_COL32(255, 255, 255, 200), 4.0f, 0, 1.5f);
+                const float ah = WIDTH_ARROW_H * 0.5f;
+                const float l1 = f0.x - WIDTH_ARROW_GAP, l0 = l1 - WIDTH_ARROW_W;
+                const float r0 = f1.x + WIDTH_ARROW_GAP, r1 = r0 + WIDTH_ARROW_W;
+                const ImU32 lc = (dragging && widthLeftSide)  ? IM_COL32(0, 230, 255, 255) : IM_COL32(255, 255, 255, 230);
+                const ImU32 rc = (dragging && !widthLeftSide) ? IM_COL32(0, 230, 255, 255) : IM_COL32(255, 255, 255, 230);
+                bgDraw->AddTriangleFilled(ImVec2(l0, t.yc), ImVec2(l1, t.yc - ah), ImVec2(l1, t.yc + ah), lc);   // ◀
+                bgDraw->AddTriangleFilled(ImVec2(r1, t.yc), ImVec2(r0, t.yc + ah), ImVec2(r0, t.yc - ah), rc);   // ▶
+            }
         }
 
         // ----- キーボード配置モード：レーンの下にキーの名前 -----
@@ -3764,6 +5966,30 @@ GameScene chartCreateScene(SDL_Window* window, SDL_Renderer* renderer, std::stri
             SDL_RenderDrawRect(renderer, &r);
         }
 
+        // 配置のウィンドウを開いている時刻：レーンの上にピンクの線
+        if(falseMode && falsePlaceOpen){
+            const float y = static_cast<float>(judgeY - (falsePlaceTime - scrollTimeMs) * effectivePixelsPerMs);
+            if(y > -10.0f && y < SCREEN_H + 10.0f){
+                ImDrawList* bg = ImGui::GetBackgroundDrawList();
+                bg->AddLine(ImVec2(static_cast<float>(startX) - 20.0f, y), ImVec2(static_cast<float>(lanesRight) + 20.0f, y), IM_COL32(255, 120, 200, 230), 3.0f);
+            }
+        }
+
+        // false ノーツ編集中の印：レーンの上の真ん中に出す
+        if(falseMode){
+            const char* msg = "FALSE ノーツ編集中（Ctrl+N で戻る）";
+            ImFont* f = ImGui::GetFont();
+            const float fs = 20.0f;
+            const ImVec2 ts = f->CalcTextSizeA(fs, FLT_MAX, 0.0f, msg);
+            const float cx = (startX + lanesRight) * 0.5f;
+            const ImVec2 p0(cx - ts.x * 0.5f - 18.0f, SCREEN_H - ts.y - 36.0f);
+            const ImVec2 p1(cx + ts.x * 0.5f + 18.0f, SCREEN_H - 20.0f);
+            ImDrawList* fg = ImGui::GetForegroundDrawList();
+            fg->AddRectFilled(p0, p1, IM_COL32(30, 10, 25, 230));
+            fg->AddRect(p0, p1, IM_COL32(255, 120, 200, 255), 0.0f, 0, 2.5f);
+            fg->AddText(f, fs, ImVec2(cx - ts.x * 0.5f, p0.y + 8.0f), IM_COL32(255, 200, 235, 255), msg);
+        }
+
         //ImGui描画をSDL描画に合成
         // 保存の通知：レーンの上部中央に出して、最後の 400ms で消えていく
         if(saveToastTicks != 0 && nowTicks - saveToastTicks < SAVE_TOAST_MS){
@@ -3790,6 +6016,13 @@ GameScene chartCreateScene(SDL_Window* window, SDL_Renderer* renderer, std::stri
         ImGui_ImplSDLRenderer2_RenderDrawData(ImGui::GetDrawData(), renderer);
 
         SDL_RenderPresent(renderer);
+
+        // 読み込んだ直後のフレームの終わりで、今の中身を「保存してある状態」として覚える
+        //   （入力欄の中身などは 1 フレーム目で譜面に書き戻されるので、それを待ってから取る）
+        if(savedChartPending){
+            savedChartText = buildChartText(meta, difficulties);
+            savedChartPending = false;
+        }
 
         // =================================================================
         //  テストプレイ

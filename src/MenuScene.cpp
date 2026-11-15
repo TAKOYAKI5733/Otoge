@@ -35,6 +35,7 @@
 #include "CubeShowcase.h"
 #include "QuarryReveal.h"        // ウィンドウを Cube から作り出す出方（光の線 → 枠 → 上から生成）
 #include "Settingspanel.h"
+#include "HoloWindow.h"         // ウィンドウの見た目（Cube の色のホログラム・走査線・たまにグリッチ）
 #include <string>
 #include <vector>
 #include <cmath>
@@ -63,13 +64,6 @@ constexpr int  CARD_H       = 170;
 constexpr double CARD_JUT   = 16.0;   // 選んでいる項目を上へ出す量(px)
 constexpr double CARD_EASE  = 0.2;    // 出っ張りのなめらかさ（1 フレームで近づく割合）
 
-constexpr SDL_Color WIN_FILL      = {10, 10, 20, 200};
-constexpr SDL_Color WIN_BORDER    = {0, 200, 255, 255};
-constexpr SDL_Color CARD_FILL     = {30, 30, 50, 190};
-constexpr SDL_Color CARD_FILL_SEL = {45, 45, 80, 225};
-constexpr SDL_Color CARD_BORDER   = {110, 110, 150, 255};
-constexpr SDL_Color CARD_BORDER_SEL = {0, 255, 255, 255};
-
 enum class Item{ Play, Shop, Story, Create, Setting };
 struct MenuItem{
     Item kind;
@@ -85,17 +79,6 @@ const MenuItem ITEMS[] = {
 };
 constexpr int ITEM_COUNT = static_cast<int>(sizeof(ITEMS) / sizeof(ITEMS[0]));
 
-inline void drawFrame(SDL_Renderer* r, const SDL_Rect& rect, SDL_Color fill, SDL_Color border, int thick){
-    SDL_SetRenderDrawBlendMode(r, SDL_BLENDMODE_BLEND);
-    SDL_SetRenderDrawColor(r, fill.r, fill.g, fill.b, fill.a);
-    SDL_RenderFillRect(r, &rect);
-    SDL_SetRenderDrawColor(r, border.r, border.g, border.b, border.a);
-    for(int t = 0; t < thick; t++){
-        SDL_Rect b = {rect.x + t, rect.y + t, rect.w - t * 2, rect.h - t * 2};
-        SDL_RenderDrawRect(r, &b);
-    }
-}
-
 // (cx, cy) を中心に文字を描く
 inline void drawText(SDL_Renderer* r, TTF_Font* font, const std::string& text, SDL_Color c, int cx, int cy){
     if(!font || text.empty()) return;
@@ -109,20 +92,9 @@ inline void drawText(SDL_Renderer* r, TTF_Font* font, const std::string& text, S
     SDL_FreeSurface(s);
 }
 
-// ウィンドウの上の「タブ」（選曲画面のウィンドウと同じ見た目）
+// ウィンドウの上の「タブ」（HoloWindow.h のホログラムのタブ。選曲画面のウィンドウと同じ見た目）
 inline void drawTab(SDL_Renderer* r, TTF_Font* font, const char* title, const SDL_Rect& win){
-    if(!font) return;
-    SDL_Surface* s = TTF_RenderUTF8_Blended(font, title, SDL_Color{15, 15, 25, 255});
-    if(!s) return;
-    SDL_Rect tab = {win.x, win.y - s->h - 6, s->w + 28, s->h + 6};
-    SDL_SetRenderDrawColor(r, WIN_BORDER.r, WIN_BORDER.g, WIN_BORDER.b, 255);
-    SDL_RenderFillRect(r, &tab);
-    if(SDL_Texture* t = SDL_CreateTextureFromSurface(r, s)){
-        SDL_Rect dst = {tab.x + 14, tab.y + 3, s->w, s->h};
-        SDL_RenderCopy(r, t, nullptr, &dst);
-        SDL_DestroyTexture(t);
-    }
-    SDL_FreeSurface(s);
+    drawHoloWindowTab(r, font, title, win, 255);
 }
 
 // 項目 i の四角（出っ張り jut を引いた位置）
@@ -346,11 +318,11 @@ GameScene menuScene(SDL_Window* window, SDL_Renderer* renderer, PlayerSettings& 
         // ===== 3. メニューのウィンドウ：Cube から作り出される・下がって消える・薄くなって消える =====
         auto drawMenuWindow = [&](){
             drawTab(renderer, labelFont, "MENU", MENU_WIN);
-            drawFrame(renderer, MENU_WIN, WIN_FILL, WIN_BORDER, 3);
+            drawHoloWindow(renderer, MENU_WIN, 1.0, true, 3, 0x3E40u);
             for(int i = 0; i < ITEM_COUNT; i++){
                 const bool sel = (i == cursor);
                 const SDL_Rect r = cardRect(i, jut[i]);
-                drawFrame(renderer, r, sel ? CARD_FILL_SEL : CARD_FILL, sel ? CARD_BORDER_SEL : CARD_BORDER, sel ? 3 : 1);
+                drawHoloWindow(renderer, r, 1.0, sel, sel ? 3 : 1, 0x3E50u + static_cast<uint32_t>(i));
                 drawText(renderer, titleFont, ITEMS[i].title,
                          sel ? SDL_Color{0, 255, 255, 255} : SDL_Color{235, 235, 245, 255}, r.x + r.w / 2, r.y + r.h / 2 - 22);
                 drawText(renderer, labelFont, ITEMS[i].sub, SDL_Color{160, 170, 190, 255}, r.x + r.w / 2, r.y + r.h / 2 + 38);
@@ -416,7 +388,7 @@ GameScene menuScene(SDL_Window* window, SDL_Renderer* renderer, PlayerSettings& 
             const SDL_Rect win = {SCREEN_W / 2 - 420, 300, 840, 360};
             auto drawPopup = [&](){
                 drawTab(renderer, labelFont, ITEMS[popup].title, win);
-                drawFrame(renderer, win, SDL_Color{10, 10, 20, 235}, WIN_BORDER, 3);
+                drawHoloWindow(renderer, win, 1.0, true, 3, 0x3E60u);
                 drawText(renderer, titleFont, ITEMS[popup].title, SDL_Color{0, 255, 255, 255}, win.x + win.w / 2, win.y + 90);
                 const char* body = (ITEMS[popup].kind == Item::Shop)
                     ? "Cube などの通貨で取引できるようになります" : "Cube でストーリーを開放・閲覧できるようになります";
